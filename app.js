@@ -37,26 +37,6 @@ function handleConsoleLog(...args) {
   appendOutput(args.map((item) => String(item)).join(' '), 'success');
 }
 
-function buildWrappedPrompt(userInput) {
-  return `
-Return JSON ONLY.
-
-Schema:
-{
-  "text": "plain explanation for the user",
-  "code": "complete HTML/CSS/JS runnable in an iframe"
-}
-
-Rules:
-- No markdown
-- No commentary outside JSON
-- Code must be self-contained
-
-User request:
-${userInput}
-`;
-}
-
 async function sendChat() {
   const prompt = chatInput.value.trim();
   if (!prompt) {
@@ -73,16 +53,13 @@ async function sendChat() {
 
   try {
     const messages = [
-      { role: 'system', content: 'You are a UI-generating assistant.' },
-      { role: 'user', content: buildWrappedPrompt(prompt) }
+      { role: 'user', content: prompt }
     ];
 
     const res = await fetch(BACKEND_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages
-      })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages })
     });
 
     const data = await res.json();
