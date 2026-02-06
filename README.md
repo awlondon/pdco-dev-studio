@@ -1,50 +1,56 @@
 # Maya Dev UI
 
-This repository contains a simple prototype for an embeddable development sandbox designed for integration with a research preview application. It allows users to edit and render HTML/CSS/JS in an isolated iframe, either embedded in a host page or popped out into a separate window.
-
+This repository provides a lightweight, browser-based LLM playground with three core surfaces: a streaming chat panel, a code editor, and a console output area. A small Express server proxies requests to your LLM provider so API keys stay server-side.
 
 ## Project structure
 
 ```
 maya-dev-ui/
-├── index.html         # Entry point for the dev iframe
-├── styles.css         # Minimal styling for the dev iframe
-├── app.js             # Core logic for running and resetting code and handling messages
-├── host-sample.html   # Example host page showing how to embed and control the iframe
+├── index.html         # UI layout for chat + editor + output
+├── styles.css         # Styling for the three-panel workspace
+├── app.js             # Client-side logic for streaming chat + code execution
+├── server.js          # Express proxy for streaming LLM responses
+├── package.json       # Server dependencies and start script
 └── README.md          # This file
 ```
 
 ## Running locally
 
-You can preview the dev iframe and host integration by opening `host-sample.html` in a local web server. For example:
+1. Install dependencies:
 
-```bash
-python -m http.server -d maya-dev-ui 8080
-```
+   ```bash
+   npm install
+   ```
 
-Then navigate to http://localhost:8080/host-sample.html in your browser.
+2. Provide your API key (OpenAI by default):
 
-## GitHub Pages setup
+   ```bash
+   export OPENAI_API_KEY=your_key_here
+   ```
 
-To publish this UI on GitHub Pages and map it to `dev.sesame.com`:
+3. Start the server:
 
-1. Create a new public GitHub repository (e.g. `maya-dev-ui`).
-2. Push the contents of this folder to the `main` branch.
-3. In the repository settings, enable **GitHub Pages**:
-   - **Source:** Deploy from a branch
-   - **Branch:** `main`
-   - **Folder:** `/root` (the root of the repository)
-4. After saving, GitHub will provide a pages URL like `https://yourusername.github.io/maya-dev-ui`. Configure your DNS and any reverse proxies to point `dev.sesame.com` at that pages URL.
+   ```bash
+   npm start
+   ```
 
-## Embedding in a host application
+4. Visit http://localhost:3000 in your browser.
 
-The `host-sample.html` file demonstrates how a host application can embed the dev iframe, provide UI controls for docking/popping out, and communicate via `window.postMessage`.
+## Configuration
 
-Key integration points:
+The server uses the OpenAI Chat Completions endpoint with streaming enabled by default. You can override settings with environment variables:
 
-- Use `<iframe id="dev-iframe" src="https://dev.sesame.com"></iframe>` to embed.
-- Use `window.open('https://dev.sesame.com', 'MayaDevTools', ...)` to pop out the dev UI.
-- Send updates to the dev iframe via `postMessage` with `{ type: 'UPDATE_FROM_HOST', payload: yourData }`.
-- Receive code execution results via `window.addEventListener('message', ...)` and handle messages where `type === 'RUN_CODE_RESULT'`.
+- `OPENAI_API_KEY` (required)
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `OPENAI_API_URL` (default: `https://api.openai.com/v1/chat/completions`)
+- `PORT` (default: `3000`)
 
-Refer to the inline comments in `host-sample.html` for further details.
+## Features
+
+- **Streaming chat**: Responses appear token-by-token in the chat panel.
+- **Code editor**: Write or modify JavaScript snippets.
+- **Console output**: Run code with `eval()` and inspect results or errors.
+
+## Next steps
+
+Consider swapping in a richer editor (CodeMirror/Monaco), capturing `console.error`/`console.warn`, or adding a server-side sandbox for safer code execution.

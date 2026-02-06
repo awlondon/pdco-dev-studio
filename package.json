@@ -1,0 +1,12 @@
+{
+  "name": "maya-dev-ui",
+  "version": "0.1.0",
+  "description": "Interactive LLM chat and code playground.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

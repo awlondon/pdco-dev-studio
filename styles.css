@@ -1,53 +1,212 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0f;
+  --panel: #141420;
+  --panel-border: #232334;
+  --accent: #7c9bff;
+  --text: #f1f1f6;
+  --muted: #a5a5b5;
+  --success: #3ddc97;
+  --error: #ff6b6b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: #0b0b0f;
-  color: #eee;
-  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 #top-bar {
-  height: 40px;
+  padding: 16px 24px;
+  background: #11111a;
+  border-bottom: 1px solid var(--panel-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
-  background: #15151f;
-  border-bottom: 1px solid #222;
+  gap: 16px;
 }
 
-#top-bar .actions {
-  display: flex;
-  gap: 8px;
+#top-bar h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
 }
 
-#layout {
+#top-bar .subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#status-label {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #1c1c2b;
+  color: var(--muted);
+  border: 1px solid var(--panel-border);
+}
+
+#status-label.online {
+  color: var(--success);
+  border-color: rgba(61, 220, 151, 0.4);
+}
+
+#workspace {
+  flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  height: calc(100vh - 40px);
+  grid-template-rows: 1fr 0.6fr;
+  gap: 16px;
+  padding: 16px;
 }
 
-#editor-pane, #preview-pane {
-  position: relative;
+#chat-panel {
+  grid-row: 1 / span 2;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.panel-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.panel-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--panel-border);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+#chat-form {
+  align-items: flex-end;
+}
+
+#chat-input {
+  flex: 1;
+  min-height: 64px;
+  max-height: 160px;
+  resize: vertical;
+  background: #0c0c15;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 10px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+button {
+  background: var(--accent);
+  border: none;
+  color: #0b0b0f;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 #code-editor {
-  width: 100%;
-  height: 100%;
-  background: #050509;
-  color: #eee;
+  flex: 1;
+  background: #07070d;
   border: none;
-  padding: 10px;
-  font-family: Menlo, Monaco, monospace;
+  color: var(--text);
+  padding: 16px;
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
   font-size: 13px;
-  box-sizing: border-box;
   resize: none;
+  border-radius: 0 0 12px 12px;
+  outline: none;
 }
 
-#preview-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #111;
+.panel-footer.actions {
+  justify-content: flex-end;
+}
+
+.message {
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.message.user {
+  background: rgba(124, 155, 255, 0.2);
+  border: 1px solid rgba(124, 155, 255, 0.4);
+}
+
+.message.assistant {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.message.system {
+  background: rgba(255, 107, 107, 0.15);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  color: var(--error);
+}
+
+.output-line {
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: #0c0c15;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
+}
+
+.output-line.error {
+  color: var(--error);
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.output-line.success {
+  color: var(--success);
+  border-color: rgba(61, 220, 151, 0.3);
+}
+
+@media (max-width: 1000px) {
+  #workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+
+  #chat-panel {
+    grid-row: auto;
+  }
 }

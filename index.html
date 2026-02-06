@@ -8,19 +8,34 @@
 <body>
   <div id="root">
     <header id="top-bar">
-      <span id="status-label">Connected</span>
-      <div class="actions">
-        <button id="btn-run">Run</button>
-        <button id="btn-reset">Reset</button>
+      <div>
+        <h1>Maya Dev UI</h1>
+        <p class="subtitle">Chat with the model, edit code, and run it live.</p>
       </div>
+      <span id="status-label">Offline</span>
     </header>
 
-    <main id="layout">
-      <section id="editor-pane">
-        <textarea id="code-editor"></textarea>
+    <main id="workspace">
+      <section id="chat-panel" class="panel">
+        <div class="panel-header">Chat</div>
+        <div id="chat-messages" class="panel-body"></div>
+        <form id="chat-form" class="panel-footer">
+          <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
+          <button id="btn-send" type="submit">Send Chat</button>
+        </form>
       </section>
-      <section id="preview-pane">
-        <iframe id="preview-iframe"></iframe>
+
+      <section id="code-panel" class="panel">
+        <div class="panel-header">Code Editor</div>
+        <textarea id="code-editor" spellcheck="false"></textarea>
+        <div class="panel-footer actions">
+          <button id="btn-run" type="button">Run Code</button>
+        </div>
+      </section>
+
+      <section id="output-panel" class="panel">
+        <div class="panel-header">Console Output</div>
+        <div id="console-output" class="panel-body"></div>
       </section>
     </main>
   </div>

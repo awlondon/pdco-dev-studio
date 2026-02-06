@@ -1,66 +1,149 @@
-// Simple dev sandbox for HTML/CSS/JS prototyping
-const editor = document.getElementById('code-editor');
-const preview = document.getElementById('preview-iframe');
-const btnRun = document.getElementById('btn-run');
-const btnReset = document.getElementById('btn-reset');
+const chatMessages = document.getElementById('chat-messages');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const sendButton = document.getElementById('btn-send');
+const codeEditor = document.getElementById('code-editor');
+const runButton = document.getElementById('btn-run');
+const consoleOutput = document.getElementById('console-output');
 const statusLabel = document.getElementById('status-label');
 
-// Provide an initial template so users know the context
-editor.value = `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8" />\n  <title>Preview</title>\n  <style>\n    body { background:#0b0b0f; color:#eee; font-family:sans-serif; padding: 1rem; }\n  </style>\n</head>\n<body>\n  <h1>Hello from the dev iframe</h1>\n  <p>Write your HTML/JS/CSS here.</p>\n</body>\n</html>`;
+const chatHistory = [];
 
-/**
- * Render the current content of the editor into the preview iframe.
- */
-function runCode() {
-  const doc = preview.contentDocument || preview.contentWindow.document;
-  // Reset the iframe document and write new content
-  doc.open();
-  doc.write(editor.value);
-  doc.close();
+codeEditor.value = `// Write JavaScript here and click Run Code.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
 
-  // Notify parent window (host) that code ran successfully
-  if (window.parent !== window) {
-    window.parent.postMessage({
-      type: 'RUN_CODE_RESULT',
-      payload: { ok: true }
-    }, '*');
-  }
+function setStatusOnline(isOnline) {
+  statusLabel.textContent = isOnline ? 'API online' : 'Offline';
+  statusLabel.classList.toggle('online', isOnline);
 }
 
-// Bind run action to button
-btnRun.addEventListener('click', runCode);
+function appendMessage(role, content) {
+  const message = document.createElement('div');
+  message.className = `message ${role}`;
+  message.textContent = content;
+  chatMessages.appendChild(message);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return message;
+}
 
-// Reset the editor and preview pane to a blank state
-btnReset.addEventListener('click', () => {
-  editor.value = '';
-  const doc = preview.contentDocument || preview.contentWindow.document;
-  doc.open();
-  doc.write('<!DOCTYPE html><html><body></body></html>');
-  doc.close();
-});
+function appendOutput(content, variant = 'success') {
+  const line = document.createElement('div');
+  line.className = `output-line ${variant}`;
+  line.textContent = content;
+  consoleOutput.appendChild(line);
+  consoleOutput.scrollTop = consoleOutput.scrollHeight;
+}
 
-// Listen for messages from host (e.g., conversation context, focus events)
-window.addEventListener('message', (event) => {
-  const { type, payload } = event.data || {};
+function handleConsoleLog(...args) {
+  appendOutput(args.map((item) => String(item)).join(' '), 'success');
+}
 
-  if (type === 'UPDATE_FROM_HOST') {
-    statusLabel.textContent = 'Update received';
-    // Prepend context into a comment at top if not already there
-    const header = `<!-- Context: ${JSON.stringify(payload).slice(0, 200)} -->\n`;
-    if (!editor.value.startsWith('<!-- Context:')) {
-      editor.value = header + '\n' + editor.value;
+async function sendChat() {
+  const prompt = chatInput.value.trim();
+  if (!prompt) {
+    return;
+  }
+
+  chatInput.value = '';
+  const userMessage = { role: 'user', content: prompt };
+  chatHistory.push(userMessage);
+  appendMessage('user', prompt);
+
+  const assistantMessage = { role: 'assistant', content: '' };
+  chatHistory.push(assistantMessage);
+  const assistantBubble = appendMessage('assistant', '');
+
+  sendButton.disabled = true;
+  setStatusOnline(false);
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ messages: chatHistory })
+    });
+
+    if (!response.ok || !response.body) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Unable to reach the chat service.');
     }
-  }
 
-  if (type === 'FOCUS_IFRAME') {
-    // Focus this window when instructed by host
-    window.focus();
+    setStatusOnline(true);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) {
+          continue;
+        }
+
+        const payload = trimmed.replace(/^data:\s*/, '');
+        if (payload === '[DONE]') {
+          continue;
+        }
+
+        let deltaText = '';
+        try {
+          const parsed = JSON.parse(payload);
+          deltaText = parsed.choices?.[0]?.delta?.content || '';
+        } catch (error) {
+          deltaText = '';
+        }
+
+        if (deltaText) {
+          assistantMessage.content += deltaText;
+          assistantBubble.textContent = assistantMessage.content;
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unexpected error.';
+    appendMessage('system', message);
+  } finally {
+    sendButton.disabled = false;
   }
+}
+
+function runCode() {
+  consoleOutput.innerHTML = '';
+  const originalConsoleLog = console.log;
+  console.log = handleConsoleLog;
+
+  try {
+    const result = eval(codeEditor.value);
+    if (result !== undefined) {
+      appendOutput(String(result), 'success');
+    } else {
+      appendOutput('Code executed (no return value).', 'success');
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error.';
+    appendOutput(`Error: ${message}`, 'error');
+  } finally {
+    console.log = originalConsoleLog;
+  }
+}
+
+chatForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  sendChat();
 });
 
-// Detect whether this window is embedded in host or standalone
-if (window.parent === window) {
-  statusLabel.textContent = 'Standalone window';
-} else {
-  statusLabel.textContent = 'Embedded in host UI';
-}
+runButton.addEventListener('click', runCode);
+
+setStatusOnline(false);
