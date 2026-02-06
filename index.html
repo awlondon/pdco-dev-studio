@@ -25,25 +25,28 @@
         </form>
       </section>
 
-      <section id="code-panel" class="panel">
-        <div class="panel-header">Code Editor</div>
-        <textarea id="code-editor" spellcheck="false"></textarea>
-        <div class="panel-footer actions">
-          <div id="generation-indicator" class="generation-indicator">
-            ✨ Creating new UI
+      <div id="right-pane" class="right-pane">
+        <section id="code-panel" class="panel code-editor">
+          <div class="panel-header">Code Editor</div>
+          <textarea id="code-editor" spellcheck="false"></textarea>
+          <div class="panel-footer actions">
+            <div id="generation-indicator" class="generation-indicator">
+              ✨ Creating new UI
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="output-panel" class="panel">
-        <div class="panel-header">Console Output</div>
-        <div id="console-output" class="panel-body"></div>
-        <iframe
-          id="preview-frame"
-          sandbox="allow-scripts"
-          style="width:100%; height:300px; border:1px solid #333;"
-        ></iframe>
-      </section>
+        <section id="output-panel" class="panel console-output">
+          <div class="panel-header">
+            Console Output
+            <span class="panel-header-label">Live Preview</span>
+          </div>
+          <div class="panel-body">
+            <div id="console-output" class="console-output-log"></div>
+            <iframe id="preview-frame" sandbox="allow-scripts"></iframe>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
 
