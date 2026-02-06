@@ -36,6 +36,18 @@ maya-dev-ui/
 
 4. Visit http://localhost:3000 in your browser.
 
+## Deployment notes (important)
+
+This UI **must** talk to a backend endpoint (`/api/chat`) that proxies requests to OpenAI. A static host such as GitHub Pages can serve the HTML/CSS/JS, but it cannot call the OpenAI API directly. If you deploy the UI without a backend, you will see `405 Not Allowed` or CORS errors by design.
+
+Recommended deployment options for the backend:
+
+- **Vercel / Netlify** (easy serverless functions)
+- **Node/Express** (the included `server.js`)
+- **Cloudflare Workers** (advanced)
+
+If you host the UI on a static site, ensure `/api/chat` points to your backend (same origin or a reverse proxy). Keep the API key on the server via `OPENAI_API_KEY`.
+
 ## Configuration
 
 The server uses the OpenAI Chat Completions endpoint with streaming enabled by default. You can override settings with environment variables:
