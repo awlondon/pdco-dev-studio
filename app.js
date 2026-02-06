@@ -7,6 +7,7 @@ const runButton = document.getElementById('btn-run');
 const consoleOutput = document.getElementById('console-output');
 const statusLabel = document.getElementById('status-label');
 const chatHistory = [];
+const apiEndpoint = 'https://your-project-name.vercel.app/api/chat';
 
 codeEditor.value = `// Write JavaScript here and click Run Code.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
 
@@ -55,7 +56,7 @@ async function sendChat() {
   setStatusOnline(false);
 
   try {
-    const response = await fetch('/api/chat', {
+    const response = await fetch(apiEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
