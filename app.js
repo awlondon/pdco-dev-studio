@@ -6,7 +6,8 @@ const codeEditor = document.getElementById('code-editor');
 const runButton = document.getElementById('btn-run');
 const consoleOutput = document.getElementById('console-output');
 const statusLabel = document.getElementById('status-label');
-const BACKEND_URL = 'https://maya-llm-proxy.workers.dev/chat';
+const BACKEND_URL =
+  "https://text-code.primarydesigncompany.workers.dev";
 
 codeEditor.value = `// Write JavaScript here and click Run Code.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
 
@@ -76,22 +77,21 @@ async function sendChat() {
       { role: 'user', content: buildWrappedPrompt(prompt) }
     ];
 
-    const response = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ messages })
+    const res = await fetch(BACKEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages
+      })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Unable to reach the chat service.');
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data?.error || 'Unable to reach the chat service.');
     }
 
     setStatusOnline(true);
-
-    const data = await response.json();
     const reply = data?.choices?.[0]?.message?.content || 'No response.';
     assistantBubble.textContent = reply;
     chatMessages.scrollTop = chatMessages.scrollHeight;
