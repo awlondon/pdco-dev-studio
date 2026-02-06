@@ -5,6 +5,7 @@ const sendButton = document.getElementById('btn-send');
 const codeEditor = document.getElementById('code-editor');
 const runButton = document.getElementById('btn-run');
 const consoleOutput = document.getElementById('console-output');
+const previewFrame = document.getElementById('preview-frame');
 const statusLabel = document.getElementById('status-label');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
@@ -37,6 +38,34 @@ function handleConsoleLog(...args) {
   appendOutput(args.map((item) => String(item)).join(' '), 'success');
 }
 
+function buildWrappedPrompt(userInput) {
+  return `
+Return JSON ONLY. No markdown. No commentary.
+
+Schema:
+{
+  "text": "Plain-language explanation for the user",
+  "code": "Complete self-contained HTML/CSS/JS runnable in a browser"
+}
+
+Rules:
+- "code" must be executable as-is
+- No external libraries
+- Inline CSS and JS only
+- Do not escape HTML
+
+User request:
+${userInput}
+`;
+}
+
+function runGeneratedCode(code) {
+  if (!previewFrame) {
+    return;
+  }
+  previewFrame.srcdoc = code;
+}
+
 async function sendChat() {
   const prompt = chatInput.value.trim();
   if (!prompt) {
@@ -53,7 +82,14 @@ async function sendChat() {
 
   try {
     const messages = [
-      { role: 'user', content: prompt }
+      {
+        role: 'system',
+        content: 'You generate interactive UI code and explanations.'
+      },
+      {
+        role: 'user',
+        content: buildWrappedPrompt(prompt)
+      }
     ];
 
     const res = await fetch(BACKEND_URL, {
@@ -70,8 +106,26 @@ async function sendChat() {
 
     setStatusOnline(true);
     const reply = data?.choices?.[0]?.message?.content || 'No response.';
-    assistantBubble.textContent = reply;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    let parsed;
+    try {
+      parsed = JSON.parse(reply);
+    } catch {
+      assistantBubble.textContent = reply;
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return;
+    }
+
+    if (parsed.text) {
+      assistantBubble.textContent = parsed.text;
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    } else {
+      assistantBubble.remove();
+    }
+
+    if (parsed.code) {
+      codeEditor.value = parsed.code;
+      runGeneratedCode(parsed.code);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error.';
     appendMessage('system', message);
