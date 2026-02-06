@@ -29,26 +29,8 @@
         <div class="panel-header">Code Editor</div>
         <textarea id="code-editor" spellcheck="false"></textarea>
         <div class="panel-footer actions">
-          <div class="toggle-group" role="group" aria-label="Generation mode">
-            <label class="toggle-option">
-              <input
-                type="radio"
-                name="regen-mode"
-                id="regen-mode-regenerate"
-                value="regenerate"
-                checked
-              />
-              <span>🔄 Regenerate from scratch</span>
-            </label>
-            <label class="toggle-option">
-              <input
-                type="radio"
-                name="regen-mode"
-                id="regen-mode-lock"
-                value="lock"
-              />
-              <span>🔒 Lock current code</span>
-            </label>
+          <div id="generation-indicator" class="generation-indicator">
+            ✨ Creating new UI
           </div>
         </div>
       </section>

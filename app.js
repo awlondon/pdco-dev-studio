@@ -6,12 +6,13 @@ const codeEditor = document.getElementById('code-editor');
 const consoleOutput = document.getElementById('console-output');
 const previewFrame = document.getElementById('preview-frame');
 const statusLabel = document.getElementById('status-label');
-const regenModeRegenerate = document.getElementById('regen-mode-regenerate');
-const regenModeLock = document.getElementById('regen-mode-lock');
+const generationIndicator = document.getElementById('generation-indicator');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
 codeEditor.value = `// Write JavaScript here to experiment with the editor.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
+let currentCode = null;
+let lastUserIntent = null;
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -39,33 +40,50 @@ function handleConsoleLog(...args) {
   appendOutput(args.map((item) => String(item)).join(' '), 'success');
 }
 
-function buildWrappedPrompt(userInput, options = {}) {
-  const { isLocked, existingCode } = options;
-  const codeContext = isLocked && existingCode
-    ? `\nCurrent code to modify (do not replace entirely):\n${existingCode}\n`
-    : '';
-  const lockInstruction = isLocked
-    ? '- You must update the current code based on the request, preserving structure when possible\n'
-    : '- Generate a fresh implementation from scratch\n';
-
-  return `
-Return JSON ONLY. No markdown. No commentary.
+function buildWrappedPrompt(userInput, currentCode) {
+  if (!currentCode) {
+    return `
+Return JSON ONLY.
 
 Schema:
 {
-  "text": "Plain-language explanation for the user",
-  "code": "Complete self-contained HTML/CSS/JS runnable in a browser"
+  "text": "Explanation of what you built",
+  "code": "Complete self-contained HTML/CSS/JS"
 }
 
 Rules:
-- "code" must be executable as-is
-- No external libraries
+- No markdown
 - Inline CSS and JS only
+- Code must run in a browser
 - Do not escape HTML
-${lockInstruction}
 
-${codeContext}
 User request:
+${userInput}
+`;
+  }
+
+  return `
+You are modifying an existing working interface.
+
+Return JSON ONLY.
+
+Schema:
+{
+  "text": "Explanation of the changes you made",
+  "code": "Updated full HTML/CSS/JS (not a diff)"
+}
+
+Rules:
+- Preserve existing functionality unless explicitly changed
+- Modify the code below to satisfy the new request
+- Return the FULL updated document
+- No markdown
+- No commentary outside JSON
+
+Current code:
+${currentCode}
+
+User change request:
 ${userInput}
 `;
 }
@@ -75,6 +93,17 @@ function runGeneratedCode(code) {
     return;
   }
   previewFrame.srcdoc = code;
+}
+
+function updateGenerationIndicator() {
+  if (!generationIndicator) {
+    return;
+  }
+  const isModifying = Boolean(currentCode);
+  generationIndicator.textContent = isModifying
+    ? '🧠 Modifying existing UI'
+    : '✨ Creating new UI';
+  generationIndicator.classList.toggle('active', isModifying);
 }
 
 async function sendChat() {
@@ -95,14 +124,11 @@ async function sendChat() {
     const messages = [
       {
         role: 'system',
-        content: 'You generate interactive UI code and explanations.'
+        content: 'You generate and modify interactive web interfaces.'
       },
       {
         role: 'user',
-        content: buildWrappedPrompt(prompt, {
-          isLocked: regenModeLock?.checked,
-          existingCode: codeEditor.value.trim()
-        })
+        content: buildWrappedPrompt(prompt, currentCode)
       }
     ];
 
@@ -137,8 +163,11 @@ async function sendChat() {
 
     assistantBubble.textContent = parsed.text;
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    currentCode = parsed.code;
     codeEditor.value = parsed.code;
     runGeneratedCode(parsed.code);
+    lastUserIntent = prompt;
+    updateGenerationIndicator();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error.';
     appendMessage('system', message);
@@ -153,3 +182,4 @@ chatForm.addEventListener('submit', (event) => {
 });
 
 setStatusOnline(false);
+updateGenerationIndicator();
