@@ -9,6 +9,7 @@ maya-dev-ui/
 ├── index.html         # UI layout for chat + editor + output
 ├── styles.css         # Styling for the three-panel workspace
 ├── app.js             # Client-side logic for streaming chat + code execution
+├── api/credits.js     # Credit calculation helper for usage tracking
 ├── server.js          # Express proxy for streaming LLM responses
 ├── package.json       # Server dependencies and start script
 └── README.md          # This file
