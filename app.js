@@ -612,9 +612,12 @@ Otherwise, respond with plain text.`;
     }
 
     unlockChat();
-    if (hasCode && nextCode !== currentCode) {
+    const shouldAutoRun = hasCode && nextCode !== currentCode;
+    if (shouldAutoRun) {
       currentCode = nextCode;
-      setCodeFromLLM(nextCode);
+      queueMicrotask(() => {
+        setCodeFromLLM(nextCode);
+      });
     }
     updateGenerationIndicator();
   } catch (error) {
