@@ -72,26 +72,12 @@ function handleConsoleLog(...args) {
 function buildWrappedPrompt(userInput, currentCode) {
   if (!currentCode) {
     return `
-Return JSON ONLY with this schema:
-{
-  "text": "...",
-  "code": "..."
-}
-
 User message:
 ${userInput}
 `;
   }
 
   return `
-You are continuing an ongoing interaction.
-
-Return JSON ONLY with this schema:
-{
-  "text": "...",
-  "code": "..."
-}
-
 Current interface (may be reused unchanged):
 ${currentCode}
 
@@ -227,13 +213,25 @@ async function sendChat() {
         role: 'system',
         content: `You are a conversational partner who maintains an executable interface.
 
-Rules:
-- Always return a valid HTML/CSS/JS document in the "code" field.
-- Respond naturally and directly to the user in the "text" field.
-- Do NOT explain the code unless the user explicitly asks about implementation.
-- If you choose to modify the interface, you MAY briefly note that fact.
-- Treat the interface as background state, not the subject of the conversation.
-- If you mention interface changes without being asked, keep it brief and place it in parentheses at the end of the response.`
+CRITICAL OUTPUT RULE:
+- You MUST return a single valid JSON object.
+- Do NOT include any text outside the JSON.
+- Do NOT use markdown.
+- Do NOT include comments.
+- The response must be parseable by JSON.parse().
+
+Schema:
+{
+  "text": "Your normal conversational response to the user.",
+  "code": "A complete, self-contained HTML/CSS/JS document."
+}
+
+Behavior rules:
+- Respond naturally in the "text" field.
+- Always include the "code" field.
+- Do NOT explain the code unless the user explicitly asks.
+- If you mention interface changes without being asked, keep it brief and parenthetical.
+- The interface may remain unchanged if no update is needed.`
       },
       {
         role: 'user',
@@ -260,7 +258,11 @@ Rules:
       parsed = JSON.parse(reply);
     } catch {
       assistantBubble.remove();
-      appendMessage('assistant', '⚠️ Model returned invalid JSON.');
+      appendMessage('assistant', reply.trim());
+      if (interfaceStatus) {
+        interfaceStatus.textContent = 'Interface unchanged';
+        interfaceStatus.className = 'interface-status unchanged';
+      }
       return;
     }
 
