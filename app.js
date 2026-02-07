@@ -3,8 +3,9 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
 const codeEditor = document.getElementById('code-editor');
-const consoleOutput = document.getElementById('console-output');
-const previewFrame = document.getElementById('preview-frame');
+const consoleLog = document.getElementById('console-output-log');
+const consolePane = document.getElementById('consoleOutput');
+const previewFrame = document.getElementById('previewFrame');
 const statusLabel = document.getElementById('status-label');
 const generationIndicator = document.getElementById('generation-indicator');
 const splitter = document.getElementById('splitter');
@@ -37,8 +38,8 @@ function appendOutput(content, variant = 'success') {
   const line = document.createElement('div');
   line.className = `output-line ${variant}`;
   line.textContent = content;
-  consoleOutput.appendChild(line);
-  consoleOutput.scrollTop = consoleOutput.scrollHeight;
+  consoleLog.appendChild(line);
+  consoleLog.scrollTop = consoleLog.scrollHeight;
 }
 
 function handleConsoleLog(...args) {
@@ -219,12 +220,11 @@ if (splitter && rightPane && codePanel && outputPanel) {
   });
 }
 
-if (fullscreenToggle && outputPanel) {
+if (fullscreenToggle && consolePane) {
   fullscreenToggle.addEventListener('click', () => {
-    outputPanel.classList.toggle('preview-fullscreen');
-    fullscreenToggle.textContent = outputPanel.classList.contains('preview-fullscreen')
-      ? '⤡ Exit'
-      : '⤢ Fullscreen';
+    const isFullscreen = consolePane.classList.toggle('preview-fullscreen');
+    document.body.style.overflow = isFullscreen ? 'hidden' : '';
+    fullscreenToggle.textContent = isFullscreen ? '⤡ Exit Fullscreen' : '⤢ Fullscreen';
   });
 }
 

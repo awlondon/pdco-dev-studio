@@ -38,7 +38,7 @@
 
         <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal"></div>
 
-        <section id="output-panel" class="panel console-output">
+        <section id="output-panel" class="panel output-panel">
           <div class="panel-header">
             <div class="panel-header-title">
               Console Output
@@ -47,8 +47,10 @@
             <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
           </div>
           <div class="panel-body">
-            <div id="console-output" class="console-output-log"></div>
-            <iframe id="preview-frame" sandbox="allow-scripts"></iframe>
+            <div id="console-output-log" class="console-output-log"></div>
+            <div id="consoleOutput" class="console-output">
+              <iframe id="previewFrame" sandbox="allow-scripts"></iframe>
+            </div>
           </div>
         </section>
       </div>
