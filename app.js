@@ -21,6 +21,7 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const executionWarnings = document.getElementById('executionWarnings');
 const runButton = document.getElementById('runCode');
 const rollbackButton = document.getElementById('rollbackButton');
+const promoteButton = document.getElementById('promoteButton');
 const SANDBOX_TIMEOUT_MS = 5000;
 const MAX_RAF = 600;
 const BACKEND_URL =
@@ -265,12 +266,20 @@ function setStatus(state, source = null) {
   if (state === 'READY') {
     setPreviewExecutionStatus('ready', 'Ready');
     setPreviewStatus('Preview ready');
+    updatePromoteVisibility();
+    return;
+  }
+  if (state === 'BASELINE' || state === 'BASELINE · promoted') {
+    setPreviewExecutionStatus('baseline', 'BASELINE · promoted');
+    setPreviewStatus('Baseline promoted');
+    updatePromoteVisibility();
     return;
   }
   if (state === 'RUNNING') {
     const label = source ? `RUNNING · ${source}` : 'RUNNING';
     setPreviewExecutionStatus('running', label);
     setPreviewStatus(`Running ${source ?? 'code'}…`);
+    updatePromoteVisibility();
   }
 }
 
@@ -415,6 +424,7 @@ function updateGenerationIndicator() {
 function markPreviewStale() {
   setPreviewStatus('✏️ Code modified — click Run Code to apply');
   setPreviewExecutionStatus('stale', 'MODIFIED · not running');
+  updatePromoteVisibility();
 }
 
 function updateRunButtonVisibility() {
@@ -432,12 +442,22 @@ function updateRollbackVisibility() {
     userHasEditedCode && lastLLMCode ? 'inline-flex' : 'none';
 }
 
+function updatePromoteVisibility() {
+  if (!promoteButton) {
+    return;
+  }
+  const isRunning = previewExecutionStatus?.classList.contains('running');
+  promoteButton.style.display =
+    userHasEditedCode && isRunning ? 'inline-flex' : 'none';
+}
+
 function setCodeFromLLM(code) {
   lastLLMCode = code;
   codeEditor.value = code;
   userHasEditedCode = false;
   updateRunButtonVisibility();
   updateRollbackVisibility();
+  updatePromoteVisibility();
   setPreviewStatus('Preview updated by assistant');
   handleLLMOutput(code, 'generated');
 }
@@ -665,6 +685,7 @@ codeEditor.addEventListener('input', () => {
   userHasEditedCode = true;
   updateRunButtonVisibility();
   updateRollbackVisibility();
+  updatePromoteVisibility();
   markPreviewStale();
   resetExecutionPreparation();
 });
@@ -676,6 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateRunButtonVisibility();
   updateRollbackVisibility();
+  updatePromoteVisibility();
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
@@ -683,9 +705,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     handleUserRun(codeEditor.value);
-    userHasEditedCode = false;
     updateRunButtonVisibility();
     updateRollbackVisibility();
+    updatePromoteVisibility();
   });
   if (!rollbackButton) {
     console.warn('⚠️ Rollback button not found');
@@ -699,8 +721,22 @@ document.addEventListener('DOMContentLoaded', () => {
     codeEditor.value = lastLLMCode;
     updateRunButtonVisibility();
     updateRollbackVisibility();
+    updatePromoteVisibility();
     handleUserRun(lastLLMCode, 'rolled back', 'Rolling back to last generated…');
     setStatus('RUNNING', 'rolled back');
+  });
+  if (!promoteButton) {
+    console.warn('⚠️ Promote button not found');
+    return;
+  }
+  promoteButton.addEventListener('click', () => {
+    const currentCode = codeEditor.value;
+    lastLLMCode = currentCode;
+    userHasEditedCode = false;
+    updateRunButtonVisibility();
+    updateRollbackVisibility();
+    updatePromoteVisibility();
+    setStatus('BASELINE · promoted');
   });
 });
 
@@ -711,9 +747,9 @@ codeEditor.addEventListener('keydown', (event) => {
       return;
     }
     handleUserRun(codeEditor.value);
-    userHasEditedCode = false;
     updateRunButtonVisibility();
     updateRollbackVisibility();
+    updatePromoteVisibility();
   }
 });
 

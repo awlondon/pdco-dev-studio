@@ -166,9 +166,21 @@ html, body {
   color: #a1a1aa;
 }
 
+#promoteButton {
+  display: none;
+  background: transparent;
+  border: 1px solid rgba(124, 155, 255, 0.4);
+  color: #d8e2ff;
+}
+
 #rollbackButton:hover {
   border-color: rgba(124, 155, 255, 0.5);
   color: #e2e8f0;
+}
+
+#promoteButton:hover {
+  border-color: rgba(124, 155, 255, 0.7);
+  color: #ffffff;
 }
 
 .loading {
