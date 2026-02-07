@@ -159,6 +159,18 @@ html, body {
   display: none;
 }
 
+#rollbackButton {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: #a1a1aa;
+}
+
+#rollbackButton:hover {
+  border-color: rgba(124, 155, 255, 0.5);
+  color: #e2e8f0;
+}
+
 .loading {
   display: flex;
   align-items: center;

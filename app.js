@@ -20,6 +20,7 @@ const viewDiffBtn = document.getElementById('viewDiffBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const executionWarnings = document.getElementById('executionWarnings');
 const runButton = document.getElementById('runCode');
+const rollbackButton = document.getElementById('rollbackButton');
 const SANDBOX_TIMEOUT_MS = 5000;
 const MAX_RAF = 600;
 const BACKEND_URL =
@@ -37,6 +38,7 @@ let currentCode = defaultInterfaceCode;
 let previousCode = null;
 let loadingStartTime = null;
 let loadingInterval = null;
+let lastLLMCode = null;
 let userHasEditedCode = false;
 let activeIframe = null;
 let sandboxKillTimer = null;
@@ -422,17 +424,27 @@ function updateRunButtonVisibility() {
   runButton.style.display = userHasEditedCode ? 'inline-flex' : 'none';
 }
 
+function updateRollbackVisibility() {
+  if (!rollbackButton) {
+    return;
+  }
+  rollbackButton.style.display =
+    userHasEditedCode && lastLLMCode ? 'inline-flex' : 'none';
+}
+
 function setCodeFromLLM(code) {
+  lastLLMCode = code;
   codeEditor.value = code;
   userHasEditedCode = false;
   updateRunButtonVisibility();
+  updateRollbackVisibility();
   setPreviewStatus('Preview updated by assistant');
   handleLLMOutput(code, 'generated');
 }
 
-function handleUserRun(code) {
-  setPreviewStatus('Applying your edits…');
-  handleLLMOutput(code, 'user');
+function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
+  setPreviewStatus(statusMessage);
+  handleLLMOutput(code, source);
 }
 
 function simpleLineDiff(oldCode, newCode) {
@@ -652,6 +664,7 @@ chatForm.addEventListener('submit', (event) => {
 codeEditor.addEventListener('input', () => {
   userHasEditedCode = true;
   updateRunButtonVisibility();
+  updateRollbackVisibility();
   markPreviewStale();
   resetExecutionPreparation();
 });
@@ -662,6 +675,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
   updateRunButtonVisibility();
+  updateRollbackVisibility();
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
@@ -671,6 +685,22 @@ document.addEventListener('DOMContentLoaded', () => {
     handleUserRun(codeEditor.value);
     userHasEditedCode = false;
     updateRunButtonVisibility();
+    updateRollbackVisibility();
+  });
+  if (!rollbackButton) {
+    console.warn('⚠️ Rollback button not found');
+    return;
+  }
+  rollbackButton.addEventListener('click', () => {
+    if (!lastLLMCode) {
+      return;
+    }
+    userHasEditedCode = false;
+    codeEditor.value = lastLLMCode;
+    updateRunButtonVisibility();
+    updateRollbackVisibility();
+    handleUserRun(lastLLMCode, 'rolled back', 'Rolling back to last generated…');
+    setStatus('RUNNING', 'rolled back');
   });
 });
 
@@ -683,6 +713,7 @@ codeEditor.addEventListener('keydown', (event) => {
     handleUserRun(codeEditor.value);
     userHasEditedCode = false;
     updateRunButtonVisibility();
+    updateRollbackVisibility();
   }
 });
 
