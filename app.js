@@ -55,6 +55,7 @@ let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
 let lastCodeSource = null;
+let chatFinalized = false;
 const chatState = {
   locked: false,
   unlockTimerId: null
@@ -65,6 +66,46 @@ const sandbox = createSandboxController({
   statusEl: sandboxStatus,
   maxFiniteMs: SANDBOX_TIMEOUT_MS
 });
+
+const preview = (() => {
+  let ready = false;
+  const readyListeners = new Set();
+
+  function markReady() {
+    if (ready) {
+      return;
+    }
+    ready = true;
+    readyListeners.forEach((listener) => listener());
+    readyListeners.clear();
+  }
+
+  if (sandboxFrame) {
+    sandboxFrame.addEventListener('load', () => {
+      markReady();
+    });
+
+    if (sandboxFrame.contentDocument?.readyState === 'complete') {
+      markReady();
+    }
+  }
+
+  return {
+    isReady() {
+      return ready;
+    },
+    once(eventName, listener) {
+      if (eventName !== 'ready') {
+        return;
+      }
+      if (ready) {
+        listener();
+        return;
+      }
+      readyListeners.add(listener);
+    }
+  };
+})();
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -97,21 +138,40 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
-function createFinalizeChatOnce(finalizeFn) {
-  let finalized = false;
+function renderChatMeta({ text, hasCode, metadata, messageId }) {
+  if (text) {
+    renderAssistantText(`${text}\n\n${metadata}`, messageId);
+    return;
+  }
 
-  return function finalizeChatOnce(payload) {
-    if (finalized) {
-      return;
-    }
-    finalized = true;
+  renderAssistantText(metadata, messageId);
+  if (hasCode) {
+    setPreviewStatus('Running interactive scene…');
+  }
+}
 
-    try {
-      finalizeFn(payload);
-    } catch (err) {
-      console.error('[finalizeChatOnce] finalize failed:', err);
-    }
-  };
+function finalizeChatOnce(meta) {
+  if (chatFinalized) {
+    return;
+  }
+  chatFinalized = true;
+
+  try {
+    renderChatMeta(meta);
+  } catch (err) {
+    console.error('[finalizeChatOnce] finalize failed:', err);
+  }
+}
+
+function runWhenPreviewReady(runFn) {
+  if (preview.isReady()) {
+    runFn();
+    return;
+  }
+
+  preview.once('ready', () => {
+    runFn();
+  });
 }
 
 function updateMessage(id, newHtml) {
@@ -451,9 +511,6 @@ function setCodeFromLLM(code) {
   updateRollbackVisibility();
   updatePromoteVisibility();
   setPreviewStatus('Preview updated by assistant');
-  queueMicrotask(() => {
-    handleLLMOutput(code, 'generated');
-  });
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
@@ -559,6 +616,7 @@ async function sendChat() {
   lockChat();
   chatInput.value = '';
   appendMessage('user', userInput);
+  chatFinalized = false;
 
   const pendingMessageId = addMessage(
     'assistant',
@@ -568,18 +626,6 @@ async function sendChat() {
 
   setStatusOnline(false);
   startLoading();
-
-  const finalizeChat = createFinalizeChatOnce(({ text, hasCode, metadata }) => {
-    if (text) {
-      renderAssistantText(`${text}\n\n${metadata}`, pendingMessageId);
-      return;
-    }
-
-    renderAssistantText(metadata, pendingMessageId);
-    if (hasCode) {
-      setPreviewStatus('Running interactive scene…');
-    }
-  });
 
   let generationMetadata = '';
   let normalizedReply = '';
@@ -653,14 +699,20 @@ Otherwise, respond with plain text.`;
   const nextCode = extractedHtml;
   const hasCode = Boolean(nextCode);
 
-  finalizeChat({ text: chatText, hasCode, metadata: generationMetadata });
+  finalizeChatOnce({
+    text: chatText,
+    hasCode,
+    metadata: generationMetadata,
+    messageId: pendingMessageId
+  });
 
   try {
     if (hasCode) {
       currentCode = nextCode;
-      queueMicrotask(() => {
+      setCodeFromLLM(nextCode);
+      runWhenPreviewReady(() => {
         try {
-          setCodeFromLLM(nextCode);
+          handleLLMOutput(nextCode, 'generated');
         } catch (error) {
           console.error('Auto-run failed after generation.', error);
           addExecutionWarning('Preview auto-run failed. Try Run Code.');
@@ -839,3 +891,9 @@ setStatusOnline(false);
 updateGenerationIndicator();
 setPreviewStatus('Ready — auto-run enabled');
 setPreviewExecutionStatus('ready', 'Ready');
+
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+  preview.once('ready', () => {
+    console.assert(chatFinalized, 'Preview ready before chat finalized');
+  });
+}
