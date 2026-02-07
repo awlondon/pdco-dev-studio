@@ -96,6 +96,23 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
+function createFinalizeChatOnce(finalizeFn) {
+  let finalized = false;
+
+  return function finalizeChatOnce(payload) {
+    if (finalized) {
+      return;
+    }
+    finalized = true;
+
+    try {
+      finalizeFn(payload);
+    } catch (err) {
+      console.error('[finalizeChatOnce] finalize failed:', err);
+    }
+  };
+}
+
 function updateMessage(id, newHtml) {
   const message = document.querySelector(`[data-id="${id}"]`);
   if (!message) {
@@ -548,6 +565,18 @@ async function sendChat() {
   setStatusOnline(false);
   startLoading();
 
+  const finalizeChat = createFinalizeChatOnce(({ text, hasCode, metadata }) => {
+    if (text) {
+      renderAssistantText(`${text}\n\n${metadata}`, pendingMessageId);
+      return;
+    }
+
+    renderAssistantText(metadata, pendingMessageId);
+    if (hasCode) {
+      setPreviewStatus('Running interactive scene…');
+    }
+  });
+
   let generationMetadata = '';
   let normalizedReply = '';
   try {
@@ -605,24 +634,24 @@ Otherwise, respond with plain text.`;
     return;
   }
 
+  let extractedHtml = null;
+  let extractedText = '';
   try {
-    let extractedHtml = extractHtml(normalizedReply);
-    const extractedText = extractChatText(normalizedReply);
-    const chatText =
-      extractedText || (extractedHtml ? '' : normalizedReply.trim());
+    extractedHtml = extractHtml(normalizedReply);
+    extractedText = extractChatText(normalizedReply);
+  } catch (error) {
+    console.error('Post-generation parsing failed.', error);
+  }
 
-    const nextCode = extractedHtml;
-    const hasCode = Boolean(nextCode);
+  const chatText =
+    extractedText || (extractedHtml ? '' : normalizedReply.trim());
 
-    if (chatText) {
-      renderAssistantText(`${chatText}\n\n${generationMetadata}`, pendingMessageId);
-    } else {
-      renderAssistantText(generationMetadata, pendingMessageId);
-      if (hasCode) {
-        setPreviewStatus('Running interactive scene…');
-      }
-    }
+  const nextCode = extractedHtml;
+  const hasCode = Boolean(nextCode);
 
+  finalizeChat({ text: chatText, hasCode, metadata: generationMetadata });
+
+  try {
     const shouldAutoRun = hasCode && nextCode !== currentCode;
     if (shouldAutoRun) {
       currentCode = nextCode;
@@ -639,10 +668,6 @@ Otherwise, respond with plain text.`;
     updateGenerationIndicator();
   } catch (error) {
     console.error('Post-generation UI update failed.', error);
-    updateMessage(
-      pendingMessageId,
-      '<em>⚠️ Response received, but the UI failed to update.</em>'
-    );
   } finally {
     unlockChat();
     stopLoading();
