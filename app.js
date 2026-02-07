@@ -238,104 +238,33 @@ function extractChatText(responseText) {
 
 function buildWrappedPrompt(userInput, currentCode) {
   if (!currentCode) {
-    return userInput;
-  }
-
-  return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
+    return `
+Return JSON ONLY with this schema:
+{
+  "text": "...",
+  "code": "..."
 }
 
-function analyzeCodeForExecution(code) {
-  const flags = {
-    hasRAF: code.includes('requestAnimationFrame'),
-    hasWhileTrue: /while\s*\(\s*true\s*\)/.test(code),
-    hasSetInterval: code.includes('setInterval'),
-    hasCanvas: code.includes('<canvas') || code.includes('getContext('),
-    hasWorker: code.includes('new Worker')
-  };
-
-  let executionProfile = 'static';
-  if (flags.hasRAF || flags.hasSetInterval) {
-    executionProfile = 'animation';
-  }
-  if (flags.hasCanvas) {
-    executionProfile = 'canvas-sim';
+User message:
+${userInput}
+`;
   }
 
-  const warnings = [];
-  if (flags.hasRAF) {
-    warnings.push('requestAnimationFrame detected');
-  }
-  if (flags.hasSetInterval) {
-    warnings.push('setInterval detected');
-  }
-  if (flags.hasCanvas) {
-    warnings.push('canvas detected');
-  }
-  if (flags.hasWorker) {
-    warnings.push('Web Worker detected');
-  }
+  return `
+You are continuing an ongoing interaction.
 
-  let allowed = true;
-  if (flags.hasWhileTrue) {
-    warnings.push('blocking while(true) loop detected');
-    allowed = false;
-  }
-
-  return {
-    allowed,
-    executionProfile,
-    warnings
-  };
+Return JSON ONLY with this schema:
+{
+  "text": "...",
+  "code": "..."
 }
 
-function resetExecutionPreparation({ clearWarnings = true } = {}) {
-  if (runButton) {
-    runButton.textContent = 'Run Code';
-    runButton.disabled = false;
-  }
-  if (clearWarnings) {
-    setExecutionWarnings([]);
-  }
-}
+Current interface (may be reused unchanged):
+${currentCode}
 
-function updateExecutionWarningsFor(code) {
-  const analysis = analyzeCodeForExecution(code);
-  applyExecutionWarnings(analysis.warnings);
-  if (!analysis.allowed) {
-    appendOutput('Execution warning: blocking loop detected.', 'error');
-  }
-  return analysis;
-}
-
-function setStatus(state, source = null) {
-  if (state === 'COMPILING') {
-    setPreviewExecutionStatus('compiling', 'Compiling…');
-    setPreviewStatus('Compiling…');
-    return;
-  }
-  if (state === 'READY') {
-    setPreviewExecutionStatus('ready', 'Ready');
-    setPreviewStatus('Preview ready');
-    updatePromoteVisibility();
-    return;
-  }
-  if (state === 'BASELINE' || state === 'BASELINE · promoted') {
-    setPreviewExecutionStatus('baseline', 'BASELINE · promoted');
-    setPreviewStatus('Baseline promoted');
-    updatePromoteVisibility();
-    return;
-  }
-  if (state === 'RUNNING') {
-    const modeLabel = sandboxMode === 'animation' ? 'RUNNING · ANIMATION MODE' : 'RUNNING';
-    const label = source && sandboxMode !== 'animation'
-      ? `RUNNING · ${source}`
-      : source
-        ? `${modeLabel} · ${source}`
-        : modeLabel;
-    setPreviewExecutionStatus('running', label);
-    setPreviewStatus(`Running ${source ?? 'code'}…`);
-    updatePromoteVisibility();
-  }
+User message:
+${userInput}
+`;
 }
 
 function pauseSandbox() {
@@ -740,7 +669,16 @@ When making interface changes, respond with plain text plus an optional \`\`\`ht
     const messages = [
       {
         role: 'system',
-        content: systemMessage
+        content: `You are an interactive interface designer.
+
+You always maintain a working executable web interface as part of your response.
+
+Rules:
+- You MUST always return a valid HTML/CSS/JS document.
+- You MAY choose to leave the interface unchanged if the user’s message does not require modification.
+- You SHOULD modify the interface when it meaningfully improves clarity, usability, or embodiment of the conversation.
+- Do NOT describe code unless the user explicitly asks about implementation.
+- Treat the interface as the primary artifact, and text as supporting explanation.`
       },
       {
         role: 'user',
@@ -782,43 +720,15 @@ When making interface changes, respond with plain text plus an optional \`\`\`ht
       }
     }
 
-    if (hasCode && isOverlyLiteral(nextCode, extractedText)) {
-      console.warn('⚠️ Literal UI detected — consider prompting expressive response');
-    }
-
-    stopLoading();
-    let codeChanged = Boolean(nextCode && nextCode !== currentCode);
-    if (codeChanged && userHasEditedCode) {
-      console.warn('⚠️ Editor modified by user; not overwriting code');
-      codeChanged = false;
-    }
-    if (codeChanged) {
-      previousCode = currentCode;
+    assistantBubble.textContent = parsed.text;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    const nextCode = parsed.code;
+    if (nextCode && nextCode !== currentCode) {
       currentCode = nextCode;
-      setCodeFromLLM(nextCode);
-      resetExecutionPreparation({ clearWarnings: false });
+      codeEditor.value = nextCode;
+      runGeneratedCode(nextCode);
     }
-    if (interfaceStatus) {
-      if (codeChanged) {
-        interfaceStatus.textContent = 'Interface updated';
-        interfaceStatus.className = 'interface-status updated';
-      } else {
-        interfaceStatus.textContent = 'Interface unchanged';
-        interfaceStatus.className = 'interface-status unchanged';
-      }
-    }
-    if (viewDiffBtn) {
-      if (codeChanged && previousCode) {
-        viewDiffBtn.style.display = 'inline-block';
-        viewDiffBtn.onclick = () => {
-          const diff = simpleLineDiff(previousCode, currentCode);
-          alert(diff);
-        };
-      } else {
-        viewDiffBtn.style.display = 'none';
-        viewDiffBtn.onclick = null;
-      }
-    }
+    lastUserIntent = prompt;
     updateGenerationIndicator();
   } catch (error) {
     updateMessage(
