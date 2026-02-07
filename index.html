@@ -80,7 +80,9 @@
                 <button id="sandboxReset" class="ghost-button" type="button">Reset</button>
                 <button id="sandboxStop" class="ghost-button" type="button">Stop</button>
               </div>
-              <div id="previewFrameContainer" class="preview-frame-container"></div>
+              <div id="previewFrameContainer" class="preview-frame-container">
+                <iframe id="sandbox" sandbox="allow-scripts"></iframe>
+              </div>
             </div>
           </div>
         </section>
@@ -88,6 +90,6 @@
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
