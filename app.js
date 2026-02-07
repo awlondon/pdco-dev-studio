@@ -56,7 +56,7 @@ let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
 let lastCodeSource = null;
-const chatFinalizeState = new Map();
+let chatFinalized = false;
 let currentTurnMessageId = null;
 let pendingAssistantProposal = null;
 const DEBUG_INTENT = false;
@@ -211,24 +211,12 @@ function appendChatMeta(text, messageId) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-function finalizeChatOnce(messageId, { text, ms, mode } = {}) {
-  const state = chatFinalizeState.get(messageId);
-  if (state?.finalized) {
-    console.warn('Finalize skipped (already finalized):', messageId);
+function finalizeChatOnce(fn) {
+  if (chatFinalized) {
     return false;
   }
-
-  chatFinalizeState.set(messageId, { finalized: true });
-
-  const metadataChunks = [];
-  if (typeof ms === 'number') {
-    metadataChunks.push(formatGenerationMetadata(ms));
-  }
-  if (mode) {
-    metadataChunks.push(mode);
-  }
-
-  renderAssistantMessage(messageId, text, metadataChunks.join(' '));
+  chatFinalized = true;
+  fn();
   return true;
 }
 
@@ -743,6 +731,7 @@ async function sendChat() {
     { pending: true }
   );
   currentTurnMessageId = pendingMessageId;
+  chatFinalized = false;
 
   setStatusOnline(false);
   startLoading();
@@ -788,9 +777,8 @@ Otherwise, respond with plain text.`;
     setStatusOnline(true);
     rawReply = data?.choices?.[0]?.message?.content || 'No response.';
   } catch (error) {
-    finalizeChatOnce(pendingMessageId, {
-      text: '⚠️ Something went wrong while generating the response.',
-      ms: performance.now() - startedAt
+    finalizeChatOnce(() => {
+      renderAssistantMessage(pendingMessageId, '⚠️ Something went wrong while generating the response.', formatGenerationMetadata(performance.now() - startedAt));
     });
     unlockChat();
     stopLoading();
@@ -818,16 +806,21 @@ Otherwise, respond with plain text.`;
 
   const elapsed = performance.now() - startedAt;
   const metadataText = generationMetadata || formatGenerationMetadata(elapsed);
-  finalizeChatOnce(pendingMessageId, {
-    text: extractedText,
-    mode: metadataText
+  finalizeChatOnce(() => {
+    renderAssistantMessage(pendingMessageId, extractedText, metadataText);
   });
 
   try {
-    if (hasCode) {
+    const trimmedCode = extractedCode?.trim();
+    const codeChanged = Boolean(trimmedCode) && trimmedCode !== (currentCode?.trim() || '');
+    if (codeChanged) {
       currentCode = extractedCode;
       setCodeFromLLM(extractedCode);
       pendingAssistantProposal = null;
+      console.log('AUTO-RUN CHECK', {
+        codeChanged,
+        chatFinalized
+      });
       runWhenPreviewReady(() => {
         try {
           handleLLMOutput(extractedCode, 'generated');
@@ -1013,7 +1006,7 @@ setPreviewExecutionStatus('ready', 'Ready');
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
   preview.once('ready', () => {
     console.assert(
-      !currentTurnMessageId || chatFinalizeState.get(currentTurnMessageId)?.finalized,
+      !currentTurnMessageId || chatFinalized,
       'Preview ready before chat finalized'
     );
   });
