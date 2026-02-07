@@ -338,6 +338,20 @@ button:disabled {
   display: none;
 }
 
+.sandbox-controls {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.sandbox-controls.hidden {
+  display: none;
+}
+
+.sandbox-controls .ghost-button {
+  padding: 4px 10px;
+}
+
 .interface-status.updated {
   color: #4ade80;
 }

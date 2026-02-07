@@ -19,6 +19,12 @@ const interfaceStatus = document.getElementById('interfaceStatus');
 const viewDiffBtn = document.getElementById('viewDiffBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const executionWarnings = document.getElementById('executionWarnings');
+const sandboxStatus = document.getElementById('sandbox-status');
+const sandboxControls = document.getElementById('sandbox-controls');
+const sandboxPauseButton = document.getElementById('sandboxPause');
+const sandboxResumeButton = document.getElementById('sandboxResume');
+const sandboxResetButton = document.getElementById('sandboxReset');
+const sandboxStopButton = document.getElementById('sandboxStop');
 const runButton = document.getElementById('runCode');
 const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
@@ -48,6 +54,10 @@ let sandboxFrameCount = 0;
 let sandboxStatusTimer = null;
 let rafMonitorId = null;
 let baseExecutionWarnings = [];
+let sandboxMode = 'finite';
+let sandboxAnimationState = 'idle';
+let lastRunCode = null;
+let lastRunSource = null;
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -146,6 +156,29 @@ function addExecutionWarning(warning) {
     nextWarnings.push(warning);
   }
   setExecutionWarnings(nextWarnings);
+}
+
+function getSandboxModeForExecution(executionProfile) {
+  return executionProfile === 'animation' || executionProfile === 'canvas-sim'
+    ? 'animation'
+    : 'finite';
+}
+
+function setSandboxControlsVisible(isVisible) {
+  if (!sandboxControls) {
+    return;
+  }
+  sandboxControls.classList.toggle('hidden', !isVisible);
+}
+
+function setSandboxAnimationState(state) {
+  sandboxAnimationState = state;
+  if (!sandboxPauseButton || !sandboxResumeButton) {
+    return;
+  }
+  const isPaused = state === 'paused';
+  sandboxPauseButton.classList.toggle('hidden', isPaused);
+  sandboxResumeButton.classList.toggle('hidden', !isPaused);
 }
 
 function setPreviewExecutionStatus(state, message) {
@@ -269,6 +302,7 @@ function updateExecutionWarningsFor(code) {
   if (!analysis.allowed) {
     appendOutput('Execution warning: blocking loop detected.', 'error');
   }
+  return analysis;
 }
 
 function setStatus(state, source = null) {
@@ -290,11 +324,23 @@ function setStatus(state, source = null) {
     return;
   }
   if (state === 'RUNNING') {
-    const label = source ? `RUNNING · ${source}` : 'RUNNING';
+    const modeLabel = sandboxMode === 'animation' ? 'RUNNING · ANIMATION MODE' : 'RUNNING';
+    const label = source && sandboxMode !== 'animation'
+      ? `RUNNING · ${source}`
+      : source
+        ? `${modeLabel} · ${source}`
+        : modeLabel;
     setPreviewExecutionStatus('running', label);
     setPreviewStatus(`Running ${source ?? 'code'}…`);
     updatePromoteVisibility();
   }
+}
+
+function setSandboxStatusText(message) {
+  if (!sandboxStatus) {
+    return;
+  }
+  sandboxStatus.textContent = message;
 }
 
 function clearSandbox() {
@@ -331,12 +377,53 @@ function stopSandbox(reason, options = {}) {
       addExecutionWarning(warning);
     }
   }
-  const statusEl = document.getElementById('sandbox-status');
-  if (statusEl) {
-    statusEl.textContent = reason ? `stopped • ${reason}` : 'stopped';
-  }
+  setSandboxStatusText(reason ? `stopped • ${reason}` : 'stopped');
+  setSandboxAnimationState('stopped');
+  setSandboxControlsVisible(false);
   clearSandbox();
   outputPanel?.classList.remove('loading');
+}
+
+function callSandboxControl(action) {
+  const control = activeIframe?.contentWindow?.__MAYA_ANIMATION_CONTROL__;
+  if (!control || typeof control[action] !== 'function') {
+    return false;
+  }
+  control[action]();
+  return true;
+}
+
+function pauseSandbox() {
+  if (sandboxMode !== 'animation') {
+    return;
+  }
+  if (callSandboxControl('pause')) {
+    setSandboxAnimationState('paused');
+  }
+}
+
+function resumeSandbox() {
+  if (sandboxMode !== 'animation') {
+    return;
+  }
+  if (callSandboxControl('resume')) {
+    setSandboxAnimationState('running');
+  }
+}
+
+function resetSandbox() {
+  if (!lastRunCode) {
+    return;
+  }
+  handleUserRun(lastRunCode, lastRunSource ?? 'reset', 'Resetting animation…');
+}
+
+function stopSandboxFromUser() {
+  stopSandbox('user-stop', {
+    state: 'stopped',
+    label: '🛑 Stopped',
+    statusMessage: 'Sandbox stopped by user.'
+  });
 }
 
 function armTimeoutKillSwitch() {
@@ -354,28 +441,36 @@ function armTimeoutKillSwitch() {
   }, SANDBOX_TIMEOUT_MS);
 }
 
-function armRAFMonitor() {
+function armRAFMonitor({ enforceLimits = true, mode = 'finite' } = {}) {
   if (!activeIframe?.contentWindow) {
     return;
   }
   const win = activeIframe.contentWindow;
   sandboxStartTime = performance.now();
   sandboxFrameCount = 0;
+  setSandboxAnimationState('running');
   if (sandboxStatusTimer) {
     clearInterval(sandboxStatusTimer);
   }
-  const statusEl = document.getElementById('sandbox-status');
   sandboxStatusTimer = setInterval(() => {
     const elapsed = performance.now() - sandboxStartTime;
-    if (statusEl) {
-      statusEl.textContent =
-        `running • ${sandboxFrameCount} frames • ${(elapsed / 1000).toFixed(2)}s`;
-    }
+    const stateLabel =
+      sandboxAnimationState === 'paused'
+        ? 'paused'
+        : mode === 'animation'
+          ? 'running · animation mode'
+          : 'running';
+    setSandboxStatusText(
+      `${stateLabel} • ${sandboxFrameCount} frames • ${(elapsed / 1000).toFixed(2)}s`
+    );
   }, 100);
 
   const step = (timestamp) => {
     sandboxFrameCount++;
-    if (sandboxFrameCount > MAX_RAF || timestamp - sandboxStartTime > SANDBOX_TIMEOUT_MS) {
+    if (
+      enforceLimits &&
+      (sandboxFrameCount > MAX_RAF || timestamp - sandboxStartTime > SANDBOX_TIMEOUT_MS)
+    ) {
       appendOutput('Sandbox limit reached — auto-stopped.', 'success');
       stopSandbox('safety cap', {
         state: 'capped',
@@ -390,7 +485,77 @@ function armRAFMonitor() {
   rafMonitorId = win.requestAnimationFrame(step);
 }
 
-function injectIntoSandbox(html) {
+function injectAnimationControls(html) {
+  if (html.includes('__MAYA_ANIMATION_CONTROL__')) {
+    return html;
+  }
+
+  const controlScript = `
+<script>
+(() => {
+  const root = window;
+  if (root.__MAYA_ANIMATION_CONTROL__) return;
+  let running = true;
+  const queuedRaf = [];
+  const realRAF = root.requestAnimationFrame.bind(root);
+  const realSetInterval = root.setInterval.bind(root);
+
+  root.__MAYA_ANIMATION_CONTROL__ = {
+    pause() {
+      running = false;
+    },
+    resume() {
+      if (running) return;
+      running = true;
+      const queued = queuedRaf.splice(0);
+      queued.forEach((cb) => realRAF(cb));
+    },
+    reset() {
+      running = true;
+      queuedRaf.length = 0;
+    },
+    stop() {
+      running = false;
+      queuedRaf.length = 0;
+    }
+  };
+
+  root.requestAnimationFrame = (cb) => {
+    if (!running) {
+      queuedRaf.push(cb);
+      return 0;
+    }
+    return realRAF((ts) => {
+      if (!running) {
+        queuedRaf.push(cb);
+        return;
+      }
+      cb(ts);
+    });
+  };
+
+  root.setInterval = (cb, delay, ...args) => {
+    return realSetInterval(() => {
+      if (!running) {
+        return;
+      }
+      cb(...args);
+    }, delay);
+  };
+})();
+</script>
+`.trim();
+
+  if (/<\/head>/i.test(html)) {
+    return html.replace(/<\/head>/i, `${controlScript}\n</head>`);
+  }
+  if (/<body[^>]*>/i.test(html)) {
+    return html.replace(/<body[^>]*>/i, (match) => `${match}\n${controlScript}`);
+  }
+  return `${controlScript}\n${html}`;
+}
+
+function injectIntoSandbox(html, mode = 'finite') {
   const iframe = document.createElement('iframe');
 
   iframe.sandbox = 'allow-scripts allow-same-origin allow-pointer-lock';
@@ -399,16 +564,19 @@ function injectIntoSandbox(html) {
   iframe.style.border = '0';
   iframe.setAttribute('aria-label', 'Live preview');
 
-  iframe.srcdoc = html;
+  iframe.srcdoc = mode === 'animation' ? injectAnimationControls(html) : html;
 
   return iframe;
 }
 
-function runSandbox(iframe) {
+function runSandbox(iframe, mode = 'finite') {
   const win = iframe.contentWindow;
 
-  armTimeoutKillSwitch();
-  armRAFMonitor();
+  if (mode === 'finite') {
+    armTimeoutKillSwitch();
+  }
+  armRAFMonitor({ enforceLimits: mode === 'finite', mode });
+  setSandboxControlsVisible(mode === 'animation');
 
   if (typeof win.__MAYA_SAFE_START__ === 'function') {
     win.__MAYA_SAFE_START__();
@@ -422,7 +590,10 @@ function runSandbox(iframe) {
 function handleLLMOutput(code, source = 'generated') {
   setStatus('COMPILING');
 
-  updateExecutionWarningsFor(code);
+  const analysis = updateExecutionWarningsFor(code);
+  sandboxMode = getSandboxModeForExecution(analysis.executionProfile);
+  lastRunCode = code;
+  lastRunSource = source;
 
   if (!previewFrameContainer) {
     return;
@@ -431,7 +602,7 @@ function handleLLMOutput(code, source = 'generated') {
   stopSandbox();
   clearSandbox();
 
-  const iframe = injectIntoSandbox(code);
+  const iframe = injectIntoSandbox(code, sandboxMode);
   previewFrameContainer.appendChild(iframe);
   activeIframe = iframe;
 
@@ -441,7 +612,7 @@ function handleLLMOutput(code, source = 'generated') {
     setStatus('READY');
 
     requestAnimationFrame(() => {
-      runSandbox(activeIframe);
+      runSandbox(activeIframe, sandboxMode);
       setStatus('RUNNING', source);
     });
   });
@@ -938,6 +1109,20 @@ document.addEventListener('DOMContentLoaded', () => {
     updatePromoteVisibility();
     setStatus('BASELINE · promoted');
   });
+
+  setSandboxControlsVisible(false);
+  if (sandboxPauseButton) {
+    sandboxPauseButton.addEventListener('click', pauseSandbox);
+  }
+  if (sandboxResumeButton) {
+    sandboxResumeButton.addEventListener('click', resumeSandbox);
+  }
+  if (sandboxResetButton) {
+    sandboxResetButton.addEventListener('click', resetSandbox);
+  }
+  if (sandboxStopButton) {
+    sandboxStopButton.addEventListener('click', stopSandboxFromUser);
+  }
 });
 
 codeEditor.addEventListener('keydown', (event) => {
