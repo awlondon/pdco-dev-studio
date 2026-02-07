@@ -255,6 +255,28 @@ function extractHtml(responseText) {
   return responseText.slice(startIndex).trim();
 }
 
+function normalizeLLMOutput(raw) {
+  if (!raw) {
+    return raw;
+  }
+
+  if (raw.includes('"code"')) {
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (typeof parsed.code === 'string') {
+          return parsed.code;
+        }
+      }
+    } catch (error) {
+      return raw;
+    }
+  }
+
+  return raw;
+}
+
 function extractChatText(responseText) {
   if (!responseText) {
     return '';
@@ -774,13 +796,18 @@ Rules:
 
     setStatusOnline(true);
     const reply = data?.choices?.[0]?.message?.content || 'No response.';
+    const normalizedReply = normalizeLLMOutput(reply);
     if (reply.includes('```json')) {
       console.warn('⚠️ Model emitted JSON; ignoring structured output');
     }
+    if (normalizedReply !== reply) {
+      console.warn('⚠️ Normalized LLM output from JSON wrapper');
+    }
 
-    let extractedHtml = extractHtml(reply);
-    const extractedText = extractChatText(reply);
-    const chatText = extractedText || (extractedHtml ? '' : reply.trim());
+    let extractedHtml = extractHtml(normalizedReply);
+    const extractedText = extractChatText(normalizedReply);
+    const chatText =
+      extractedText || (extractedHtml ? '' : normalizedReply.trim());
 
     const nextCode = extractedHtml;
     const hasCode = Boolean(nextCode);
