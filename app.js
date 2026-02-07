@@ -54,6 +54,7 @@ let sandboxMode = 'finite';
 let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
+let lastCodeSource = null;
 const chatState = {
   locked: false,
   unlockTimerId: null
@@ -445,11 +446,14 @@ function setCodeFromLLM(code) {
   codeEditor.value = code;
   baselineCode = code;
   userHasEditedCode = false;
+  lastCodeSource = 'llm';
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
   setPreviewStatus('Preview updated by assistant');
-  handleLLMOutput(code, 'generated');
+  queueMicrotask(() => {
+    handleLLMOutput(code, 'generated');
+  });
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
@@ -652,8 +656,7 @@ Otherwise, respond with plain text.`;
   finalizeChat({ text: chatText, hasCode, metadata: generationMetadata });
 
   try {
-    const shouldAutoRun = hasCode && nextCode !== currentCode;
-    if (shouldAutoRun) {
+    if (hasCode) {
       currentCode = nextCode;
       queueMicrotask(() => {
         try {
@@ -682,6 +685,9 @@ chatForm.addEventListener('submit', (event) => {
 codeEditor.addEventListener('input', () => {
   const hasEdits = codeEditor.value !== baselineCode;
   userHasEditedCode = hasEdits;
+  if (hasEdits) {
+    lastCodeSource = 'user';
+  }
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
@@ -702,7 +708,7 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
-    if (!userHasEditedCode) {
+    if (!userHasEditedCode || lastCodeSource !== 'user') {
       return;
     }
     handleUserRun(codeEditor.value);
@@ -716,6 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     userHasEditedCode = false;
+    lastCodeSource = 'llm';
     codeEditor.value = lastLLMCode;
     baselineCode = lastLLMCode;
     updateRunButtonVisibility();
@@ -733,6 +740,7 @@ document.addEventListener('DOMContentLoaded', () => {
     lastLLMCode = currentCode;
     baselineCode = currentCode;
     userHasEditedCode = false;
+    lastCodeSource = 'user';
     updateRunButtonVisibility();
     updateRollbackVisibility();
     updatePromoteVisibility();
@@ -757,7 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
 codeEditor.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault();
-    if (!userHasEditedCode) {
+    if (!userHasEditedCode || lastCodeSource !== 'user') {
       return;
     }
     handleUserRun(codeEditor.value);
