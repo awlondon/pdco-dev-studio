@@ -39,6 +39,7 @@
           <div class="panel-header">Code Editor</div>
           <textarea id="code-editor" spellcheck="false"></textarea>
           <div class="panel-footer actions">
+            <button id="runButton" type="button">Run Code</button>
             <div id="generation-indicator" class="generation-indicator">
               ✨ Creating new UI
             </div>
@@ -56,6 +57,9 @@
             <div class="panel-header-actions">
               <div id="interfaceStatus" class="interface-status unchanged">
                 Interface unchanged
+              </div>
+              <div id="previewStatus" class="preview-status">
+                Preview updated by assistant
               </div>
               <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
                 View changes

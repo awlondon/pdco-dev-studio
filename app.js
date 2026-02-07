@@ -9,6 +9,8 @@ const consolePane = document.getElementById('consoleOutput');
 const previewFrame = document.getElementById('previewFrame');
 const statusLabel = document.getElementById('status-label');
 const generationIndicator = document.getElementById('generation-indicator');
+const runButton = document.getElementById('runButton');
+const previewStatus = document.getElementById('previewStatus');
 const splitter = document.getElementById('splitter');
 const rightPane = document.getElementById('right-pane');
 const codePanel = document.getElementById('code-panel');
@@ -34,6 +36,7 @@ let previousCode = null;
 let lastUserIntent = null;
 let loadingStartTime = null;
 let loadingInterval = null;
+let editorDirty = false;
 const CODE_INTENT_PATTERNS = [
   /build|create|make|generate/i,
   /show|visualize|diagram|chart|graph|ui|interface|layout/i,
@@ -121,6 +124,16 @@ function formatAssistantHtml(text) {
   }
 
   return `${escapeHtml(mainText)} <span class="assistant-aside">${escapeHtml(asideText)}</span>`;
+}
+
+function setPreviewStatus(source) {
+  if (!previewStatus) {
+    return;
+  }
+
+  previewStatus.textContent = source === 'editor'
+    ? 'Preview updated from editor'
+    : 'Preview updated by assistant';
 }
 
 function renderAssistantText(text, messageId) {
@@ -214,8 +227,21 @@ function runGeneratedCode(code) {
   outputPanel?.classList.add('loading');
   setTimeout(() => {
     renderToIframe(code);
+    setPreviewStatus('assistant');
     outputPanel?.classList.remove('loading');
   }, 150);
+}
+
+function runEditorCode() {
+  const html = codeEditor?.value ?? '';
+
+  if (!html || html.trim().length < 10) {
+    console.warn('⚠️ No runnable code in editor');
+    return;
+  }
+
+  renderToIframe(html);
+  setPreviewStatus('editor');
 }
 
 function renderToIframe(html) {
@@ -415,11 +441,16 @@ The user's message does not require interface changes. Do not modify the code un
     stopLoading();
     const codeUnchanged = parsed.code_unchanged === true;
     const nextCode = parsed.code;
-    const codeChanged = !codeUnchanged && Boolean(nextCode && nextCode !== currentCode);
+    let codeChanged = !codeUnchanged && Boolean(nextCode && nextCode !== currentCode);
+    if (codeChanged && editorDirty) {
+      console.warn('⚠️ Editor modified by user; not overwriting code');
+      codeChanged = false;
+    }
     if (codeChanged) {
       previousCode = currentCode;
       currentCode = nextCode;
       codeEditor.value = nextCode;
+      editorDirty = false;
       runGeneratedCode(nextCode);
     }
     if (interfaceStatus) {
@@ -459,6 +490,23 @@ The user's message does not require interface changes. Do not modify the code un
 chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   sendChat();
+});
+
+codeEditor.addEventListener('input', () => {
+  editorDirty = true;
+});
+
+if (runButton) {
+  runButton.addEventListener('click', () => {
+    runEditorCode();
+  });
+}
+
+codeEditor.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    runEditorCode();
+  }
 });
 
 if (splitter && rightPane && codePanel && outputPanel) {
@@ -526,4 +574,5 @@ if (fullscreenToggle && consolePane) {
 
 setStatusOnline(false);
 updateGenerationIndicator();
+setPreviewStatus('assistant');
 runGeneratedCode(currentCode);

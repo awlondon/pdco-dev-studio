@@ -238,6 +238,13 @@ button:disabled {
   padding: 4px 8px;
 }
 
+.preview-status {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 4px 8px;
+  color: var(--muted);
+}
+
 .interface-status.updated {
   color: #4ade80;
 }
