@@ -78,7 +78,7 @@ function resetSandboxFrame() {
   previewFrameHost.innerHTML = '';
   const nextFrame = document.createElement('iframe');
   nextFrame.id = 'sandbox';
-  nextFrame.setAttribute('sandbox', 'allow-scripts');
+  nextFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   nextFrame.style.width = '100%';
   nextFrame.style.height = '100%';
   previewFrameHost.appendChild(nextFrame);
