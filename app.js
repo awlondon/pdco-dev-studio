@@ -19,8 +19,59 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
-codeEditor.value = `// Write JavaScript here to experiment with the editor.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
-let currentCode = null;
+const defaultInterfaceCode = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Maya Interface</title>
+<style>
+  body {
+    margin: 0;
+    height: 100vh;
+    background: radial-gradient(circle at center, #1f2937, #020617);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+    color: white;
+    overflow: hidden;
+  }
+
+  #gesture {
+    font-size: 64px;
+    cursor: pointer;
+    transition: transform 0.3s ease;
+  }
+
+  #gesture.wave {
+    animation: wave 0.8s ease-in-out;
+  }
+
+  @keyframes wave {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(20deg); }
+    50% { transform: rotate(-15deg); }
+    75% { transform: rotate(15deg); }
+    100% { transform: rotate(0deg); }
+  }
+</style>
+</head>
+<body>
+  <div id="gesture">👋</div>
+
+<script>
+  const g = document.getElementById("gesture");
+  g.onclick = () => {
+    g.classList.remove("wave");
+    void g.offsetWidth;
+    g.classList.add("wave");
+  };
+</script>
+</body>
+</html>`;
+
+codeEditor.value = defaultInterfaceCode;
+let currentCode = defaultInterfaceCode;
 let previousCode = null;
 let lastUserIntent = null;
 let loadingStartTime = null;
@@ -67,6 +118,17 @@ function appendOutput(content, variant = 'success') {
 
 function handleConsoleLog(...args) {
   appendOutput(args.map((item) => String(item)).join(' '), 'success');
+}
+
+function isOverlyLiteral(code, text) {
+  if (!text || text.length > 120) {
+    return false;
+  }
+
+  const normalizedText = text.toLowerCase().replace(/\W+/g, '');
+  const normalizedCode = code.toLowerCase().replace(/\W+/g, '');
+
+  return normalizedCode.includes(normalizedText);
 }
 
 function buildWrappedPrompt(userInput, currentCode) {
@@ -229,11 +291,12 @@ Schema:
 Behavior rules:
 - Respond naturally and conversationally in the "text" field.
 - Always include the "code" field.
-- The interface is an expressive gesture, not a literal transcript.
-- Prefer visual, interactive, or kinetic responses over static text.
-- It is appropriate to invent playful or symbolic UI responses (e.g. animations, interactions, metaphors).
-- Do NOT simply render the same text in HTML unless explicitly asked.
-- The interface may evolve creatively even for simple inputs like greetings.
+- Always return a complete HTML/CSS/JS document by modifying or extending the existing interface.
+- Treat the existing interface as a living, expressive body.
+- Prefer modifying behavior, motion, or interaction over replacing the interface.
+- Do NOT simply render user text unless explicitly asked.
+- The interface is an expressive gesture, not a transcript.
+- Static text-only interfaces should be avoided unless necessary.
 - Do NOT explain the code unless the user explicitly asks.
 - If you mention interface changes without being asked, keep it brief and parenthetical.
 - The interface may remain unchanged if no update is needed.`
@@ -277,8 +340,8 @@ Behavior rules:
       return;
     }
 
-    if (parsed.text.length < 80 && parsed.code.includes(parsed.text)) {
-      console.warn('⚠️ UI may be overly literal');
+    if (isOverlyLiteral(parsed.code, parsed.text)) {
+      console.warn('⚠️ Literal UI detected — consider prompting expressive response');
     }
 
     assistantBubble.remove();
@@ -410,3 +473,4 @@ if (fullscreenToggle && consolePane) {
 
 setStatusOnline(false);
 updateGenerationIndicator();
+runGeneratedCode(currentCode);
