@@ -151,16 +151,30 @@ function buildWrappedPrompt(userInput, currentCode) {
   return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
 }
 
-function hasCodeIntent(userInput) {
-  return CODE_INTENT_PATTERNS.some((rx) => rx.test(userInput));
-}
+function detectCodeIntent(userInput) {
+  if (/^\/ui\b|^\/code\b/i.test(userInput)) {
+    return {
+      intent: true,
+      source: 'explicit',
+      match: '/ui or /code prefix'
+    };
+  }
 
-function hasExplicitOverride(userInput) {
-  return /^\/ui\b|^\/code\b/i.test(userInput);
-}
+  for (const rx of CODE_INTENT_PATTERNS) {
+    if (rx.test(userInput)) {
+      return {
+        intent: true,
+        source: 'heuristic',
+        match: rx.toString()
+      };
+    }
+  }
 
-function getCodeIntent(userInput) {
-  return hasExplicitOverride(userInput) || hasCodeIntent(userInput);
+  return {
+    intent: false,
+    source: 'none',
+    match: null
+  };
 }
 
 function runGeneratedCode(code) {
@@ -277,7 +291,14 @@ async function sendChat() {
 
   chatInput.value = '';
   appendMessage('user', prompt);
-  const codeIntent = getCodeIntent(prompt);
+  const intentInfo = detectCodeIntent(prompt);
+  const codeIntent = intentInfo.intent;
+  console.groupCollapsed('🧠 Code Intent Decision');
+  console.log('User input:', prompt);
+  console.log('Code intent:', intentInfo.intent);
+  console.log('Source:', intentInfo.source);
+  console.log('Matched:', intentInfo.match);
+  console.groupEnd();
   updateCodeIntentBadge(codeIntent);
 
   const pendingMessageId = addMessage(
