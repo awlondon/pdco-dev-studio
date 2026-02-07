@@ -1076,6 +1076,219 @@ button:disabled {
   border-color: rgba(61, 220, 151, 0.3);
 }
 
+.credit-panel-cta {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.usage-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 20, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  z-index: 40;
+}
+
+.usage-panel {
+  background: rgba(17, 19, 26, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  width: min(1100px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(4, 10, 24, 0.45);
+}
+
+.usage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.usage-header h2 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+}
+
+.usage-scope {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.9rem;
+}
+
+.usage-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.usage-filter {
+  display: grid;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.usage-filter select,
+.usage-filter input[type="date"] {
+  background: rgba(12, 14, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: inherit;
+  font-size: 0.85rem;
+}
+
+.usage-filter-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.usage-tab {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.usage-tab.active {
+  background: rgba(82, 120, 255, 0.2);
+  border-color: rgba(82, 120, 255, 0.6);
+  color: #fff;
+}
+
+.usage-tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.usage-tab-panel.active {
+  display: flex;
+}
+
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.usage-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.usage-card strong {
+  font-size: 1.3rem;
+}
+
+.usage-chart-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.usage-chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usage-chart-header h3 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+.usage-chart-header p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.usage-range-label {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.usage-table details {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.usage-table summary {
+  cursor: pointer;
+  color: rgba(122, 162, 247, 0.9);
+}
+
+.usage-request-list {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.usage-request-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.usage-pill {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.usage-empty {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 20px 0;
+}
+
 @media (max-width: 1000px) {
   #workspace {
     grid-template-columns: 1fr;
@@ -1104,5 +1317,13 @@ button:disabled {
     top: auto;
     width: auto;
     border-radius: 16px;
+  }
+
+  .usage-modal {
+    padding: 12px;
+  }
+
+  .usage-panel {
+    padding: 16px;
   }
 }

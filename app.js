@@ -17,6 +17,29 @@ const creditBanner = document.getElementById('credit-banner');
 const creditZero = document.getElementById('credit-zero');
 const creditDailyMessage = document.getElementById('credit-daily-message');
 const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
+const usageModal = document.getElementById('usage-modal');
+const usageCloseButton = document.getElementById('usage-close');
+const usageTabs = document.querySelectorAll('.usage-tab');
+const usageTabPanels = document.querySelectorAll('.usage-tab-panel');
+const usageOpenButtons = document.querySelectorAll('[data-open-usage]');
+const usageScopeLabel = document.getElementById('usage-scope-label');
+const usageFilters = document.getElementById('usage-filters');
+const usageUserFilter = document.getElementById('usage-user-filter');
+const usagePlanFilter = document.getElementById('usage-plan-filter');
+const usageStartDate = document.getElementById('usage-start-date');
+const usageEndDate = document.getElementById('usage-end-date');
+const usageApplyFilters = document.getElementById('usage-apply-filters');
+const usageCreditsMonth = document.getElementById('usage-credits-month');
+const usageRequestsMonth = document.getElementById('usage-requests-month');
+const usageLatencyMonth = document.getElementById('usage-latency-month');
+const usageSuccessMonth = document.getElementById('usage-success-month');
+const usageRangeLabel = document.getElementById('usage-range-label');
+const usageCreditsChart = document.getElementById('credits-chart');
+const usageRequestsChart = document.getElementById('requests-chart');
+const usageLatencyChart = document.getElementById('latency-chart');
+const usageHistoryBody = document.getElementById('usage-history-body');
+const usageHistoryEmpty = document.getElementById('usage-history-empty');
+const usageLoadMore = document.getElementById('usage-load-more');
 const codeEditor = document.getElementById('code-editor');
 const lineNumbersEl = document.getElementById('line-numbers');
 const lineCountEl = document.getElementById('line-count');
@@ -101,6 +124,30 @@ const SOFT_WARNING_THRESHOLD = 0.3;
 const HARD_WARNING_THRESHOLD = 0.1;
 const UPGRADE_NUDGE_KEY = 'mayaUpgradeNudgeShown';
 const LOW_CREDIT_WARNING_KEY = 'mayaLowCreditWarningShown';
+const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+const USAGE_RANGE_STEPS = [14, 30, 60, 90];
+const PLAN_DAILY_CAPS = {
+  free: 100,
+  starter: 500,
+  pro: 2000,
+  power: 10000
+};
+
+const usageState = {
+  activeTab: 'overview',
+  rangeIndex: 0,
+  charts: {
+    credits: null,
+    requests: null,
+    latency: null
+  }
+};
+
+const usageCache = {
+  fetchedAt: 0,
+  usageRows: null,
+  userRows: null
+};
 
 const sessionId = (() => {
   if (typeof window === 'undefined') {
@@ -188,6 +235,598 @@ function getUserContext() {
     dailyLimit: Number.isFinite(dailyLimit) ? dailyLimit : null,
     todayCreditsUsed: Number.isFinite(todayCreditsUsed) ? todayCreditsUsed : null
   };
+}
+
+function parseCsvRow(row) {
+  const out = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < row.length; i += 1) {
+    const char = row[i];
+    if (char === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      out.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+function parseCsv(text) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const lines = trimmed.split(/\r?\n/);
+  const headers = parseCsvRow(lines[0]);
+  return lines.slice(1).filter(Boolean).map((line) => {
+    const values = parseCsvRow(line);
+    return headers.reduce((acc, header, index) => {
+      acc[header] = values[index] ?? '';
+      return acc;
+    }, {});
+  });
+}
+
+function toNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function formatSeconds(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return '0s';
+  }
+  const seconds = ms / 1000;
+  if (seconds >= 1) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  return `${Math.round(ms)}ms`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) {
+    return '0%';
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatRequestId(id, isAdmin) {
+  if (isAdmin || !id) {
+    return id || 'n/a';
+  }
+  const suffix = id.slice(-4);
+  return `req_••••${suffix}`;
+}
+
+function getFallbackUsageRows(userId, email) {
+  const today = new Date();
+  const intents = ['code', 'text'];
+  return Array.from({ length: 28 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (27 - index));
+    const daySeed = index + 1;
+    const entries = Math.max(4, Math.round(6 + Math.sin(daySeed) * 4));
+    return Array.from({ length: entries }, (__, entryIndex) => {
+      const intent = intents[(entryIndex + index) % intents.length];
+      const credits = intent === 'code' ? 60 + entryIndex * 6 : 24 + entryIndex * 2;
+      return {
+        timestamp_utc: new Date(date.getFullYear(), date.getMonth(), date.getDate(), 9 + entryIndex).toISOString(),
+        user_id: userId,
+        email,
+        session_id: `session_${daySeed}`,
+        request_id: `req_${daySeed}_${entryIndex}`,
+        intent_type: intent,
+        model: 'gpt-4.1-mini',
+        input_chars: 1800,
+        input_est_tokens: 450,
+        output_chars: 820,
+        output_est_tokens: 270,
+        total_est_tokens: 720,
+        credits_charged: credits,
+        latency_ms: 1800 + entryIndex * 120,
+        status: entryIndex % 6 === 0 ? 'error' : 'success'
+      };
+    });
+  }).flat();
+}
+
+function getFallbackUserRows(userId, email) {
+  return [
+    {
+      user_id: userId,
+      email,
+      display_name: 'Demo User',
+      plan_tier: 'starter',
+      credits_total: 5000,
+      credits_remaining: 4182
+    },
+    {
+      user_id: 'user_studio',
+      email: 'studio@maya.dev',
+      display_name: 'Studio',
+      plan_tier: 'power',
+      credits_total: 100000,
+      credits_remaining: 86000
+    }
+  ];
+}
+
+async function loadUsageCsv() {
+  const now = Date.now();
+  if (usageCache.usageRows && now - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
+    return { usageRows: usageCache.usageRows, userRows: usageCache.userRows };
+  }
+
+  const [usageRes, usersRes] = await Promise.all([
+    fetch('data/usage_log.csv', { cache: 'no-store' }),
+    fetch('data/users.csv', { cache: 'no-store' })
+  ]);
+
+  const [usageText, usersText] = await Promise.all([
+    usageRes.ok ? usageRes.text() : '',
+    usersRes.ok ? usersRes.text() : ''
+  ]);
+
+  let usageRows = parseCsv(usageText);
+  let userRows = parseCsv(usersText);
+
+  const context = getUserContext();
+  if (!usageRows.length) {
+    usageRows = getFallbackUsageRows(context.id || 'user_demo', context.email || 'demo@maya.dev');
+  }
+  if (!userRows.length) {
+    userRows = getFallbackUserRows(context.id || 'user_demo', context.email || 'demo@maya.dev');
+  }
+
+  usageCache.usageRows = usageRows;
+  usageCache.userRows = userRows;
+  usageCache.fetchedAt = now;
+  return { usageRows, userRows };
+}
+
+function buildUsersById(userRows) {
+  return userRows.reduce((acc, row) => {
+    acc[row.user_id] = row;
+    return acc;
+  }, {});
+}
+
+function filterUsageRows(rows, filters, usersById, isAdmin) {
+  return rows.filter((row) => {
+    if (!isAdmin && filters.userId && row.user_id !== filters.userId) {
+      return false;
+    }
+    if (filters.userId && filters.userId !== 'all' && row.user_id !== filters.userId) {
+      return false;
+    }
+    if (filters.planTier && filters.planTier !== 'all') {
+      const plan = usersById[row.user_id]?.plan_tier || 'free';
+      if (plan !== filters.planTier) {
+        return false;
+      }
+    }
+    if (filters.startDate) {
+      const day = row.timestamp_utc.slice(0, 10);
+      if (day < filters.startDate) {
+        return false;
+      }
+    }
+    if (filters.endDate) {
+      const day = row.timestamp_utc.slice(0, 10);
+      if (day > filters.endDate) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function buildDailyAggregates(rows) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const date = row.timestamp_utc.slice(0, 10);
+    if (!map.has(date)) {
+      map.set(date, {
+        date,
+        total_requests: 0,
+        total_credits: 0,
+        avg_latency_ms: 0,
+        success_rate: 0,
+        by_intent: { code: 0, text: 0 },
+        entries: []
+      });
+    }
+    const daily = map.get(date);
+    const intent = row.intent_type || 'text';
+    daily.total_requests += 1;
+    daily.total_credits += toNumber(row.credits_charged);
+    daily.avg_latency_ms += toNumber(row.latency_ms);
+    daily.by_intent[intent] = (daily.by_intent[intent] || 0) + 1;
+    daily.entries.push(row);
+    if (row.status === 'success') {
+      daily.success_rate += 1;
+    }
+  });
+
+  return Array.from(map.values())
+    .map((daily) => ({
+      ...daily,
+      avg_latency_ms: daily.total_requests ? daily.avg_latency_ms / daily.total_requests : 0,
+      success_rate: daily.total_requests ? daily.success_rate / daily.total_requests : 0
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function getMonthTotals(rows) {
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const monthRows = rows.filter((row) => row.timestamp_utc.startsWith(monthKey));
+  const totalRequests = monthRows.length;
+  const totalCredits = monthRows.reduce((sum, row) => sum + toNumber(row.credits_charged), 0);
+  const totalLatency = monthRows.reduce((sum, row) => sum + toNumber(row.latency_ms), 0);
+  const successCount = monthRows.filter((row) => row.status === 'success').length;
+  return {
+    totalRequests,
+    totalCredits,
+    avgLatency: totalRequests ? totalLatency / totalRequests : 0,
+    successRate: totalRequests ? successCount / totalRequests : 0
+  };
+}
+
+function getRangeLabel(days) {
+  return `Last ${days} days`;
+}
+
+function clampDailyRange(dailyAggregates, rangeDays, startDate, endDate) {
+  if (startDate || endDate) {
+    return dailyAggregates;
+  }
+  const total = dailyAggregates.length;
+  if (total <= rangeDays) {
+    return dailyAggregates;
+  }
+  return dailyAggregates.slice(total - rangeDays);
+}
+
+function buildCreditsSplit(daily, freeRemaining) {
+  let remaining = freeRemaining;
+  return daily.map((entry) => {
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      return { free: 0, paid: entry.total_credits };
+    }
+    const free = Math.min(entry.total_credits, remaining);
+    remaining -= free;
+    return { free, paid: entry.total_credits - free };
+  });
+}
+
+function buildUsageHistory(daily, isAdmin) {
+  if (!usageHistoryBody || !usageHistoryEmpty) {
+    return;
+  }
+  usageHistoryBody.innerHTML = '';
+  if (!daily.length) {
+    usageHistoryEmpty.classList.remove('hidden');
+    return;
+  }
+  usageHistoryEmpty.classList.add('hidden');
+  daily.slice().reverse().forEach((entry) => {
+    const failures = entry.entries.filter((row) => row.status !== 'success').length;
+    const rowEl = document.createElement('tr');
+    rowEl.innerHTML = `
+      <td>${entry.date}</td>
+      <td>${formatNumber(entry.total_requests)}</td>
+      <td>${formatNumber(entry.total_credits)}</td>
+      <td>${formatSeconds(entry.avg_latency_ms)}</td>
+      <td>${formatNumber(failures)}</td>
+    `;
+    usageHistoryBody.appendChild(rowEl);
+
+    const detailsRow = document.createElement('tr');
+    const detailsCell = document.createElement('td');
+    detailsCell.colSpan = 5;
+    const details = document.createElement('details');
+    details.innerHTML = `<summary>View requests</summary>`;
+    const list = document.createElement('div');
+    list.className = 'usage-request-list';
+    entry.entries.forEach((request) => {
+      const item = document.createElement('div');
+      item.className = 'usage-request-item';
+      item.innerHTML = `
+        <span class="usage-pill">${formatRequestId(request.request_id, isAdmin)}</span>
+        <span>${request.intent_type || 'text'}</span>
+        <span>${formatNumber(toNumber(request.credits_charged))} credits</span>
+        <span>${formatSeconds(toNumber(request.latency_ms))}</span>
+        <span class="usage-pill">${request.status}</span>
+      `;
+      list.appendChild(item);
+    });
+    details.appendChild(list);
+    detailsCell.appendChild(details);
+    detailsRow.appendChild(detailsCell);
+    usageHistoryBody.appendChild(detailsRow);
+  });
+}
+
+function destroyChart(chart) {
+  if (chart) {
+    chart.destroy();
+  }
+}
+
+function renderCreditsChart(daily, creditState, isAdmin, planTier) {
+  if (!usageCreditsChart || !window.Chart) {
+    return;
+  }
+  destroyChart(usageState.charts.credits);
+  const labels = daily.map((entry) => entry.date);
+  const credits = daily.map((entry) => entry.total_credits);
+  const cap = isAdmin
+    ? (PLAN_DAILY_CAPS[planTier] || null)
+    : creditState.dailyLimit;
+  const freeRemaining = creditState.isFreeTier
+    ? Number.MAX_SAFE_INTEGER
+    : creditState.freeTierRemaining;
+  const split = buildCreditsSplit(daily, freeRemaining);
+  const freeData = split.map((entry) => entry.free);
+  const paidData = split.map((entry) => entry.paid);
+  usageState.charts.credits = new window.Chart(usageCreditsChart.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Free credits',
+          data: freeData,
+          fill: true,
+          tension: 0.35,
+          borderColor: 'rgba(106, 227, 190, 0.9)',
+          backgroundColor: 'rgba(106, 227, 190, 0.25)',
+          pointRadius: 2
+        },
+        {
+          label: 'Paid credits',
+          data: paidData,
+          fill: true,
+          tension: 0.35,
+          borderColor: 'rgba(123, 169, 255, 0.9)',
+          backgroundColor: 'rgba(123, 169, 255, 0.25)',
+          pointRadius: 2
+        },
+        ...(Number.isFinite(cap) ? [{
+          label: 'Daily cap',
+          data: labels.map(() => cap),
+          borderDash: [6, 6],
+          borderColor: 'rgba(255, 255, 255, 0.4)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: false
+        }] : [])
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#cfd4ff' } }
+      },
+      scales: {
+        x: { ticks: { color: '#8c94c6' } },
+        y: { ticks: { color: '#8c94c6' }, stacked: true }
+      }
+    }
+  });
+}
+
+function renderRequestsChart(daily) {
+  if (!usageRequestsChart || !window.Chart) {
+    return;
+  }
+  destroyChart(usageState.charts.requests);
+  const labels = daily.map((entry) => entry.date);
+  const codeCounts = daily.map((entry) => entry.by_intent.code || 0);
+  const textCounts = daily.map((entry) => entry.by_intent.text || 0);
+  usageState.charts.requests = new window.Chart(usageRequestsChart.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Code',
+          data: codeCounts,
+          backgroundColor: 'rgba(114, 184, 255, 0.7)'
+        },
+        {
+          label: 'Text',
+          data: textCounts,
+          backgroundColor: 'rgba(255, 199, 102, 0.7)'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#cfd4ff' } }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: '#8c94c6' } },
+        y: { stacked: true, ticks: { color: '#8c94c6' } }
+      }
+    }
+  });
+}
+
+function renderLatencyChart(daily) {
+  if (!usageLatencyChart || !window.Chart) {
+    return;
+  }
+  destroyChart(usageState.charts.latency);
+  const labels = daily.map((entry) => entry.date);
+  const latencies = daily.map((entry) => entry.avg_latency_ms);
+  usageState.charts.latency = new window.Chart(usageLatencyChart.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Avg latency',
+          data: latencies,
+          borderColor: 'rgba(255, 140, 140, 0.9)',
+          backgroundColor: 'rgba(255, 140, 140, 0.2)',
+          tension: 0.35,
+          fill: true,
+          pointRadius: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#cfd4ff' } },
+        tooltip: {
+          callbacks: {
+            title: (context) => context[0]?.label || '',
+            label: (context) => `Avg latency: ${formatSeconds(context.parsed.y)}`,
+            afterLabel: (context) => {
+              const index = context.dataIndex;
+              const entry = daily[index];
+              return [
+                `Requests: ${formatNumber(entry.total_requests)}`,
+                `Credits: ${formatNumber(entry.total_credits)}`
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#8c94c6' } },
+        y: { ticks: { color: '#8c94c6' } }
+      }
+    }
+  });
+}
+
+function updateUsageCards(monthTotals, creditState) {
+  if (!usageCreditsMonth || !usageRequestsMonth || !usageLatencyMonth || !usageSuccessMonth) {
+    return;
+  }
+  const creditTotal = creditState.creditsTotal;
+  const creditsText = creditTotal
+    ? `${formatNumber(monthTotals.totalCredits)} / ${formatNumber(creditTotal)}`
+    : formatNumber(monthTotals.totalCredits);
+  usageCreditsMonth.textContent = creditsText;
+  usageRequestsMonth.textContent = formatNumber(monthTotals.totalRequests);
+  usageLatencyMonth.textContent = formatSeconds(monthTotals.avgLatency);
+  usageSuccessMonth.textContent = formatPercent(monthTotals.successRate);
+}
+
+function updateUsageScopeLabel(isAdmin, filters) {
+  if (!usageScopeLabel) {
+    return;
+  }
+  if (isAdmin) {
+    usageScopeLabel.textContent = 'Admin view · scoped by filters';
+  } else if (filters.userId) {
+    usageScopeLabel.textContent = 'Your usage this month';
+  } else {
+    usageScopeLabel.textContent = 'Usage summary';
+  }
+}
+
+async function refreshUsageView() {
+  const { usageRows, userRows } = await loadUsageCsv();
+  const isAdmin = window.location.pathname.startsWith('/admin/usage');
+  const usersById = buildUsersById(userRows);
+  const baseUserId = getUserContext().id;
+
+  const filters = {
+    userId: isAdmin ? (usageUserFilter?.value || 'all') : baseUserId,
+    planTier: isAdmin ? (usagePlanFilter?.value || 'all') : 'all',
+    startDate: isAdmin ? usageStartDate?.value : '',
+    endDate: isAdmin ? usageEndDate?.value : ''
+  };
+
+  const filteredRows = filterUsageRows(usageRows, filters, usersById, isAdmin);
+  const dailyAggregates = buildDailyAggregates(filteredRows);
+  const rangeDays = USAGE_RANGE_STEPS[usageState.rangeIndex] || USAGE_RANGE_STEPS[0];
+  const dailyRange = clampDailyRange(dailyAggregates, rangeDays, filters.startDate, filters.endDate);
+  const monthTotals = getMonthTotals(filteredRows);
+
+  updateUsageScopeLabel(isAdmin, filters);
+  updateUsageCards(monthTotals, getCreditState());
+  if (usageRangeLabel) {
+    usageRangeLabel.textContent = filters.startDate || filters.endDate
+      ? 'Custom range'
+      : getRangeLabel(rangeDays);
+  }
+
+  renderCreditsChart(dailyRange, getCreditState(), isAdmin, filters.planTier);
+  renderRequestsChart(dailyRange);
+  renderLatencyChart(dailyRange);
+  buildUsageHistory(dailyRange, isAdmin);
+
+  if (usageLoadMore) {
+    const canLoadMore = usageState.rangeIndex < USAGE_RANGE_STEPS.length - 1
+      && !filters.startDate
+      && !filters.endDate
+      && dailyAggregates.length > dailyRange.length;
+    usageLoadMore.disabled = !canLoadMore;
+    usageLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
+  }
+}
+
+async function initializeUsageFilters() {
+  if (!usageUserFilter) {
+    return;
+  }
+  const { userRows } = await loadUsageCsv();
+  const isAdmin = window.location.pathname.startsWith('/admin/usage');
+  if (!isAdmin) {
+    return;
+  }
+  usageUserFilter.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'All users';
+  usageUserFilter.appendChild(allOption);
+  userRows.forEach((row) => {
+    const option = document.createElement('option');
+    option.value = row.user_id;
+    option.textContent = row.display_name
+      ? `${row.display_name} (${row.email || row.user_id})`
+      : row.email || row.user_id;
+    usageUserFilter.appendChild(option);
+  });
+}
+
+function openUsageModal() {
+  if (!usageModal) {
+    return;
+  }
+  usageModal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  refreshUsageView();
+}
+
+function closeUsageModal() {
+  if (!usageModal) {
+    return;
+  }
+  usageModal.classList.add('hidden');
+  document.body.style.overflow = '';
 }
 
 function estimateTokensFromText(text) {
@@ -1892,6 +2531,81 @@ if (creditBadge && creditPanel) {
       closeCreditPanel();
     }
   });
+}
+
+if (usageOpenButtons.length && usageModal) {
+  usageOpenButtons.forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      creditPanel?.classList.add('hidden');
+      creditBadge?.setAttribute('aria-expanded', 'false');
+      openUsageModal();
+    });
+  });
+}
+
+if (usageCloseButton) {
+  usageCloseButton.addEventListener('click', closeUsageModal);
+}
+
+if (usageModal) {
+  usageModal.addEventListener('click', (event) => {
+    if (event.target === usageModal) {
+      closeUsageModal();
+    }
+  });
+}
+
+if (usageTabs.length) {
+  usageTabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab;
+      if (!target) {
+        return;
+      }
+      usageTabs.forEach((item) => {
+        const isActive = item === tab;
+        item.classList.toggle('active', isActive);
+        item.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      usageTabPanels.forEach((panel) => {
+        panel.classList.toggle('active', panel.dataset.tabPanel === target);
+      });
+      usageState.activeTab = target;
+    });
+  });
+}
+
+if (usageLoadMore) {
+  usageLoadMore.addEventListener('click', () => {
+    usageState.rangeIndex = Math.min(usageState.rangeIndex + 1, USAGE_RANGE_STEPS.length - 1);
+    refreshUsageView();
+  });
+}
+
+if (usageApplyFilters) {
+  usageApplyFilters.addEventListener('click', () => {
+    usageState.rangeIndex = 0;
+    refreshUsageView();
+  });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeUsageModal();
+  }
+});
+
+if (usageFilters) {
+  const isAdmin = window.location.pathname.startsWith('/admin/usage');
+  if (isAdmin) {
+    usageFilters.classList.remove('hidden');
+    initializeUsageFilters().then(() => {
+      refreshUsageView();
+    });
+    openUsageModal();
+  }
 }
 
 window.addEventListener('resize', () => {
