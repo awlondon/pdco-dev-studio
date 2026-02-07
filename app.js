@@ -23,111 +23,88 @@ const defaultInterfaceCode = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Maya Interface</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ambient Workspace</title>
+
 <style>
-  body {
+  html, body {
     margin: 0;
-    height: 100vh;
-    background: radial-gradient(circle at center, #1f2937, #020617);
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at center, #0f172a, #020617);
+    overflow: hidden;
+    font-family: system-ui, sans-serif;
+  }
+
+  .field {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: system-ui, sans-serif;
-    color: white;
-    overflow: hidden;
   }
 
-  .attention-field {
+  .core {
     width: 220px;
     height: 220px;
     border-radius: 50%;
-    background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.02) 45%, rgba(15, 23, 42, 0.6) 70%);
-    box-shadow: 0 0 40px rgba(56, 189, 248, 0.18), inset 0 0 30px rgba(148, 163, 184, 0.2);
+    background:
+      radial-gradient(circle at center,
+        rgba(255,255,255,0.08),
+        rgba(255,255,255,0.02),
+        transparent 70%);
+    filter: blur(0.5px);
+    animation: breathe 6s ease-in-out infinite;
     position: relative;
-    cursor: pointer;
-    transition: transform 0.4s ease, box-shadow 0.4s ease;
-    animation: breathe 5s ease-in-out infinite;
   }
 
-  .attention-field:hover {
-    transform: scale(1.03);
-    box-shadow: 0 0 60px rgba(56, 189, 248, 0.28), inset 0 0 40px rgba(148, 163, 184, 0.3);
-  }
-
-  .attention-field::before {
-    content: "";
-    position: absolute;
-    inset: 20%;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(94, 234, 212, 0.35), rgba(94, 234, 212, 0));
-    filter: blur(6px);
-    opacity: 0.7;
-    transition: opacity 0.4s ease;
-  }
-
-  .attention-field.active::before {
-    opacity: 1;
+  @keyframes breathe {
+    0%   { transform: scale(0.98); opacity: 0.6; }
+    50%  { transform: scale(1.02); opacity: 0.85; }
+    100% { transform: scale(0.98); opacity: 0.6; }
   }
 
   .ripple {
     position: absolute;
-    inset: 10%;
     border-radius: 50%;
-    border: 1px solid rgba(248, 250, 252, 0.4);
-    opacity: 0;
-    transform: scale(0.8);
-    pointer-events: none;
-  }
-
-  .attention-field.ripple .ripple {
-    animation: ripple 0.9s ease-out;
-  }
-
-  @keyframes breathe {
-    0%, 100% {
-      transform: scale(0.98);
-      box-shadow: 0 0 35px rgba(56, 189, 248, 0.16), inset 0 0 26px rgba(148, 163, 184, 0.2);
-    }
-    50% {
-      transform: scale(1);
-      box-shadow: 0 0 55px rgba(56, 189, 248, 0.3), inset 0 0 40px rgba(148, 163, 184, 0.28);
-    }
+    border: 1px solid rgba(255,255,255,0.15);
+    transform: scale(0);
+    opacity: 0.6;
+    animation: ripple 1.2s ease-out forwards;
   }
 
   @keyframes ripple {
-    0% {
-      opacity: 0.7;
-      transform: scale(0.7);
-    }
-    100% {
+    to {
+      transform: scale(2.5);
       opacity: 0;
-      transform: scale(1.2);
     }
   }
 </style>
 </head>
+
 <body>
-  <div class="attention-field" id="attentionField">
-    <span class="ripple"></span>
+  <div class="field">
+    <div class="core" id="core"></div>
   </div>
 
 <script>
-  const field = document.getElementById("attentionField");
-  const triggerRipple = () => {
-    field.classList.remove("ripple");
-    void field.offsetWidth;
-    field.classList.add("ripple");
-  };
+  const core = document.getElementById("core");
 
-  field.addEventListener("mouseenter", () => {
-    field.classList.add("active");
+  document.addEventListener("click", (e) => {
+    const ripple = document.createElement("div");
+    ripple.className = "ripple";
+    ripple.style.width = "220px";
+    ripple.style.height = "220px";
+    ripple.style.left = "50%";
+    ripple.style.top = "50%";
+    ripple.style.transformOrigin = "center";
+
+    core.appendChild(ripple);
+
+    ripple.addEventListener("animationend", () => {
+      ripple.remove();
+    });
   });
-
-  field.addEventListener("mouseleave", () => {
-    field.classList.remove("active");
-  });
-
-  field.addEventListener("click", triggerRipple);
 </script>
 </body>
 </html>`;
