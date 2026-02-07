@@ -40,6 +40,7 @@
 
     <div id="credit-panel" class="credit-panel hidden" role="dialog" aria-label="Credits">
       <div class="credit-panel-header">Credits</div>
+      <button class="ghost-button credit-panel-cta" type="button" data-open-usage>View usage</button>
       <div class="credit-meter">
         <div class="credit-meter-fill"></div>
         <span class="credit-meter-label">0 / 0</span>
@@ -66,7 +67,7 @@
               <span>Out of credits — upgrade or wait for reset.</span>
               <div class="credit-cta">
                 <button class="ghost-button" type="button">Upgrade Plan</button>
-                <button class="ghost-button" type="button">View Usage</button>
+                <button class="ghost-button" type="button" data-open-usage>View Usage</button>
               </div>
             </div>
             <div id="loadingIndicator" class="loading hidden">
@@ -391,8 +392,122 @@ customer.subscription.deleted → plan = free + cap remaining</code></pre>
         </section>
       </div>
     </main>
+
+    <div id="usage-modal" class="usage-modal hidden" role="dialog" aria-modal="true" aria-label="Usage analytics">
+      <div class="usage-panel">
+        <div class="usage-header">
+          <div>
+            <h2>Usage analytics</h2>
+            <p id="usage-scope-label" class="usage-scope">Your usage this month</p>
+          </div>
+          <button id="usage-close" class="icon-button" type="button" aria-label="Close usage analytics">✕</button>
+        </div>
+
+        <div id="usage-filters" class="usage-filters hidden">
+          <label class="usage-filter">
+            <span>User</span>
+            <select id="usage-user-filter"></select>
+          </label>
+          <label class="usage-filter">
+            <span>Plan tier</span>
+            <select id="usage-plan-filter">
+              <option value="all">All tiers</option>
+              <option value="free">Free</option>
+              <option value="starter">Starter</option>
+              <option value="pro">Pro</option>
+              <option value="power">Power</option>
+            </select>
+          </label>
+          <label class="usage-filter">
+            <span>Date range</span>
+            <div class="usage-filter-range">
+              <input id="usage-start-date" type="date" />
+              <span>→</span>
+              <input id="usage-end-date" type="date" />
+            </div>
+          </label>
+          <button id="usage-apply-filters" class="ghost-button" type="button">Apply</button>
+        </div>
+
+        <div class="usage-tabs" role="tablist">
+          <button class="usage-tab active" type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+          <button class="usage-tab" type="button" role="tab" data-tab="daily" aria-selected="false">Daily</button>
+          <button class="usage-tab" type="button" role="tab" data-tab="history" aria-selected="false">History</button>
+        </div>
+
+        <div class="usage-tab-panel active" data-tab-panel="overview" role="tabpanel">
+          <div class="usage-cards">
+            <div class="usage-card">
+              <span>Credits used (month)</span>
+              <strong id="usage-credits-month">0</strong>
+            </div>
+            <div class="usage-card">
+              <span>Requests (month)</span>
+              <strong id="usage-requests-month">0</strong>
+            </div>
+            <div class="usage-card">
+              <span>Avg latency</span>
+              <strong id="usage-latency-month">0s</strong>
+            </div>
+            <div class="usage-card">
+              <span>Success rate</span>
+              <strong id="usage-success-month">0%</strong>
+            </div>
+          </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Credit burn</h3>
+                <p>Credits used per day · capped by daily limit</p>
+              </div>
+              <span id="usage-range-label" class="usage-range-label">Last 14 days</span>
+            </div>
+            <canvas id="credits-chart" height="150"></canvas>
+          </div>
+        </div>
+
+        <div class="usage-tab-panel" data-tab-panel="daily" role="tabpanel">
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Requests per day</h3>
+                <p>Stacked by intent (code vs text)</p>
+              </div>
+            </div>
+            <canvas id="requests-chart" height="140"></canvas>
+          </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Latency trend</h3>
+                <p>Average latency per day</p>
+              </div>
+            </div>
+            <canvas id="latency-chart" height="140"></canvas>
+          </div>
+          <button id="usage-load-more" class="ghost-button" type="button">Load more</button>
+        </div>
+
+        <div class="usage-tab-panel" data-tab-panel="history" role="tabpanel">
+          <table class="usage-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Requests</th>
+                <th>Credits</th>
+                <th>Avg latency</th>
+                <th>Failures</th>
+              </tr>
+            </thead>
+            <tbody id="usage-history-body"></tbody>
+          </table>
+          <div id="usage-history-empty" class="usage-empty hidden">No usage history yet.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>
