@@ -237,11 +237,39 @@ function isOverlyLiteral(code, text) {
 }
 
 function extractHtml(responseText) {
-  const match = responseText.match(/```html([\s\S]*?)```/i);
-  return match ? match[1].trim() : null;
+  if (!responseText) {
+    return null;
+  }
+
+  const doctypeIndex = responseText.search(/<!doctype html/i);
+  const htmlIndex = responseText.search(/<html[\s>]/i);
+  const startIndexCandidates = [doctypeIndex, htmlIndex].filter(
+    (index) => index !== -1
+  );
+  if (startIndexCandidates.length === 0) {
+    const fencedMatch = responseText.match(/```html([\s\S]*?)```/i);
+    return fencedMatch ? fencedMatch[1].trim() : null;
+  }
+
+  const startIndex = Math.min(...startIndexCandidates);
+  return responseText.slice(startIndex).trim();
 }
 
 function extractChatText(responseText) {
+  if (!responseText) {
+    return '';
+  }
+
+  const doctypeIndex = responseText.search(/<!doctype html/i);
+  const htmlIndex = responseText.search(/<html[\s>]/i);
+  const startIndexCandidates = [doctypeIndex, htmlIndex].filter(
+    (index) => index !== -1
+  );
+  if (startIndexCandidates.length > 0) {
+    const startIndex = Math.min(...startIndexCandidates);
+    return responseText.slice(0, startIndex).trim();
+  }
+
   return responseText
     .replace(/```html[\s\S]*?```/gi, '')
     .replace(/```json[\s\S]*?```/gi, '')
@@ -251,11 +279,10 @@ function extractChatText(responseText) {
 function buildWrappedPrompt(userInput, currentCode) {
   if (!currentCode) {
     return `
-Return JSON ONLY with this schema:
-{
-  "text": "...",
-  "code": "..."
-}
+Output Contract:
+- Never respond with JSON, YAML, or structured objects.
+- If code is required, output raw HTML directly, without code fences or wrappers.
+- Otherwise, output plain conversational text only.
 
 User message:
 ${userInput}
@@ -265,11 +292,10 @@ ${userInput}
   return `
 You are continuing an ongoing interaction.
 
-Return JSON ONLY with this schema:
-{
-  "text": "...",
-  "code": "..."
-}
+Output Contract:
+- Never respond with JSON, YAML, or structured objects.
+- If code is required, output raw HTML directly, without code fences or wrappers.
+- Otherwise, output plain conversational text only.
 
 Current interface (may be reused unchanged):
 ${currentCode}
@@ -515,13 +541,12 @@ CRITICAL OUTPUT RULES (NON-NEGOTIABLE):
 
 2. You may output ONLY:
    - Plain natural-language text intended for a chat interface
-   - Optionally, a single fenced code block containing HTML, CSS, and/or JavaScript
+   - Optionally, raw HTML (a full document) appended directly to the response
    - When code is generated, include a brief natural-language response suitable for chat display.
 
 3. If you include code:
-   - Use exactly ONE fenced code block
-   - The fence MUST be labeled \`\`\`html
-   - The code block must contain ONLY executable code (no explanations, no comments about intent)
+   - Output a complete HTML document directly, without code fences or wrappers
+   - The HTML must contain ONLY executable code (no explanations, no comments about intent)
 
 4. Never describe the structure of your response.
    - Do not say things like “Here is the code” or “The following JSON”
@@ -706,12 +731,12 @@ SANDBOX ANIMATION CONTRACT (AUTO-INJECTED, REQUIRED):
 - If user asks for reset/run again/game/simulation/continuous, expose window.resetSimulation and window.startSimulation while honoring caps.
 - If the sandbox stops before finalize runs, ensure the last rendered frame already contains enough information to stand alone.
 
-If you generate code, include it in a single \`\`\`html code block.
-Do not include JSON, metadata, or explanations inside the code block.
+If you generate code, include it as raw HTML in the response without code fences or wrappers.
+Do not include JSON, metadata, or explanations inside the HTML.
 Do not output JSON wrappers or transport metadata.`;
     const systemMessage = `${systemBase}
 
-When making interface changes, respond with plain text plus an optional \`\`\`html code block for the full HTML.`;
+When making interface changes, respond with plain text plus optional raw HTML for the full document.`;
 
     const messages = [
       {
