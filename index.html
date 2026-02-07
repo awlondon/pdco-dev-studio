@@ -25,24 +25,160 @@
     </header>
 
     <main id="workspace">
-      <section id="chat-panel" class="panel">
-        <div class="panel-header">Chat</div>
-        <div id="chat-messages" class="panel-body"></div>
-        <form id="chat-form" class="panel-footer">
-          <div id="loadingIndicator" class="loading hidden">
-            <span class="dot">•</span>
-            <span class="dot">•</span>
-            <span class="dot">•</span>
-            <span class="timer">0.0s</span>
+      <div id="left-pane" class="left-pane">
+        <section id="chat-panel" class="panel">
+          <div class="panel-header">Chat</div>
+          <div id="chat-messages" class="panel-body"></div>
+          <form id="chat-form" class="panel-footer">
+            <div id="loadingIndicator" class="loading hidden">
+              <span class="dot">•</span>
+              <span class="dot">•</span>
+              <span class="dot">•</span>
+              <span class="timer">0.0s</span>
+            </div>
+            <div class="chat-input-wrapper">
+              <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
+              <div id="credit-preview" class="credit-preview" aria-live="polite"></div>
+            </div>
+            <button id="btn-mic" title="Speak" type="button">🎙️</button>
+            <button id="btn-send" type="submit">Send Chat</button>
+          </form>
+        </section>
+
+        <section id="pricing-panel" class="panel pricing-panel">
+          <div class="panel-header">Pricing model</div>
+          <div class="panel-body pricing-body">
+            <p class="pricing-intro">
+              A clean, defensible pricing model that hits the 3–5× margin target, maps cleanly to credits,
+              and is easy to explain to both users and finance.
+            </p>
+
+            <div class="pricing-section">
+              <h3>1. First principles (non-negotiable)</h3>
+              <ul>
+                <li>You sell credits, not tokens.</li>
+                <li>Credits abstract away model volatility.</li>
+                <li>Margin target: 3–5× API cost.</li>
+                <li>Users must not be able to burn a month in one day.</li>
+                <li>Free tier demonstrates value but enforces discipline.</li>
+              </ul>
+            </div>
+
+            <div class="pricing-section">
+              <h3>2. Internal cost model (example numbers)</h3>
+              <div class="pricing-card">
+                <p><strong>Assumptions</strong></p>
+                <ul>
+                  <li>Blended API cost (input + output, mixed use): <strong>$0.003 per 1K tokens</strong>.</li>
+                  <li><strong>1 credit = 250 tokens</strong>.</li>
+                </ul>
+                <p class="pricing-math">
+                  Cost per credit ≈ <strong>$0.00075</strong> · Cost per 1,000 credits ≈ <strong>$0.75</strong>
+                </p>
+              </div>
+            </div>
+
+            <div class="pricing-section">
+              <h3>3. Public pricing tiers (clean + familiar)</h3>
+              <div class="pricing-tiers">
+                <div class="tier-card">
+                  <div class="tier-header">🟢 Free (acquisition tier)</div>
+                  <ul>
+                    <li>Credits/month: <strong>500</strong></li>
+                    <li>Daily cap: <strong>100</strong></li>
+                    <li>Price: <strong>$0</strong></li>
+                    <li>Hard stops: <strong>yes</strong></li>
+                    <li>Cost to you: <strong>~$0.38</strong></li>
+                  </ul>
+                  <p class="tier-note">Purpose: demo + habit formation.</p>
+                </div>
+                <div class="tier-card">
+                  <div class="tier-header">🔵 Starter (individual builders)</div>
+                  <ul>
+                    <li>Credits/month: <strong>5,000</strong></li>
+                    <li>Daily cap: <strong>500</strong></li>
+                    <li>Price: <strong>$12/month</strong></li>
+                    <li>Cost to you: <strong>~$3.75</strong></li>
+                    <li>Margin: <strong>~3.2×</strong></li>
+                  </ul>
+                  <p class="tier-note">For people actively building and experimenting.</p>
+                </div>
+                <div class="tier-card">
+                  <div class="tier-header">🟣 Pro (serious creators)</div>
+                  <ul>
+                    <li>Credits/month: <strong>20,000</strong></li>
+                    <li>Daily cap: <strong>2,000</strong></li>
+                    <li>Price: <strong>$39/month</strong></li>
+                    <li>Cost to you: <strong>~$15</strong></li>
+                    <li>Margin: <strong>~2.6×</strong></li>
+                  </ul>
+                  <p class="tier-note">Adds priority queue, higher sandbox limits, faster generation.</p>
+                </div>
+                <div class="tier-card">
+                  <div class="tier-header">⚫ Power / Studio</div>
+                  <ul>
+                    <li>Credits/month: <strong>100,000</strong></li>
+                    <li>Daily cap: <strong>10,000</strong></li>
+                    <li>Price: <strong>$149/month</strong></li>
+                    <li>Cost to you: <strong>~$75</strong></li>
+                    <li>Margin: <strong>~2×</strong></li>
+                  </ul>
+                  <p class="tier-note">Predictable revenue, power users, fewer support headaches.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="pricing-section">
+              <h3>4. Credit top-ups (high-margin add-on)</h3>
+              <p>Top-ups are intentionally more expensive than subscriptions to encourage plan upgrades.</p>
+              <div class="pricing-table">
+                <div class="pricing-table-row pricing-table-header">
+                  <span>Credits</span>
+                  <span>Price</span>
+                  <span>Margin</span>
+                </div>
+                <div class="pricing-table-row">
+                  <span>1,000</span>
+                  <span>$5</span>
+                  <span>~6.5×</span>
+                </div>
+                <div class="pricing-table-row">
+                  <span>5,000</span>
+                  <span>$20</span>
+                  <span>~5.3×</span>
+                </div>
+                <div class="pricing-table-row">
+                  <span>20,000</span>
+                  <span>$60</span>
+                  <span>~4×</span>
+                </div>
+              </div>
+              <ul class="pricing-sublist">
+                <li>Encourages upgrading plans.</li>
+                <li>Smooths burst usage.</li>
+                <li>Avoids rage quits.</li>
+              </ul>
+            </div>
+
+            <div class="pricing-section">
+              <h3>5. Throttling model (critical)</h3>
+              <ul>
+                <li><strong>Monthly credits</strong> (hard cap) to stop abuse.</li>
+                <li><strong>Daily burn limit</strong> (soft cap) to stop accidental nukes.</li>
+              </ul>
+              <p class="pricing-callout">“You’ve used 80% of today’s credits. More unlocks tomorrow.”</p>
+              <p class="pricing-muted">This mirrors OpenAI’s usage model, so users already understand it.</p>
+            </div>
+
+            <div class="pricing-section">
+              <h3>6. Credit burn transparency (trust builder)</h3>
+              <p class="pricing-callout">Used 142 credits · 4,858 remaining</p>
+              <p class="pricing-warning">⚠️ Large generation · 18% of daily limit</p>
+              <p class="pricing-muted">Clear callouts reduce complaints and chargebacks.</p>
+            </div>
           </div>
-          <div class="chat-input-wrapper">
-            <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
-            <div id="credit-preview" class="credit-preview" aria-live="polite"></div>
-          </div>
-          <button id="btn-mic" title="Speak" type="button">🎙️</button>
-          <button id="btn-send" type="submit">Send Chat</button>
-        </form>
-      </section>
+        </section>
+      </div>
 
       <div id="right-pane" class="right-pane">
         <section id="code-panel" class="panel code-editor">
