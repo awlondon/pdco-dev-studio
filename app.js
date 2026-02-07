@@ -859,7 +859,7 @@ Otherwise, respond with plain text.`;
         chatFinalized
       });
       runWhenPreviewReady(() => {
-        handleLLMOutput(extractedCode, 'generated').catch((error) => {
+        handleLLMOutput(trimmedCode, 'generated').catch((error) => {
           console.error('Auto-run failed after generation.', error);
           addExecutionWarning('Preview auto-run failed. Try Run Code.');
           setPreviewExecutionStatus('error', 'PREVIEW ERROR');
