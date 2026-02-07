@@ -623,6 +623,102 @@ When intent implies movement, animation, simulation, random patterns, or competi
 Treat sandbox limits as expected; stop cleanly without errors.
 If a task describes an ongoing or convergent simulation, generate a sandbox-bounded demonstration with a clear summary at termination instead of an unbounded process.
 
+SANDBOX REWRITE HEURISTIC (EXACT):
+Purpose
+Ensure all LLM-generated code executes safely, predictably, and informatively inside a bounded sandbox, even when the user requests open-ended or convergent behavior.
+
+Phase 0 — Classification
+Before generating code, the model must classify the request:
+Detect Unbounded Intent if the prompt contains ANY of:
+Temporal infinity
+"continue", "keeps going", "forever", "always"
+Convergence / completion language
+"until", "eventually", "last remaining", "winner", "only one"
+Emergent system dynamics
+"simulation", "ecosystem", "agents", "competition", "autonomous"
+Animation primitives without limits
+requestAnimationFrame, setInterval, game loops, physics loops
+If any of the above are present → Unbounded Intent = TRUE
+
+Phase 1 — Mandatory Rewrite
+If Unbounded Intent === TRUE, the model MUST rewrite the task internally using the following transformation.
+Rewrite Rule (non-optional)
+Convert the task from a goal-seeking simulation into a bounded demonstration that:
+Preserves the behavioral intent
+Executes within fixed sandbox limits
+Produces a meaningful partial result
+The rewrite is internal.
+The user-facing output does not mention rewriting.
+
+Phase 2 — Bounded Demonstration Specification
+The generated code MUST include all of the following.
+A. Explicit Sandbox Budget
+At least one hard stop:
+const MAX_FRAMES = 300;        // or derived from sandbox
+const MAX_TIME_MS = 5000;     // optional secondary cap
+And checked every frame:
+if (SANDBOX.shouldStop() || frameCount >= MAX_FRAMES) {
+  endDemo();
+  return;
+}
+Event-only termination is forbidden.
+B. Degraded Goal Semantics
+If the original prompt said:
+“until only one remains”
+“find the winner”
+“keep eliminating”
+The rewritten meaning becomes:
+“Demonstrate the process toward that goal for the duration of the sandbox budget.”
+The model must not attempt guaranteed convergence.
+C. Mandatory End-of-Demo Summary
+When the sandbox stops (for any reason), the code MUST emit a summary.
+At least one of:
+Remaining agent count
+Current leader(s)
+Top-N by score / size / captures
+Time elapsed
+Frames executed
+Example:
+function endDemo() {
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px monospace";
+  ctx.fillText(
+    \`Demo ended • \${alive.length} agents remain\`,
+    20, 30
+  );
+}
+Timeouts must surface as information, not failure.
+
+Phase 3 — Animation Loop Contract
+All animation loops MUST obey:
+function loop() {
+  frameCount++;
+  update();
+  draw();
+  if (SANDBOX.shouldStop() || frameCount >= MAX_FRAMES) {
+    endDemo();
+    return;
+  }
+  requestAnimationFrame(loop);
+}
+Forbidden patterns:
+while(true)
+setInterval without clearing
+RAF without a stop condition
+Waiting for convergence before exit
+
+Phase 4 — User-Visible Behavior Guarantee
+The resulting behavior must satisfy:
+Aspect	Guarantee
+Safety	Never hangs the sandbox
+Fidelity	Shows the requested behavior
+Honesty	Does not claim completion if not reached
+Feedback	Always reports a final state
+
+One-Line System Prompt Version
+If you want the ultra-compact version to paste directly into a system prompt:
+“If a request implies an unbounded or convergent simulation, rewrite it internally as a sandbox-bounded demonstration with explicit frame/time limits and a final state summary, never an event-only termination.”
+
 SANDBOX ANIMATION CONTRACT (AUTO-INJECTED, REQUIRED):
 - Every animation/simulation must be finite by default with explicit INIT → RUN → YIELD → STOP phases.
 - Demonstration Mode (default): bounded, shows behavior, stops gracefully, reports partial results.
