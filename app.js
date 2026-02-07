@@ -241,6 +241,40 @@ function runWhenPreviewReady(runFn) {
   }, 500);
 }
 
+function waitForIframeReady(frame, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    if (!frame) {
+      resolve(false);
+      return;
+    }
+
+    try {
+      if (frame.contentDocument?.readyState === 'complete') {
+        resolve(true);
+        return;
+      }
+    } catch (_) {
+      // sandboxed iframe may throw; ignore and fall back to load event
+    }
+
+    let done = false;
+    const finish = (ok) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      frame.removeEventListener('load', onLoad);
+      clearTimeout(timer);
+      resolve(ok);
+    };
+
+    const onLoad = () => finish(true);
+    frame.addEventListener('load', onLoad, { once: true });
+
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
 function updateMessage(id, newHtml) {
   const message = document.querySelector(`[data-id="${id}"]`);
   if (!message) {
@@ -407,7 +441,7 @@ function extractTextAndCode(raw) {
 
   const looksLikeHtml = /<!doctype html>|<html[\s>]|<script[\s>]/i.test(s);
   if (looksLikeHtml) {
-    return { text: '', code: s.trim() };
+    return { text: 'Generated the updated interface.', code: s.trim() };
   }
 
   return { text: s.trim(), code: '' };
@@ -524,7 +558,7 @@ function stopSandboxFromUser() {
   setPreviewStatus('Sandbox stopped by user.');
 }
 
-function handleLLMOutput(code, source = 'generated') {
+async function handleLLMOutput(code, source = 'generated') {
   setStatus('COMPILING');
 
   const analysis = updateExecutionWarningsFor(code);
@@ -540,6 +574,11 @@ function handleLLMOutput(code, source = 'generated') {
   outputPanel?.classList.add('loading');
   setSandboxControlsVisible(sandboxMode === 'animation');
   setSandboxAnimationState('running');
+  await waitForIframeReady(activeFrame, 900);
+  if (sandboxFrame !== activeFrame) {
+    console.warn('Iframe swapped during compile; aborting run.');
+    return;
+  }
   sandbox.run(code);
   outputPanel?.classList.remove('loading');
   setStatus('RUNNING', source);
@@ -603,6 +642,7 @@ function setCodeFromLLM(code) {
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
+  currentCode = code;
   baselineCode = code;
   userHasEditedCode = false;
   updateRunButtonVisibility();
@@ -819,13 +859,11 @@ Otherwise, respond with plain text.`;
         chatFinalized
       });
       runWhenPreviewReady(() => {
-        try {
-          handleLLMOutput(extractedCode, 'generated');
-        } catch (error) {
+        handleLLMOutput(extractedCode, 'generated').catch((error) => {
           console.error('Auto-run failed after generation.', error);
           addExecutionWarning('Preview auto-run failed. Try Run Code.');
           setPreviewExecutionStatus('error', 'PREVIEW ERROR');
-        }
+        });
       });
     }
     updateGenerationIndicator();
