@@ -56,6 +56,8 @@ let lastRunCode = null;
 let lastRunSource = null;
 let lastCodeSource = null;
 let chatFinalized = false;
+let pendingAssistantProposal = null;
+const DEBUG_INTENT = false;
 const chatState = {
   locked: false,
   unlockTimerId: null
@@ -376,7 +378,54 @@ function extractChatText(responseText) {
     .trim();
 }
 
-function buildWrappedPrompt(userInput, currentCode) {
+function inferIntentFromText(userText) {
+  const normalized = userText.trim().toLowerCase();
+  if (!normalized) {
+    return { type: 'text', inferred: false };
+  }
+  const wantsCode = /\b(draw|create|build|make|generate|render)\b/.test(normalized)
+    || /\b(visual|animation|animated|interactive|scene|canvas|ui|interface|prototype)\b/.test(normalized);
+  return { type: wantsCode ? 'code' : 'text', inferred: false };
+}
+
+function resolveIntent(userText) {
+  if (
+    pendingAssistantProposal
+    && /^(yes|ok|sure|do it|go ahead)$/i.test(userText.trim())
+  ) {
+    return {
+      type: pendingAssistantProposal.type,
+      inferred: true
+    };
+  }
+
+  return inferIntentFromText(userText);
+}
+
+function getAssistantProposal(text) {
+  if (!text) {
+    return null;
+  }
+  const proposalMatch = text.match(
+    /\bI can (?:create|build|make|generate|design)\s+([^.\n]+)/i
+  );
+  if (!proposalMatch) {
+    return null;
+  }
+  const description = proposalMatch[1]?.trim();
+  if (!description) {
+    return null;
+  }
+  return {
+    type: 'code',
+    description
+  };
+}
+
+function buildWrappedPrompt(userInput, currentCode, resolvedIntent) {
+  const intentHint = resolvedIntent?.type === 'code'
+    ? '\nIntent: generate code.'
+    : '';
   if (!currentCode) {
     return `
 Output Contract:
@@ -385,7 +434,7 @@ Output Contract:
 - Otherwise, output plain conversational text only.
 
 User message:
-${userInput}
+${userInput}${intentHint}
 `;
   }
 
@@ -401,7 +450,7 @@ Current interface (may be reused unchanged):
 ${currentCode}
 
 User message:
-${userInput}
+${userInput}${intentHint}
 `;
 }
 
@@ -613,6 +662,21 @@ async function sendChat() {
     return;
   }
 
+  const resolvedIntent = resolveIntent(userInput);
+  if (DEBUG_INTENT) {
+    console.log('[intent]', {
+      userText: userInput,
+      pendingAssistantProposal,
+      resolvedIntent
+    });
+  }
+
+  let intentAdjustedInput = userInput;
+  if (resolvedIntent.inferred && pendingAssistantProposal) {
+    const description = pendingAssistantProposal.description || 'the proposed experience';
+    intentAdjustedInput = `Yes — please proceed with ${description}.`;
+  }
+
   lockChat();
   chatInput.value = '';
   appendMessage('user', userInput);
@@ -645,7 +709,7 @@ Otherwise, respond with plain text.`;
       },
       {
         role: 'user',
-        content: buildWrappedPrompt(userInput, currentCode)
+        content: buildWrappedPrompt(intentAdjustedInput, currentCode, resolvedIntent)
       }
     ];
 
@@ -699,6 +763,13 @@ Otherwise, respond with plain text.`;
   const nextCode = extractedHtml;
   const hasCode = Boolean(nextCode);
 
+  if (!hasCode) {
+    const assistantProposal = getAssistantProposal(chatText);
+    if (assistantProposal) {
+      pendingAssistantProposal = assistantProposal;
+    }
+  }
+
   finalizeChatOnce({
     text: chatText,
     hasCode,
@@ -710,6 +781,7 @@ Otherwise, respond with plain text.`;
     if (hasCode) {
       currentCode = nextCode;
       setCodeFromLLM(nextCode);
+      pendingAssistantProposal = null;
       runWhenPreviewReady(() => {
         try {
           handleLLMOutput(nextCode, 'generated');
