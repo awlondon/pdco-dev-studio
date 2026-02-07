@@ -44,7 +44,15 @@
               Console Output
               <span class="panel-header-label">Live Preview</span>
             </div>
-            <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
+            <div class="panel-header-actions">
+              <div id="interfaceStatus" class="interface-status unchanged">
+                Interface unchanged
+              </div>
+              <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
+                View changes
+              </button>
+              <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
+            </div>
           </div>
           <div class="panel-body">
             <div id="console-output-log" class="console-output-log"></div>

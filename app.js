@@ -13,11 +13,14 @@ const rightPane = document.getElementById('right-pane');
 const codePanel = document.getElementById('code-panel');
 const outputPanel = document.getElementById('output-panel');
 const fullscreenToggle = document.getElementById('fullscreenToggle');
+const interfaceStatus = document.getElementById('interfaceStatus');
+const viewDiffBtn = document.getElementById('viewDiffBtn');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
 codeEditor.value = `// Write JavaScript here to experiment with the editor.\n\nconst greeting = "Hello from Maya Dev UI";\nconsole.log(greeting);\n\n(() => greeting.toUpperCase())();`;
 let currentCode = null;
+let previousCode = null;
 let lastUserIntent = null;
 
 function setStatusOnline(isOnline) {
@@ -133,6 +136,20 @@ function updateGenerationIndicator() {
   generationIndicator.classList.toggle('active', isModifying);
 }
 
+function simpleLineDiff(oldCode, newCode) {
+  const oldLines = oldCode.split('\n');
+  const newLines = newCode.split('\n');
+
+  return newLines
+    .map((line, i) => {
+      if (oldLines[i] !== line) {
+        return `+ ${line}`;
+      }
+      return `  ${line}`;
+    })
+    .join('\n');
+}
+
 async function sendChat() {
   const prompt = chatInput.value.trim();
   if (!prompt) {
@@ -200,10 +217,33 @@ Rules:
     assistantBubble.textContent = parsed.text;
     chatMessages.scrollTop = chatMessages.scrollHeight;
     const nextCode = parsed.code;
-    if (nextCode && nextCode !== currentCode) {
+    const codeChanged = Boolean(nextCode && nextCode !== currentCode);
+    if (codeChanged) {
+      previousCode = currentCode;
       currentCode = nextCode;
       codeEditor.value = nextCode;
       runGeneratedCode(nextCode);
+    }
+    if (interfaceStatus) {
+      if (codeChanged) {
+        interfaceStatus.textContent = 'Interface updated';
+        interfaceStatus.className = 'interface-status updated';
+      } else {
+        interfaceStatus.textContent = 'Interface unchanged';
+        interfaceStatus.className = 'interface-status unchanged';
+      }
+    }
+    if (viewDiffBtn) {
+      if (codeChanged && previousCode) {
+        viewDiffBtn.style.display = 'inline-block';
+        viewDiffBtn.onclick = () => {
+          const diff = simpleLineDiff(previousCode, currentCode);
+          alert(diff);
+        };
+      } else {
+        viewDiffBtn.style.display = 'none';
+        viewDiffBtn.onclick = null;
+      }
     }
     lastUserIntent = prompt;
     updateGenerationIndicator();

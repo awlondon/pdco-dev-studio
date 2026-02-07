@@ -112,6 +112,12 @@ html, body {
   gap: 8px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-header-label {
   font-size: 12px;
   font-weight: 500;
@@ -177,6 +183,20 @@ button:disabled {
 .ghost-button:hover {
   border-color: rgba(124, 155, 255, 0.6);
   color: var(--accent);
+}
+
+.interface-status {
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 4px 8px;
+}
+
+.interface-status.updated {
+  color: #4ade80;
+}
+
+.interface-status.unchanged {
+  color: #a1a1aa;
 }
 
 #right-pane {
