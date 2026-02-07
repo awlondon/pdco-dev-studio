@@ -397,52 +397,119 @@ customer.subscription.deleted → plan = free + cap remaining</code></pre>
       <div class="paywall-backdrop" data-paywall-backdrop></div>
       <div class="paywall-sheet" role="document">
         <div class="paywall-header">
-          <h2 id="paywall-title">Daily limit reached</h2>
+          <div class="paywall-header-copy">
+            <h2 id="paywall-title">Daily limit reached</h2>
+            <p id="paywall-subtext" class="paywall-subtext"></p>
+          </div>
           <button id="paywall-close" class="icon-button hidden" type="button" aria-label="Close paywall">✕</button>
         </div>
         <div class="paywall-body">
-          <div class="paywall-copy">
-            <p id="paywall-body-primary"></p>
-            <p id="paywall-body-secondary"></p>
+          <div class="paywall-status-card" aria-live="polite">
+            <div class="status-row">
+              <span>Current plan</span>
+              <strong id="paywall-current-plan">Free</strong>
+            </div>
+            <div class="status-row">
+              <span>Credits remaining</span>
+              <strong id="paywall-credits-remaining">0 / 0</strong>
+            </div>
+            <div class="status-row">
+              <span>Daily throttle</span>
+              <strong id="paywall-daily-throttle">0 credits left today</strong>
+            </div>
           </div>
+
           <div class="paywall-plans">
-            <table class="paywall-table" aria-label="Plan comparison">
-              <thead>
-                <tr>
-                  <th>Plan</th>
-                  <th>Monthly Credits</th>
-                  <th>Daily Limit</th>
-                  <th>Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Free</td>
-                  <td>500</td>
-                  <td>100</td>
-                  <td>$0</td>
-                </tr>
-                <tr>
-                  <td>Starter</td>
-                  <td>5,000</td>
-                  <td>500</td>
-                  <td>$12</td>
-                </tr>
-                <tr>
-                  <td>Pro</td>
-                  <td>20,000</td>
-                  <td>2,000</td>
-                  <td>$39</td>
-                </tr>
-              </tbody>
-            </table>
-            <p class="paywall-note">All plans include live code execution and sandboxed previews.</p>
+            <div class="paywall-plan-compact" data-paywall-compact>
+              <div class="paywall-plan-card is-recommended" data-paywall-plan-card="starter">
+                <div>
+                  <p class="plan-label">Starter (recommended)</p>
+                  <h3>Starter</h3>
+                  <p class="plan-price">$12/mo</p>
+                </div>
+                <ul>
+                  <li>5,000 monthly credits</li>
+                  <li>Relaxed daily throttle</li>
+                  <li>Large generations included</li>
+                </ul>
+              </div>
+              <div class="paywall-plan-card hidden" data-paywall-plan-card="pro">
+                <div>
+                  <p class="plan-label">Pro</p>
+                  <h3>Pro</h3>
+                  <p class="plan-price">$29/mo</p>
+                </div>
+                <ul>
+                  <li>20,000 monthly credits</li>
+                  <li>Minimal daily throttle</li>
+                  <li>Priority queue included</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="paywall-plan-comparison hidden" data-paywall-compare>
+              <div class="paywall-plan-selector" role="tablist" aria-label="Select a plan">
+                <button class="plan-chip" type="button" data-paywall-plan="starter" aria-pressed="true">Starter</button>
+                <button class="plan-chip" type="button" data-paywall-plan="pro" aria-pressed="false">Pro</button>
+              </div>
+              <table class="paywall-table paywall-compare-table" aria-label="Plan comparison">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th data-paywall-plan-cell="free">Free</th>
+                    <th data-paywall-plan-cell="starter" class="is-recommended">Starter</th>
+                    <th data-paywall-plan-cell="pro">Pro</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Monthly credits</th>
+                    <td data-paywall-plan-cell="free">500</td>
+                    <td data-paywall-plan-cell="starter">5,000</td>
+                    <td data-paywall-plan-cell="pro">20,000</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Daily throttle</th>
+                    <td data-paywall-plan-cell="free">Strict</td>
+                    <td data-paywall-plan-cell="starter">Relaxed</td>
+                    <td data-paywall-plan-cell="pro">Minimal</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Large generations</th>
+                    <td data-paywall-plan-cell="free">Limited</td>
+                    <td data-paywall-plan-cell="starter">Yes</td>
+                    <td data-paywall-plan-cell="pro">Yes</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Priority queue</th>
+                    <td data-paywall-plan-cell="free">—</td>
+                    <td data-paywall-plan-cell="starter">—</td>
+                    <td data-paywall-plan-cell="pro">✓</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Price</th>
+                    <td data-paywall-plan-cell="free">$0</td>
+                    <td data-paywall-plan-cell="starter">$12/mo</td>
+                    <td data-paywall-plan-cell="pro">$29/mo</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="paywall-note">All plans include live code execution and sandboxed previews.</p>
+            </div>
           </div>
+
+          <p id="paywall-cost-line" class="paywall-cost-line">
+            Credits abstract API costs. On your usage, Starter covers ~10× more generations than Free.
+            <button class="link-button paywall-inline-link" type="button" data-tooltip="Credits map to API costs so plan limits stay stable." aria-label="Learn how credits work">
+              Learn how credits work
+            </button>
+          </p>
           <div class="paywall-actions">
             <button id="paywall-primary" class="primary-button" type="button">Upgrade Plan</button>
-            <button id="paywall-secondary" class="ghost-button" type="button">Buy more credits</button>
-            <button id="paywall-tertiary" class="link-button" type="button">Wait for reset</button>
+            <button id="paywall-secondary" class="ghost-button" type="button">Compare plans</button>
+            <button id="paywall-tertiary" class="link-button" type="button">Maybe later</button>
           </div>
+          <p id="paywall-footer" class="paywall-footer">Billing handled securely via Stripe. Cancel anytime.</p>
         </div>
       </div>
     </div>

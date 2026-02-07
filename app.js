@@ -44,8 +44,17 @@ const usageLoadMore = document.getElementById('usage-load-more');
 const paywallModal = document.getElementById('paywall-modal');
 const paywallBackdrop = document.querySelector('[data-paywall-backdrop]');
 const paywallTitle = document.getElementById('paywall-title');
-const paywallBodyPrimary = document.getElementById('paywall-body-primary');
-const paywallBodySecondary = document.getElementById('paywall-body-secondary');
+const paywallSubtext = document.getElementById('paywall-subtext');
+const paywallCurrentPlan = document.getElementById('paywall-current-plan');
+const paywallCreditsRemaining = document.getElementById('paywall-credits-remaining');
+const paywallDailyThrottle = document.getElementById('paywall-daily-throttle');
+const paywallCostLine = document.getElementById('paywall-cost-line');
+const paywallFooter = document.getElementById('paywall-footer');
+const paywallCompactSection = document.querySelector('[data-paywall-compact]');
+const paywallCompareSection = document.querySelector('[data-paywall-compare]');
+const paywallPlanButtons = document.querySelectorAll('[data-paywall-plan]');
+const paywallPlanCells = document.querySelectorAll('[data-paywall-plan-cell]');
+const paywallPlanCards = document.querySelectorAll('[data-paywall-plan-card]');
 const paywallPrimaryButton = document.getElementById('paywall-primary');
 const paywallSecondaryButton = document.getElementById('paywall-secondary');
 const paywallTertiaryButton = document.getElementById('paywall-tertiary');
@@ -132,6 +141,13 @@ const CREDIT_WARNING_THRESHOLD = 0.5;
 const MONTHLY_SOFT_USAGE_THRESHOLD = 0.5;
 const MONTHLY_FIRM_USAGE_THRESHOLD = 0.85;
 const DAILY_SOFT_USAGE_THRESHOLD = 0.7;
+const PAYWALL_DISMISS_MS = 7 * 24 * 60 * 60 * 1000;
+const PAYWALL_DISMISS_KEY = 'mayaPaywallDismissedAt';
+const PAYWALL_SUPPRESS_SESSION_KEY = 'mayaPaywallSuppressSession';
+const PAYWALL_SELECTED_PLAN_KEY = 'mayaPaywallSelectedPlan';
+const PAYWALL_UPGRADE_KEY = 'mayaPaywallUpgradeSuccess';
+const PAYWALL_FIRST_SEEN_KEY = 'mayaPaywallFirstSeenAt';
+const PAYWALL_FIRST_SESSION_KEY = 'mayaPaywallFirstSessionSeen';
 const NUDGE_SESSION_KEY = 'mayaNudgeSessionShown';
 const NUDGE_STATE_KEY = 'mayaNudgeState';
 const NUDGE_DISMISS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -542,6 +558,103 @@ function canShowPaywall() {
   return !isGenerating && !isSandboxExecuting();
 }
 
+const isFirstSession = (() => {
+  if (!window.sessionStorage) {
+    return false;
+  }
+  const hasSeen = sessionStorage.getItem(PAYWALL_FIRST_SESSION_KEY);
+  if (hasSeen) {
+    return false;
+  }
+  sessionStorage.setItem(PAYWALL_FIRST_SESSION_KEY, 'true');
+  return true;
+})();
+
+function ensurePaywallFirstSeen() {
+  if (!window.localStorage) {
+    return null;
+  }
+  const existing = localStorage.getItem(PAYWALL_FIRST_SEEN_KEY);
+  if (existing) {
+    return Number(existing);
+  }
+  const now = Date.now();
+  localStorage.setItem(PAYWALL_FIRST_SEEN_KEY, String(now));
+  return now;
+}
+
+function isWithinFirstDay() {
+  const firstSeen = ensurePaywallFirstSeen();
+  if (!Number.isFinite(firstSeen)) {
+    return false;
+  }
+  return Date.now() - firstSeen < 24 * 60 * 60 * 1000;
+}
+
+function hasPaywallUpgradeCompleted() {
+  return window.localStorage?.getItem(PAYWALL_UPGRADE_KEY) === 'true';
+}
+
+function markPaywallUpgradeCompleted() {
+  if (window.localStorage) {
+    window.localStorage.setItem(PAYWALL_UPGRADE_KEY, 'true');
+  }
+}
+
+function isPaywallDismissed() {
+  const dismissedAt = Number(window.localStorage?.getItem(PAYWALL_DISMISS_KEY));
+  return Number.isFinite(dismissedAt) && Date.now() - dismissedAt < PAYWALL_DISMISS_MS;
+}
+
+function dismissPaywallForPeriod() {
+  if (window.localStorage) {
+    window.localStorage.setItem(PAYWALL_DISMISS_KEY, String(Date.now()));
+  }
+}
+
+function suppressPaywallForSession() {
+  if (window.sessionStorage) {
+    window.sessionStorage.setItem(PAYWALL_SUPPRESS_SESSION_KEY, 'true');
+  }
+}
+
+function isPaywallSuppressedForSession() {
+  return window.sessionStorage?.getItem(PAYWALL_SUPPRESS_SESSION_KEY) === 'true';
+}
+
+function getStoredPaywallPlan() {
+  return window.localStorage?.getItem(PAYWALL_SELECTED_PLAN_KEY);
+}
+
+function setStoredPaywallPlan(plan) {
+  if (window.localStorage) {
+    window.localStorage.setItem(PAYWALL_SELECTED_PLAN_KEY, plan);
+  }
+}
+
+function updatePaywallPlanSelection(plan) {
+  if (!paywallModal) {
+    return;
+  }
+  const normalized = plan === 'pro' ? 'pro' : 'starter';
+  setStoredPaywallPlan(normalized);
+  paywallModal.dataset.selectedPlan = normalized;
+  paywallPlanButtons.forEach((button) => {
+    const isSelected = button.dataset.paywallPlan === normalized;
+    button.classList.toggle('is-selected', isSelected);
+    button.setAttribute('aria-pressed', String(isSelected));
+  });
+  paywallPlanCells.forEach((cell) => {
+    const isSelected = cell.dataset.paywallPlanCell === normalized;
+    cell.classList.toggle('is-selected', isSelected);
+  });
+  paywallPlanCards.forEach((card) => {
+    const isSelected = card.dataset.paywallPlanCard === normalized;
+    card.classList.toggle('is-selected', isSelected);
+    card.classList.toggle('hidden', !isSelected);
+  });
+}
+
 function setPaywallVisibility(visible, { dismissable = false } = {}) {
   if (!paywallModal) {
     return;
@@ -573,98 +686,204 @@ function openStripeCheckout(mode) {
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
 }
 
-function showPaywall({ reason, estimate, remaining }) {
-  if (!paywallModal || !canShowPaywall()) {
+function setPaywallMode(mode) {
+  if (!paywallModal) {
+    return;
+  }
+  paywallModal.dataset.mode = mode;
+  if (paywallCompactSection) {
+    paywallCompactSection.classList.toggle('hidden', mode !== 'soft');
+  }
+  if (paywallCompareSection) {
+    paywallCompareSection.classList.toggle('hidden', mode === 'soft');
+  }
+}
+
+function updatePaywallCtas(mode, selectedPlan) {
+  if (!paywallPrimaryButton || !paywallSecondaryButton || !paywallTertiaryButton) {
+    return;
+  }
+  const planLabel = selectedPlan === 'pro' ? 'Pro' : 'Starter';
+  if (mode === 'soft') {
+    paywallPrimaryButton.textContent = 'View upgrade options';
+    paywallPrimaryButton.onclick = () => {
+      setPaywallMode('firm');
+      updatePaywallCtas('firm', selectedPlan);
+    };
+  } else {
+    paywallPrimaryButton.textContent = `Upgrade to ${planLabel}`;
+    paywallPrimaryButton.onclick = () => openStripeCheckout('subscription');
+  }
+
+  paywallSecondaryButton.textContent = 'Compare plans';
+  paywallSecondaryButton.onclick = () => {
+    suppressPaywallForSession();
+    setPaywallMode('firm');
+    updatePaywallCtas('firm', selectedPlan);
+  };
+
+  paywallTertiaryButton.textContent = 'Maybe later';
+  paywallTertiaryButton.classList.remove('hidden');
+  paywallTertiaryButton.onclick = () => {
+    dismissPaywallForPeriod();
+    hidePaywall();
+  };
+}
+
+function showPaywall({ reason, estimate, remaining, modeOverride } = {}) {
+  if (!paywallModal || !canShowPaywall() || hasPaywallUpgradeCompleted()) {
     return false;
   }
 
   const creditState = getCreditState();
+  const usagePercent = getCreditUsagePercent(creditState.remainingCredits, creditState.creditsTotal);
   const resetDays = creditState.resetDays ?? 0;
   const dailyResetTime = creditState.dailyResetTime || 'tomorrow';
   const isMonthlyExhausted = reason === 'monthly';
   const isDailyLimit = reason === 'daily_limit';
   const isPreventive = reason === 'estimate_high';
+  const isHardStop = isMonthlyExhausted && creditState.isFreeTier;
+  let mode = modeOverride;
+
+  if (!mode) {
+    if (isHardStop) {
+      mode = 'hard';
+    } else if (isDailyLimit || isPreventive || (usagePercent !== null && usagePercent >= MONTHLY_FIRM_USAGE_THRESHOLD)) {
+      mode = 'firm';
+    } else {
+      mode = 'soft';
+    }
+  }
+
+  setPaywallMode(mode);
 
   if (paywallTitle) {
-    if (isMonthlyExhausted) {
-      paywallTitle.textContent = 'You’ve used all your credits for this month';
-    } else if (isDailyLimit) {
-      paywallTitle.textContent = 'Daily limit reached';
-    } else {
-      paywallTitle.textContent = 'This request is larger than today’s remaining credits';
-    }
-  }
-
-  if (paywallBodyPrimary) {
-    if (isMonthlyExhausted) {
-      paywallBodyPrimary.textContent = 'Your plan includes 5,000 credits per month.';
-    } else if (isDailyLimit) {
-      paywallBodyPrimary.textContent = 'This protects you from burning all your credits in one day.';
-    } else {
-      const estimateText = estimate?.min && estimate?.max
-        ? `${formatCreditNumber(estimate.min)}–${formatCreditNumber(estimate.max)} credits`
-        : '—';
-      paywallBodyPrimary.textContent = `Estimated cost: ${estimateText}`;
-    }
-  }
-
-  if (paywallBodySecondary) {
-    if (isMonthlyExhausted) {
-      paywallBodySecondary.textContent = `Credits reset in ${resetDays} days.`;
-    } else if (isDailyLimit) {
-      paywallBodySecondary.textContent = `More credits unlock in ${dailyResetTime}.`;
-    } else {
-      paywallBodySecondary.textContent = `Remaining today: ${formatCreditNumber(remaining ?? 0)} credits`;
-    }
-  }
-
-  if (paywallPrimaryButton) {
-    if (isDailyLimit) {
-      paywallPrimaryButton.textContent = 'Upgrade for higher daily limits';
+    if (isHardStop) {
+      paywallTitle.textContent = 'You’ve reached your monthly limit';
     } else if (isPreventive) {
-      paywallPrimaryButton.textContent = 'Upgrade to continue';
+      paywallTitle.textContent = 'This request exceeds your current plan';
+    } else if (mode === 'firm') {
+      paywallTitle.textContent = 'Upgrade for uninterrupted generation';
     } else {
-      paywallPrimaryButton.textContent = 'Upgrade Plan';
-    }
-    paywallPrimaryButton.onclick = () => openStripeCheckout('subscription');
-  }
-
-  if (paywallSecondaryButton) {
-    if (isPreventive) {
-      paywallSecondaryButton.textContent = 'Edit request';
-      paywallSecondaryButton.onclick = () => {
-        hidePaywall();
-        chatInput?.focus();
-      };
-    } else if (isDailyLimit) {
-      paywallSecondaryButton.textContent = 'Buy one-time credits';
-      paywallSecondaryButton.onclick = () => openStripeCheckout('credits');
-    } else {
-      paywallSecondaryButton.textContent = 'Buy more credits';
-      paywallSecondaryButton.onclick = () => openStripeCheckout('credits');
+      paywallTitle.textContent = 'You’re nearing your usage limit';
     }
   }
 
-  if (paywallTertiaryButton) {
-    if (isMonthlyExhausted) {
-      paywallTertiaryButton.textContent = 'Wait for reset';
-      paywallTertiaryButton.classList.remove('hidden');
-      paywallTertiaryButton.onclick = () => hidePaywall();
-    } else if (isDailyLimit) {
-      paywallTertiaryButton.textContent = 'Close';
-      paywallTertiaryButton.classList.remove('hidden');
-      paywallTertiaryButton.onclick = () => hidePaywall();
+  if (paywallSubtext) {
+    if (isHardStop) {
+      paywallSubtext.textContent =
+        'Upgrade to continue generating today, or wait until your credits reset.';
+    } else if (usagePercent !== null) {
+      const percent = Math.round(usagePercent * 100);
+      paywallSubtext.textContent =
+        `You’ve used ${percent}% of your monthly credits. Pro plans increase limits and reduce throttling.`;
     } else {
-      paywallTertiaryButton.classList.add('hidden');
+      paywallSubtext.textContent =
+        `More credits unlock in ${dailyResetTime}.`;
     }
   }
+
+  if (paywallCurrentPlan) {
+    paywallCurrentPlan.textContent = creditState.planLabel || 'Free';
+  }
+
+  if (paywallCreditsRemaining) {
+    const remainingText = Number.isFinite(creditState.remainingCredits)
+      && Number.isFinite(creditState.creditsTotal)
+      ? `${formatCreditNumber(creditState.remainingCredits)} / ${formatCreditNumber(creditState.creditsTotal)}`
+      : '—';
+    paywallCreditsRemaining.textContent = remainingText;
+  }
+
+  if (paywallDailyThrottle) {
+    const dailyRemaining = Number.isFinite(creditState.dailyLimit)
+      && Number.isFinite(creditState.todayCreditsUsed)
+      ? Math.max(0, creditState.dailyLimit - creditState.todayCreditsUsed)
+      : null;
+    if (dailyRemaining !== null) {
+      paywallDailyThrottle.textContent = `${formatCreditNumber(dailyRemaining)} credits left today`;
+    } else {
+      paywallDailyThrottle.textContent = '—';
+    }
+  }
+
+  if (paywallCostLine) {
+    const costTextNode = paywallCostLine.firstChild;
+    const estimateText = estimate?.min && estimate?.max
+      ? `Estimated cost: ${formatCreditNumber(estimate.min)}–${formatCreditNumber(estimate.max)} credits.`
+      : '';
+    if (costTextNode && costTextNode.nodeType === Node.TEXT_NODE) {
+      if (isPreventive && estimateText) {
+        costTextNode.textContent = `${estimateText} `;
+      } else if (isMonthlyExhausted) {
+        costTextNode.textContent =
+          `Credits reset in ${resetDays} days. `;
+      } else if (isDailyLimit) {
+        costTextNode.textContent =
+          `More credits unlock in ${dailyResetTime}. `;
+      } else {
+        costTextNode.textContent =
+          'Credits abstract API costs. On your usage, Starter covers ~10× more generations than Free. ';
+      }
+    }
+  }
+
+  if (paywallFooter) {
+    paywallFooter.classList.toggle('hidden', !getUserContext().id);
+  }
+
+  const preferredPlan = (() => {
+    const stored = getStoredPaywallPlan();
+    if (stored === 'pro' || stored === 'starter') {
+      return stored;
+    }
+    if (creditState.planLabel && creditState.planLabel.toLowerCase() !== 'free') {
+      return 'pro';
+    }
+    if (usagePercent !== null && usagePercent >= 0.9) {
+      return 'pro';
+    }
+    return 'starter';
+  })();
+
+  updatePaywallPlanSelection(preferredPlan);
+  updatePaywallCtas(mode, preferredPlan);
 
   if (paywallCloseButton) {
-    paywallCloseButton.classList.toggle('hidden', !isDailyLimit);
+    paywallCloseButton.classList.toggle('hidden', mode === 'hard');
   }
 
-  setPaywallVisibility(true, { dismissable: isDailyLimit });
+  setPaywallVisibility(true, { dismissable: mode !== 'hard' });
   return true;
+}
+
+function shouldSuppressPaywallNudge() {
+  if (hasPaywallUpgradeCompleted()) {
+    return true;
+  }
+  if (isFirstSession || isWithinFirstDay()) {
+    return true;
+  }
+  if (isPaywallDismissed() || isPaywallSuppressedForSession()) {
+    return true;
+  }
+  return false;
+}
+
+function maybeShowUsagePaywall({ reason = 'usage' } = {}) {
+  if (!paywallModal || !canShowPaywall()) {
+    return false;
+  }
+  const creditState = getCreditState();
+  const usagePercent = getCreditUsagePercent(creditState.remainingCredits, creditState.creditsTotal);
+  if (usagePercent === null || usagePercent < MONTHLY_SOFT_USAGE_THRESHOLD) {
+    return false;
+  }
+  if (shouldSuppressPaywallNudge()) {
+    return false;
+  }
+  const mode = usagePercent >= MONTHLY_FIRM_USAGE_THRESHOLD ? 'firm' : 'soft';
+  return showPaywall({ reason, modeOverride: mode });
 }
 
 function getUserContext() {
@@ -3325,6 +3544,7 @@ Output rules:
 
   unlockChat();
   stopLoading();
+  maybeShowUsagePaywall({ reason: 'usage' });
 }
 
 chatForm.addEventListener('submit', (event) => {
@@ -3421,6 +3641,37 @@ if (paywallCloseButton) {
       hidePaywall();
     }
   });
+}
+
+paywallPlanButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const plan = button.dataset.paywallPlan;
+    if (!plan) {
+      return;
+    }
+    updatePaywallPlanSelection(plan);
+    const currentMode = paywallModal?.dataset.mode || 'firm';
+    updatePaywallCtas(currentMode, plan);
+  });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !isPaywallVisible) {
+    return;
+  }
+  if (paywallModal?.classList.contains('dismissable')) {
+    hidePaywall();
+  }
+});
+
+const initialSelectedPlan = getStoredPaywallPlan() || 'starter';
+updatePaywallPlanSelection(initialSelectedPlan);
+
+if (window.location?.search) {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('upgrade') === 'success') {
+    markPaywallUpgradeCompleted();
+  }
 }
 
 if (usageTabs.length) {
