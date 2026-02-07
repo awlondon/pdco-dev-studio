@@ -9,7 +9,6 @@ const consolePane = document.getElementById('consoleOutput');
 const previewFrame = document.getElementById('previewFrame');
 const statusLabel = document.getElementById('status-label');
 const generationIndicator = document.getElementById('generation-indicator');
-const runButton = document.getElementById('runButton');
 const previewStatus = document.getElementById('previewStatus');
 const splitter = document.getElementById('splitter');
 const rightPane = document.getElementById('right-pane');
@@ -233,7 +232,9 @@ function runGeneratedCode(code) {
 }
 
 function runEditorCode() {
+  console.log('🚀 runEditorCode fired');
   const html = codeEditor?.value ?? '';
+  console.log('HTML length:', html.length);
 
   if (!html || html.trim().length < 10) {
     console.warn('⚠️ No runnable code in editor');
@@ -245,6 +246,7 @@ function runEditorCode() {
 }
 
 function renderToIframe(html) {
+  console.log('🖼️ Rendering to iframe');
   if (!previewFrame) {
     return;
   }
@@ -496,11 +498,18 @@ codeEditor.addEventListener('input', () => {
   editorDirty = true;
 });
 
-if (runButton) {
+document.addEventListener('DOMContentLoaded', () => {
+  const runButton = document.getElementById('runCode');
+  if (!runButton) {
+    console.warn('⚠️ Run Code button not found');
+    return;
+  }
+  console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
+    console.log('🟢 Run Code clicked');
     runEditorCode();
   });
-}
+});
 
 codeEditor.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
