@@ -39,6 +39,7 @@ let lastUserIntent = null;
 let loadingStartTime = null;
 let loadingInterval = null;
 let editorDirty = false;
+let lastUpdateSource = 'llm';
 let previewIframe = null;
 let previewTimeoutId = null;
 let previewHeavyTimer = null;
@@ -339,15 +340,15 @@ function runEditorCode() {
   }
 
   const wrappedUserCode = codeEditor?.value ?? '';
-  previewFrameContainer.innerHTML = '';
-
-  const iframe = document.createElement('iframe');
-  iframe.sandbox = 'allow-scripts';
-  iframe.style.width = '100%';
-  iframe.style.height = '100%';
-  iframe.srcdoc = wrappedUserCode;
-
-  previewFrameContainer.appendChild(iframe);
+  const analysis = analyzeCodeForExecution(wrappedUserCode, DEBUG_INTENT);
+  setExecutionWarnings(analysis.warnings);
+  if (!analysis.allowed) {
+    setPreviewStatus('Execution blocked — update the code to continue');
+    setPreviewExecutionStatus('stopped', 'Stopped');
+    return;
+  }
+  setPreviewExecutionStatus('preparing', 'Preparing');
+  renderToIframe(wrappedUserCode, analysis);
 }
 
 function injectFrameGuard(html, limits) {
@@ -443,6 +444,19 @@ function updateGenerationIndicator() {
     ? '🧠 Modifying existing UI'
     : '✨ Creating new UI';
   generationIndicator.classList.toggle('active', isModifying);
+}
+
+function markPreviewStale() {
+  setPreviewStatus('✏️ Code modified — click Run Code to apply');
+  setPreviewExecutionStatus('stale', 'Stale');
+}
+
+function applyLLMCode(code) {
+  lastUpdateSource = 'llm';
+  codeEditor.value = code;
+  editorDirty = false;
+  setPreviewStatus('Applying latest update…');
+  runEditorCode();
 }
 
 function simpleLineDiff(oldCode, newCode) {
@@ -645,10 +659,7 @@ The user's message does not require interface changes. Respond with plain text o
     if (codeChanged) {
       previousCode = currentCode;
       currentCode = nextCode;
-      codeEditor.value = nextCode;
-      editorDirty = false;
-      setPreviewStatus('Code updated — click Run Code to execute');
-      setPreviewExecutionStatus('ready', 'Ready');
+      applyLLMCode(nextCode);
       resetExecutionPreparation();
     }
     if (interfaceStatus) {
@@ -692,6 +703,8 @@ chatForm.addEventListener('submit', (event) => {
 
 codeEditor.addEventListener('input', () => {
   editorDirty = true;
+  lastUpdateSource = 'user';
+  markPreviewStale();
   resetExecutionPreparation();
 });
 
@@ -703,6 +716,13 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
+    if (lastUpdateSource !== 'user' || !editorDirty) {
+      setPreviewStatus('No local edits to apply');
+      setPreviewExecutionStatus('ready', 'Ready');
+      return;
+    }
+    editorDirty = false;
+    setPreviewStatus('Applying your edits…');
     runEditorCode();
   });
 });
@@ -710,6 +730,13 @@ document.addEventListener('DOMContentLoaded', () => {
 codeEditor.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault();
+    if (lastUpdateSource !== 'user' || !editorDirty) {
+      setPreviewStatus('No local edits to apply');
+      setPreviewExecutionStatus('ready', 'Ready');
+      return;
+    }
+    editorDirty = false;
+    setPreviewStatus('Applying your edits…');
     runEditorCode();
   }
 });
