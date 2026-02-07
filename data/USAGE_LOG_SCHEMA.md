@@ -11,31 +11,26 @@ Canonical file: `data/usage_log.csv`.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| event_id | string (uuid) | Primary key for this log entry. |
-| timestamp | ISO 8601 | When the request completed. |
+| timestamp_utc | ISO 8601 | When the request completed (UTC). |
 | user_id | string (uuid) | Links to `data/users.csv`. |
-| request_id | string (uuid) | One per API call (ties retries together). |
-| plan | enum | `free`, `starter`, `pro`, `enterprise`, etc. |
-| endpoint | string | `/generate`, `/chat`, etc. |
+| email | string | User email address. |
+| session_id | string (uuid) | Client session identifier. |
+| request_id | string (uuid) | Generated before calling the LLM. |
 | intent_type | enum | `text`, `code`, `creative`. |
-| model_variant | string | e.g. `maya-code-v1`. |
-| credits_charged | int | How many credits this request cost. |
-| credits_remaining | int | Remaining credits after deduction. |
-| tokens_estimated | int | Approx tokens (cost sanity). |
+| model | string | e.g. `gpt-4.1-mini`. |
+| input_chars | int | Character count sent to the model. |
+| input_est_tokens | int | Estimated input tokens. |
+| output_chars | int | Character count returned by the model. |
+| output_est_tokens | int | Estimated output tokens. |
+| total_est_tokens | int | Sum of input/output estimates. |
+| credits_charged | int | Credits charged after generation. |
 | latency_ms | int | End-to-end request latency. |
-| generation_duration_ms | int | LLM generation time only. |
-| output_type | enum | `html`, `text`, `mixed`, `error`. |
-| status | enum | `success`, `blocked`, `error`. |
-| throttle_state | enum | `none`, `soft`, `hard`. |
-| client_origin | string | `web`, `mobile`, `api`. |
-| ip_hash | string | SHA-256 hash (never store raw IP). |
-| user_agent | string | For debugging only. |
-| notes | string | Optional internal notes. |
+| status | enum | `success`, `error`, `timeout`, `aborted`. |
 
 ## Example row
 
 ```csv
-8f4d2c3e-1e3b-4a7a-9a6e-2b2c3e9d92f1,2024-06-12T18:42:11.238Z,user_3a91e,req_91f3a,pro,/generate,creative,maya-code-v1,3,417,1840,2310,59872,html,success,none,web,a94a8fe5ccb19ba61c4c0873d391e987982fbbd3,Mozilla/5.0,long_generation_high_complexity
+2024-06-12T18:42:11.238Z,user_3a91e,alex@example.com,session_91f3a,req_91f3a,creative,gpt-4.1-mini,2120,530,4118,1373,1903,8,59872,success
 ```
 
 ## Append-only write logic
@@ -48,7 +43,7 @@ Canonical file: `data/usage_log.csv`.
 1. Build log row object.
 2. Serialize to CSV line.
 3. Fetch latest file SHA.
-4. Append new line.
+4. Append new line (base64 encode full file contents).
 5. Commit.
 
 If the write fails, allow the request to complete and retry logging asynchronously.
@@ -67,7 +62,7 @@ Daily usage:
 ```sql
 COUNT rows
 WHERE user_id = X
-AND timestamp is today
+AND timestamp_utc is today
 AND status = success
 ```
 
@@ -76,5 +71,5 @@ Monthly usage:
 ```sql
 SUM credits_charged
 WHERE user_id = X
-AND timestamp in current month
+AND timestamp_utc in current month
 ```

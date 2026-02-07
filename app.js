@@ -85,6 +85,22 @@ const TOKENS_PER_CREDIT = 250;
 const CREDIT_BAND_MIN = 0.7;
 const CREDIT_BAND_MAX = 1.3;
 const CREDIT_WARNING_THRESHOLD = 0.5;
+const LOW_CREDIT_WARNING_THRESHOLD = 3;
+
+const sessionId = (() => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  const stored = window.sessionStorage?.getItem('mayaSessionId');
+  if (stored) {
+    return stored;
+  }
+  const created = window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.sessionStorage?.setItem('mayaSessionId', created);
+  return created;
+})();
 
 async function copyToClipboard(text) {
   try {
@@ -132,6 +148,20 @@ function getCreditState() {
     freeTierRemaining: Number.isFinite(freeTierRemaining) ? freeTierRemaining : null,
     planLabel: planLabel || null,
     isFreeTier: planLabel.toLowerCase() === 'free'
+  };
+}
+
+function getUserContext() {
+  const root = document.getElementById('root');
+  const remainingCredits = Number.parseInt(root?.dataset.remainingCredits ?? '', 10);
+  const dailyLimit = Number.parseInt(root?.dataset.dailyLimit ?? '', 10);
+  const todayCreditsUsed = Number.parseInt(root?.dataset.todayCreditsUsed ?? '', 10);
+  return {
+    id: root?.dataset.userId || '',
+    email: root?.dataset.email || '',
+    remainingCredits: Number.isFinite(remainingCredits) ? remainingCredits : null,
+    dailyLimit: Number.isFinite(dailyLimit) ? dailyLimit : null,
+    todayCreditsUsed: Number.isFinite(todayCreditsUsed) ? todayCreditsUsed : null
   };
 }
 
@@ -1050,6 +1080,30 @@ function formatGenerationMetadata(durationMs) {
   return `— Generated in ${Math.round(durationMs)} ms · Auto-run enabled`;
 }
 
+function formatUsageMetadata(usage) {
+  if (!usage || !Number.isFinite(usage.creditsCharged)) {
+    return '';
+  }
+  const pieces = [`Used ${usage.creditsCharged} credits`];
+  if (Number.isFinite(usage.remainingCredits)) {
+    pieces.push(`${usage.remainingCredits} remaining`);
+    if (usage.remainingCredits <= LOW_CREDIT_WARNING_THRESHOLD) {
+      pieces.push(`⚠️ ${usage.remainingCredits} runs remaining this month`);
+    }
+  }
+  return pieces.join(' · ');
+}
+
+function applyUsageToCredits(usage) {
+  if (!usage || !Number.isFinite(usage.remainingCredits)) {
+    return;
+  }
+  const root = document.getElementById('root');
+  if (root) {
+    root.dataset.remainingCredits = usage.remainingCredits;
+  }
+}
+
 function appendOutput(content, variant = 'success') {
   const line = document.createElement('div');
   line.className = `output-line ${variant}`;
@@ -1465,6 +1519,7 @@ async function sendChat() {
 
   let generationMetadata = '';
   let rawReply = '';
+  let usageMetadata = '';
   try {
     const llmStartTime = performance.now();
     const systemPrompt = `You are a coding assistant.
@@ -1493,19 +1548,32 @@ Output rules:
     const res = await fetch(BACKEND_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages })
+      body: JSON.stringify({
+        messages,
+        sessionId,
+        intentType: resolvedIntent.type,
+        user: getUserContext()
+      })
     });
 
-    const data = await res.json();
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
     const llmEndTime = performance.now();
     generationMetadata = formatGenerationMetadata(llmEndTime - llmStartTime);
 
     if (!res.ok) {
-      throw new Error(data?.error || 'Unable to reach the chat service.');
+      throw new Error(data?.message || data?.error || 'Unable to reach the chat service.');
     }
 
     setStatusOnline(true);
     rawReply = data?.choices?.[0]?.message?.content || 'No response.';
+    usageMetadata = formatUsageMetadata(data?.usage);
+    applyUsageToCredits(data?.usage);
+    updateCreditPreview({ force: true });
     generationFeedback.stop();
   } catch (error) {
     generationFeedback.stop();
@@ -1540,7 +1608,10 @@ Output rules:
   }
 
   const elapsed = performance.now() - startedAt;
-  const metadataText = generationMetadata || formatGenerationMetadata(elapsed);
+  const baseMetadata = generationMetadata || formatGenerationMetadata(elapsed);
+  const metadataText = usageMetadata
+    ? `${baseMetadata} · ${usageMetadata}`
+    : baseMetadata;
   finalizeChatOnce(() => {
     renderAssistantMessage(pendingMessageId, extractedText, metadataText);
   });
