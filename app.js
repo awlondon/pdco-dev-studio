@@ -277,14 +277,16 @@ function analyzeCodeForExecution(code, debugIntent = false) {
   };
 }
 
-function resetExecutionPreparation() {
+function resetExecutionPreparation({ clearWarnings = true } = {}) {
   awaitingConfirmation = false;
   pendingExecution = null;
   if (runButton) {
     runButton.textContent = 'Run Code';
     runButton.disabled = false;
   }
-  setExecutionWarnings([]);
+  if (clearWarnings) {
+    setExecutionWarnings([]);
+  }
 }
 
 function detectCodeIntent(userInput, hasExistingCode) {
@@ -331,7 +333,7 @@ function detectCodeIntent(userInput, hasExistingCode) {
   };
 }
 
-function runEditorCode() {
+function prepareEditorCode({ autoRun = false } = {}) {
   if (!previewFrameContainer) {
     return;
   }
@@ -343,47 +345,126 @@ function runEditorCode() {
     setPreviewStatus('Execution blocked — update the code to continue');
     setPreviewExecutionStatus('stopped', '🔴 Stopped (blocked)');
     appendOutput('Execution blocked due to a blocking loop.', 'error');
+    pendingExecution = null;
     return;
   }
-  setPreviewExecutionStatus('running', '🟢 Running…');
-  runInSandbox(wrappedUserCode);
+
+  pendingExecution = wrappedUserCode;
+  prepareSandbox(wrappedUserCode);
+
+  if (autoRun) {
+    startSandboxExecution();
+  }
 }
 
 function buildSafetyShim() {
   return `
 <script>
 (() => {
-  // ----- HARD TIMEOUT -----
-  const killTimer = setTimeout(() => {
-    parent.postMessage({ type: "SANDBOX_TIMEOUT" }, "*");
-    throw new Error("Sandbox execution timeout");
-  }, ${SANDBOX_TIMEOUT_MS});
-
-  // ----- RAF CAP -----
-  let rafCount = 0;
   const MAX_RAF = ${MAX_RAF};
-  const originalRAF = window.requestAnimationFrame;
+  const MAX_TIME = ${SANDBOX_TIMEOUT_MS};
+  const MAX_INTERVALS = ${MAX_INTERVALS};
+
+  let started = false;
+  let rafCount = 0;
+  let startTime = 0;
+  let maxTimeTimer = null;
+  let pendingRafs = [];
+  let pendingIntervals = new Map();
+  let pendingIntervalCounter = 0;
+  const activeIntervals = new Set();
+  const activeTimeouts = new Set();
+
+  const originalRAF = window.requestAnimationFrame.bind(window);
+  const originalCancelRAF = window.cancelAnimationFrame.bind(window);
+  const originalSetInterval = window.setInterval.bind(window);
+  const originalClearInterval = window.clearInterval.bind(window);
+  const originalSetTimeout = window.setTimeout.bind(window);
+  const originalClearTimeout = window.clearTimeout.bind(window);
+
+  function stopSandbox(reason = "SANDBOX_STOP") {
+    started = false;
+    pendingRafs = [];
+    pendingIntervals.clear();
+    activeIntervals.forEach((id) => originalClearInterval(id));
+    activeIntervals.clear();
+    activeTimeouts.forEach((id) => originalClearTimeout(id));
+    activeTimeouts.clear();
+    if (maxTimeTimer) {
+      originalClearTimeout(maxTimeTimer);
+      maxTimeTimer = null;
+    }
+    parent.postMessage({ type: reason }, "*");
+  }
+
+  function scheduleRAF(cb) {
+    return originalRAF((t) => {
+      if (!started) {
+        return;
+      }
+      rafCount++;
+      parent.postMessage({ type: "SANDBOX_FRAME" }, "*");
+      if (rafCount > MAX_RAF || (t - startTime) > MAX_TIME) {
+        stopSandbox("SANDBOX_STOP");
+        return;
+      }
+      cb(t);
+    });
+  }
 
   window.requestAnimationFrame = function (cb) {
-    rafCount++;
-    parent.postMessage({ type: "SANDBOX_FRAME" }, "*");
-    if (rafCount > MAX_RAF) {
-      throw new Error("RAF limit exceeded");
+    if (!started) {
+      pendingRafs.push(cb);
+      return pendingRafs.length;
     }
-    return originalRAF(cb);
+    return scheduleRAF(cb);
   };
 
-  // ----- INTERVAL CAP -----
-  let intervalCount = 0;
-  const MAX_INTERVALS = ${MAX_INTERVALS};
-  const originalSetInterval = window.setInterval;
-
-  window.setInterval = function (fn, delay) {
-    intervalCount++;
-    if (intervalCount > MAX_INTERVALS) {
-      throw new Error("Too many intervals");
+  window.cancelAnimationFrame = function (id) {
+    if (!started) {
+      pendingRafs = pendingRafs.filter((_, index) => index + 1 !== id);
+      return;
     }
-    return originalSetInterval(fn, delay);
+    originalCancelRAF(id);
+  };
+
+  function startInterval(fn, delay, args) {
+    if (activeIntervals.size >= MAX_INTERVALS) {
+      stopSandbox("SANDBOX_STOP");
+      return null;
+    }
+    const id = originalSetInterval(fn, delay, ...args);
+    activeIntervals.add(id);
+    return id;
+  }
+
+  window.setInterval = function (fn, delay, ...args) {
+    if (!started) {
+      const id = `pending-${++pendingIntervalCounter}`;
+      pendingIntervals.set(id, { fn, delay, args });
+      return id;
+    }
+    return startInterval(fn, delay, args);
+  };
+
+  window.clearInterval = function (id) {
+    if (pendingIntervals.has(id)) {
+      pendingIntervals.delete(id);
+      return;
+    }
+    originalClearInterval(id);
+    activeIntervals.delete(id);
+  };
+
+  window.setTimeout = function (fn, delay, ...args) {
+    const id = originalSetTimeout(fn, delay, ...args);
+    activeTimeouts.add(id);
+    return id;
+  };
+
+  window.clearTimeout = function (id) {
+    originalClearTimeout(id);
+    activeTimeouts.delete(id);
   };
 
   // ----- ERROR FORWARDING -----
@@ -394,10 +475,55 @@ function buildSafetyShim() {
     }, "*");
   });
 
-  // ----- CLEAN EXIT -----
-  window.addEventListener("load", () => {
-    clearTimeout(killTimer);
-  });
+  window.__MAYA_SAFE_START__ = function () {
+    if (started) {
+      return;
+    }
+    started = true;
+    rafCount = 0;
+    startTime = performance.now();
+    maxTimeTimer = originalSetTimeout(() => {
+      stopSandbox("SANDBOX_STOP");
+    }, MAX_TIME);
+
+    const deferredScripts = Array.from(
+      document.querySelectorAll('script[type="text/maya"]')
+    );
+    deferredScripts.forEach((script) => {
+      const nextScript = document.createElement('script');
+      Array.from(script.attributes).forEach((attr) => {
+        if (attr.name === 'type') {
+          return;
+        }
+        nextScript.setAttribute(attr.name, attr.value);
+      });
+      if (script.src) {
+        nextScript.src = script.src;
+      } else {
+        nextScript.textContent = script.textContent;
+      }
+      script.parentNode?.replaceChild(nextScript, script);
+    });
+
+    pendingRafs.forEach((cb) => scheduleRAF(cb));
+    pendingRafs = [];
+
+    pendingIntervals.forEach((value, pendingId) => {
+      const intervalId = startInterval(value.fn, value.delay, value.args);
+      pendingIntervals.set(pendingId, intervalId);
+    });
+
+    if (typeof window.__MAYA_START__ === "function") {
+      window.__MAYA_START__();
+    }
+  };
+
+  window.__MAYA_SAFE_STOP__ = function () {
+    if (typeof window.__MAYA_STOP__ === "function") {
+      window.__MAYA_STOP__();
+    }
+    stopSandbox("SANDBOX_STOP");
+  };
 })();
 <\/script>
 `;
@@ -451,6 +577,15 @@ function handleSandboxMessage(event) {
     appendOutput('Sandbox execution timeout.', 'error');
     destroySandbox();
     stopSandboxStatus('⛔ timeout');
+    return;
+  }
+
+  if (messageType === 'SANDBOX_STOP') {
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (safety cap)');
+    setPreviewStatus('Execution stopped — safety cap reached.');
+    appendOutput('Sandbox stopped due to safety cap.', 'error');
+    destroySandbox();
+    stopSandboxStatus('⛔ safety cap');
     return;
   }
 
@@ -514,23 +649,60 @@ function stopSandboxStatus(reason = 'idle') {
   }
 }
 
-function runInSandbox(userHTML) {
-  console.log('🖼️ Rendering to iframe');
+function deferScripts(html) {
+  return html.replace(/<script(\s|>)/gi, '<script type="text/maya"$1');
+}
+
+function prepareSandbox(userHTML) {
+  console.log('🧩 Preparing sandbox preview');
   if (!previewFrameContainer) {
     return;
   }
 
   ensureSandboxListener();
   destroySandbox();
-  startSandboxStatus();
 
   sandboxIframe = createSandboxedIframe();
   previewFrameContainer.appendChild(sandboxIframe);
   outputPanel?.classList.add('loading');
 
+  setPreviewExecutionStatus('ready', 'Ready');
+  setPreviewStatus('Preview updated — click Run Code to execute');
+  stopSandboxStatus('idle');
+
+  sandboxIframe.onload = () => {
+    outputPanel?.classList.remove('loading');
+  };
+
+  const safety = buildSafetyShim();
+  const doc = sandboxIframe.contentDocument;
+  const deferredHtml = deferScripts(userHTML);
+  doc.open();
+  doc.write(`
+<!DOCTYPE html>
+<html>
+<body>
+${safety}
+${deferredHtml}
+</body>
+</html>
+  `);
+  doc.close();
+}
+
+function startSandboxExecution() {
+  if (!sandboxIframe?.contentWindow) {
+    setPreviewStatus('No preview loaded — generate or apply code first');
+    return;
+  }
+
   setPreviewExecutionStatus('running', '🟢 Running…');
   setPreviewStatus('Sandbox running…');
+  startSandboxStatus();
 
+  if (sandboxKillTimer) {
+    clearTimeout(sandboxKillTimer);
+  }
   sandboxKillTimer = setTimeout(() => {
     destroySandbox();
     setPreviewExecutionStatus('stopped', '🔴 Stopped (timeout)');
@@ -539,23 +711,7 @@ function runInSandbox(userHTML) {
     stopSandboxStatus('⛔ timeout');
   }, SANDBOX_TIMEOUT_MS + 500);
 
-  sandboxIframe.onload = () => {
-    outputPanel?.classList.remove('loading');
-  };
-
-  const safety = buildSafetyShim();
-  const doc = sandboxIframe.contentDocument;
-  doc.open();
-  doc.write(`
-<!DOCTYPE html>
-<html>
-<body>
-${safety}
-${userHTML}
-</body>
-</html>
-  `);
-  doc.close();
+  sandboxIframe.contentWindow.__MAYA_SAFE_START__?.();
 }
 
 function updateGenerationIndicator() {
@@ -578,8 +734,8 @@ function applyLLMCode(code) {
   lastUpdateSource = 'llm';
   codeEditor.value = code;
   editorDirty = false;
-  setPreviewStatus('Applying latest update…');
-  runEditorCode();
+  setPreviewStatus('Preview updated by assistant');
+  prepareEditorCode({ autoRun: false });
 }
 
 function simpleLineDiff(oldCode, newCode) {
@@ -783,7 +939,7 @@ The user's message does not require interface changes. Respond with plain text o
       previousCode = currentCode;
       currentCode = nextCode;
       applyLLMCode(nextCode);
-      resetExecutionPreparation();
+      resetExecutionPreparation({ clearWarnings: false });
     }
     if (interfaceStatus) {
       if (codeChanged) {
@@ -839,28 +995,34 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
-    if (lastUpdateSource !== 'user' || !editorDirty) {
-      setPreviewStatus('No local edits to apply');
-      setPreviewExecutionStatus('ready', 'Ready');
+    if (editorDirty) {
+      editorDirty = false;
+      setPreviewStatus('Applying your edits…');
+      prepareEditorCode({ autoRun: true });
       return;
     }
-    editorDirty = false;
-    setPreviewStatus('Applying your edits…');
-    runEditorCode();
+    if (sandboxIframe) {
+      startSandboxExecution();
+      return;
+    }
+    setPreviewStatus('No preview loaded — generate or apply code first');
   });
 });
 
 codeEditor.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault();
-    if (lastUpdateSource !== 'user' || !editorDirty) {
-      setPreviewStatus('No local edits to apply');
-      setPreviewExecutionStatus('ready', 'Ready');
+    if (editorDirty) {
+      editorDirty = false;
+      setPreviewStatus('Applying your edits…');
+      prepareEditorCode({ autoRun: true });
       return;
     }
-    editorDirty = false;
-    setPreviewStatus('Applying your edits…');
-    runEditorCode();
+    if (sandboxIframe) {
+      startSandboxExecution();
+      return;
+    }
+    setPreviewStatus('No preview loaded — generate or apply code first');
   }
 });
 
