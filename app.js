@@ -1,3 +1,4 @@
+const DEBUG_INTENT = true; // flip to false to silence intent logs
 const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
@@ -50,7 +51,12 @@ function updateCodeIntentBadge(codeIntent) {
   if (!codeIntentBadge) {
     return;
   }
-  codeIntentBadge.classList.toggle('hidden', !codeIntent);
+
+  if (DEBUG_INTENT && codeIntent) {
+    codeIntentBadge.classList.remove('hidden');
+  } else {
+    codeIntentBadge.classList.add('hidden');
+  }
 }
 
 function addMessage(role, html, options = {}) {
@@ -284,21 +290,23 @@ function stopLoading() {
 }
 
 async function sendChat() {
-  const prompt = chatInput.value.trim();
-  if (!prompt) {
+  const userInput = chatInput.value.trim();
+  if (!userInput) {
     return;
   }
 
   chatInput.value = '';
-  appendMessage('user', prompt);
-  const intentInfo = detectCodeIntent(prompt);
+  appendMessage('user', userInput);
+  const intentInfo = detectCodeIntent(userInput);
   const codeIntent = intentInfo.intent;
-  console.groupCollapsed('🧠 Code Intent Decision');
-  console.log('User input:', prompt);
-  console.log('Code intent:', intentInfo.intent);
-  console.log('Source:', intentInfo.source);
-  console.log('Matched:', intentInfo.match);
-  console.groupEnd();
+  if (DEBUG_INTENT) {
+    console.groupCollapsed('🧠 Code Intent Decision');
+    console.log('User input:', userInput);
+    console.log('Code intent:', intentInfo.intent);
+    console.log('Source:', intentInfo.source);
+    console.log('Matched:', intentInfo.match);
+    console.groupEnd();
+  }
   updateCodeIntentBadge(codeIntent);
 
   const pendingMessageId = addMessage(
@@ -344,7 +352,7 @@ The user's message does not require interface changes. Do not modify the code un
       },
       {
         role: 'user',
-        content: buildWrappedPrompt(prompt, currentCode)
+        content: buildWrappedPrompt(userInput, currentCode)
       }
     ];
 
