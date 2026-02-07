@@ -32,6 +32,13 @@ let previousCode = null;
 let lastUserIntent = null;
 let loadingStartTime = null;
 let loadingInterval = null;
+const CODE_INTENT_PATTERNS = [
+  /build|create|make|generate/i,
+  /show|visualize|diagram|chart|graph|ui|interface|layout/i,
+  /button|slider|input|click|drag|hover/i,
+  /html|css|js|javascript|code|component/i,
+  /add|remove|change|modify|update|refactor/i
+];
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -134,6 +141,18 @@ function buildWrappedPrompt(userInput, currentCode) {
   }
 
   return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
+}
+
+function hasCodeIntent(userInput) {
+  return CODE_INTENT_PATTERNS.some((rx) => rx.test(userInput));
+}
+
+function hasExplicitOverride(userInput) {
+  return /^\/ui\b|^\/code\b/i.test(userInput);
+}
+
+function getCodeIntent(userInput) {
+  return hasExplicitOverride(userInput) || hasCodeIntent(userInput);
 }
 
 function runGeneratedCode(code) {
@@ -250,6 +269,7 @@ async function sendChat() {
 
   chatInput.value = '';
   appendMessage('user', prompt);
+  const codeIntent = getCodeIntent(prompt);
 
   const pendingMessageId = addMessage(
     'assistant',
@@ -262,10 +282,7 @@ async function sendChat() {
   startLoading();
 
   try {
-    const messages = [
-      {
-        role: 'system',
-        content: `You are a helpful conversational assistant.
+    const systemBase = `You are a helpful conversational assistant.
 
 You must return a single valid JSON object.
 No text outside JSON.
@@ -282,7 +299,18 @@ Rules:
 - Code may remain unchanged.
 - Do not explain code unless asked.
 - Prefer minimal output.
-- If no code changes are needed, set "code_unchanged": true and repeat the previous code verbatim.`
+- If no code changes are needed, set "code_unchanged": true and repeat the previous code verbatim.`;
+    const systemMessage = codeIntent
+      ? systemBase
+      : `${systemBase}
+
+Additional instruction:
+The user's message does not require interface changes. Do not modify the code unless absolutely necessary.`;
+
+    const messages = [
+      {
+        role: 'system',
+        content: systemMessage
       },
       {
         role: 'user',
@@ -319,6 +347,11 @@ Rules:
     if (!parsed.text || !parsed.code || typeof parsed.code_unchanged !== 'boolean') {
       updateMessage(pendingMessageId, '⚠️ Response missing required fields.');
       return;
+    }
+
+    if (!codeIntent) {
+      parsed.code = currentCode;
+      parsed.code_unchanged = true;
     }
 
     if (isOverlyLiteral(parsed.code, parsed.text)) {
