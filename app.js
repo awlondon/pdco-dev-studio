@@ -469,9 +469,20 @@ function inferIntentFromText(userText) {
   if (!normalized) {
     return { type: 'text', inferred: false };
   }
-  const wantsCode = /\b(draw|create|build|make|generate|render)\b/.test(normalized)
-    || /\b(visual|animation|animated|interactive|scene|canvas|ui|interface|prototype)\b/.test(normalized);
-  return { type: wantsCode ? 'code' : 'text', inferred: false };
+  const creativeSignals = /express|explore|improvise|interpret|reflect|play|dream|invent|yourself/i.test(normalized)
+    || normalized.length <= 20; // short, open-ended prompts
+
+  const wantsExplicitUI = /\b(draw|build|render|interface|canvas|ui|prototype)\b/.test(normalized);
+
+  if (creativeSignals && !wantsExplicitUI) {
+    return { type: 'creative', inferred: true };
+  }
+
+  if (wantsExplicitUI) {
+    return { type: 'code', inferred: false };
+  }
+
+  return { type: 'text', inferred: false };
 }
 
 function resolveIntent(userText) {
@@ -512,12 +523,24 @@ function buildWrappedPrompt(userInput, currentCode, resolvedIntent) {
   const intentHint = resolvedIntent?.type === 'code'
     ? '\nIntent: generate code.'
     : '';
+  const creativeHint = resolvedIntent?.type === 'creative'
+    ? `
+Creative mode:
+- Interpret ambiguity as an invitation to invent.
+- Prefer expressive, surprising, or poetic visuals.
+- Avoid generic UI patterns (forms, buttons, landing pages).
+- You may use motion, color, metaphor, or generative structure.
+- Output must still be runnable HTML.
+`
+    : '';
   if (!currentCode) {
     return `
 Output Contract:
 - Never respond with JSON, YAML, or structured objects.
 - If code is required, output raw HTML directly, without code fences or wrappers.
 - Otherwise, output plain conversational text only.
+
+${creativeHint}
 
 User message:
 ${userInput}${intentHint}
@@ -531,6 +554,8 @@ Output Contract:
 - Never respond with JSON, YAML, or structured objects.
 - If code is required, output raw HTML directly, without code fences or wrappers.
 - Otherwise, output plain conversational text only.
+
+${creativeHint}
 
 Current interface (may be reused unchanged):
 ${currentCode}
