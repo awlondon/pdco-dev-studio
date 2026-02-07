@@ -36,10 +36,15 @@
           </div>
         </section>
 
+        <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal"></div>
+
         <section id="output-panel" class="panel console-output">
           <div class="panel-header">
-            Console Output
-            <span class="panel-header-label">Live Preview</span>
+            <div class="panel-header-title">
+              Console Output
+              <span class="panel-header-label">Live Preview</span>
+            </div>
+            <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
           </div>
           <div class="panel-body">
             <div id="console-output" class="console-output-log"></div>

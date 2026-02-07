@@ -106,6 +106,12 @@ html, body {
   gap: 8px;
 }
 
+.panel-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-header-label {
   font-size: 12px;
   font-weight: 500;
@@ -158,6 +164,36 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.ghost-button {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ghost-button:hover {
+  border-color: rgba(124, 155, 255, 0.6);
+  color: var(--accent);
+}
+
+#right-pane {
+  position: relative;
+}
+
+#right-pane .splitter {
+  height: 6px;
+  cursor: row-resize;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+}
+
+#right-pane .splitter:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 #code-editor {
   flex: 1;
   background: #07070d;
@@ -185,6 +221,18 @@ button:disabled {
   overflow: hidden;
 }
 
+.preview-fullscreen {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  border-radius: 0;
+}
+
+.preview-fullscreen .panel-body {
+  flex: 1;
+}
+
 .console-output {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -208,6 +256,12 @@ button:disabled {
   width: 100%;
   height: 100%;
   border: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.console-output.loading iframe {
+  opacity: 0;
+  transform: scale(0.98);
 }
 
 .generation-indicator {

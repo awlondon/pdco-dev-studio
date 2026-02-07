@@ -7,6 +7,11 @@ const consoleOutput = document.getElementById('console-output');
 const previewFrame = document.getElementById('preview-frame');
 const statusLabel = document.getElementById('status-label');
 const generationIndicator = document.getElementById('generation-indicator');
+const splitter = document.getElementById('splitter');
+const rightPane = document.getElementById('right-pane');
+const codePanel = document.getElementById('code-panel');
+const outputPanel = document.getElementById('output-panel');
+const fullscreenToggle = document.getElementById('fullscreenToggle');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
@@ -92,7 +97,11 @@ function runGeneratedCode(code) {
   if (!previewFrame) {
     return;
   }
-  previewFrame.srcdoc = code;
+  outputPanel?.classList.add('loading');
+  setTimeout(() => {
+    previewFrame.srcdoc = code;
+    outputPanel?.classList.remove('loading');
+  }, 150);
 }
 
 function updateGenerationIndicator() {
@@ -180,6 +189,44 @@ chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   sendChat();
 });
+
+if (splitter && rightPane && codePanel && outputPanel) {
+  let isDragging = false;
+
+  splitter.addEventListener('mousedown', () => {
+    isDragging = true;
+    document.body.style.cursor = 'row-resize';
+  });
+
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+    document.body.style.cursor = '';
+  });
+
+  document.addEventListener('mousemove', (event) => {
+    if (!isDragging) {
+      return;
+    }
+
+    const rect = rightPane.getBoundingClientRect();
+    const offsetY = event.clientY - rect.top;
+    const min = 140;
+    const max = rect.height - 140;
+    const clamped = Math.max(min, Math.min(max, offsetY));
+
+    codePanel.style.flex = `0 0 ${clamped}px`;
+    outputPanel.style.flex = '1 1 auto';
+  });
+}
+
+if (fullscreenToggle && outputPanel) {
+  fullscreenToggle.addEventListener('click', () => {
+    outputPanel.classList.toggle('preview-fullscreen');
+    fullscreenToggle.textContent = outputPanel.classList.contains('preview-fullscreen')
+      ? '⤡ Exit'
+      : '⤢ Fullscreen';
+  });
+}
 
 setStatusOnline(false);
 updateGenerationIndicator();
