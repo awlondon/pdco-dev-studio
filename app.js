@@ -130,19 +130,10 @@ function isOverlyLiteral(code, text) {
 
 function buildWrappedPrompt(userInput, currentCode) {
   if (!currentCode) {
-    return `
-User message:
-${userInput}
-`;
+    return userInput;
   }
 
-  return `
-Current interface (may be reused unchanged):
-${currentCode}
-
-User message:
-${userInput}
-`;
+  return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
 }
 
 function runGeneratedCode(code) {
@@ -276,25 +267,22 @@ async function sendChat() {
         role: 'system',
         content: `You are a helpful conversational assistant.
 
-CRITICAL OUTPUT RULE:
-- You MUST return a single valid JSON object.
-- Do NOT include any text outside the JSON.
-- Do NOT use markdown.
-- Do NOT include comments.
-- The response must be parseable by JSON.parse().
+You must return a single valid JSON object.
+No text outside JSON.
 
 Schema:
 {
-  "text": "Normal conversational response to the user.",
-  "code": "A complete HTML/CSS/JS document."
+  "text": "Normal conversational response.",
+  "code": "Complete HTML/CSS/JS document.",
+  "code_unchanged": true | false
 }
 
 Rules:
-- Respond naturally in the "text" field.
-- Always include the "code" field.
-- The code may remain unchanged if no update is useful.
-- Do not explain the code unless asked.
-- Prefer minimal changes to code unless the user intent clearly benefits from an interface.`
+- Always include all fields.
+- Code may remain unchanged.
+- Do not explain code unless asked.
+- Prefer minimal output.
+- If no code changes are needed, set "code_unchanged": true and repeat the previous code verbatim.`
       },
       {
         role: 'user',
@@ -328,7 +316,7 @@ Rules:
       return;
     }
 
-    if (!parsed.text || !parsed.code) {
+    if (!parsed.text || !parsed.code || typeof parsed.code_unchanged !== 'boolean') {
       updateMessage(pendingMessageId, '⚠️ Response missing required fields.');
       return;
     }
@@ -338,8 +326,10 @@ Rules:
     }
 
     renderAssistantText(parsed.text, pendingMessageId);
+    stopLoading();
+    const codeUnchanged = parsed.code_unchanged === true;
     const nextCode = parsed.code;
-    const codeChanged = Boolean(nextCode && nextCode !== currentCode);
+    const codeChanged = !codeUnchanged && Boolean(nextCode && nextCode !== currentCode);
     if (codeChanged) {
       previousCode = currentCode;
       currentCode = nextCode;
