@@ -744,6 +744,21 @@ SANDBOX ANIMATION CONTRACT (AUTO-INJECTED, REQUIRED):
   // C) Event bounded + fallback
   if (winnerFound || SANDBOX.shouldStop()) endDemo();
   Never event-only.
+- Mandatory finalizer function:
+  function finalize(reason) { ... }
+  - reason must be one of: "frame-limit", "time-limit", "sandbox-stop", "user-reset"
+  - finalize must be idempotent, must not schedule new animation, and must render a static summary.
+- Stop-aware loop pattern example:
+  function loop() {
+    frameCount++;
+    update();
+    draw();
+    if (frameCount >= MAX_FRAMES) {
+      finalize("frame-limit");
+      return;
+    }
+    requestAnimationFrame(loop);
+  }
 - Mandatory end-of-demo report: at termination, summarize state (examples: “42 turtles remain”, “Current largest turtle is #17”, “Top 3 colors by size: …”, “Simulation stopped early due to sandbox limit”).
 - Auto-inject this scaffold when animation intent is detected (do not explain unless asked):
   const SANDBOX = {
@@ -760,6 +775,7 @@ SANDBOX ANIMATION CONTRACT (AUTO-INJECTED, REQUIRED):
   };
   // inside loop: SANDBOX.frame++;
 - If user asks for reset/run again/game/simulation/continuous, expose window.resetSimulation and window.startSimulation while honoring caps.
+- If the sandbox stops before finalize runs, ensure the last rendered frame already contains enough information to stand alone.
 
 If you generate code, include it in a single \`\`\`html code block.
 Do not include JSON, metadata, or explanations inside the code block.
