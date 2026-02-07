@@ -1492,6 +1492,159 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+/* Upgrade modal */
+.upgrade-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 18, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.upgrade-overlay.hidden {
+  display: none;
+}
+
+.upgrade-modal {
+  position: relative;
+  width: min(900px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #12141b;
+  border-radius: 14px;
+  padding: 24px 28px 28px;
+  color: #e6e8ee;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.upgrade-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: #9aa0b4;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.upgrade-close:hover {
+  color: #fff;
+}
+
+.upgrade-header h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.upgrade-subtitle {
+  margin-top: 6px;
+  color: #b6bbd3;
+  font-size: 14px;
+}
+
+.upgrade-status {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  background: #0e1017;
+  padding: 12px;
+  border-radius: 10px;
+  margin: 20px 0;
+  font-size: 13px;
+}
+
+.upgrade-status div {
+  display: flex;
+  justify-content: space-between;
+  color: #aab0c5;
+}
+
+.upgrade-status strong {
+  color: #fff;
+}
+
+.upgrade-plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.plan {
+  background: #0e1017;
+  border-radius: 12px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid #1c2030;
+}
+
+.plan h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.plan-price {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.plan ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #b6bbd3;
+}
+
+.plan ul li {
+  margin-bottom: 6px;
+}
+
+.plan-featured {
+  border-color: #4f7cff;
+  background: linear-gradient(180deg, #121c3a, #0e1017);
+}
+
+.plan-cta {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #2a2f44;
+  background: transparent;
+  color: #e6e8ee;
+  cursor: pointer;
+}
+
+.plan-cta:hover {
+  background: #1a1f33;
+}
+
+.plan-cta.primary {
+  background: #4f7cff;
+  border: none;
+  color: #fff;
+}
+
+.plan-cta.primary:hover {
+  background: #6a8dff;
+}
+
+.upgrade-footer {
+  margin-top: 18px;
+  font-size: 13px;
+  color: #9aa0b4;
+}
+
+.upgrade-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7e849b;
+}
+
 .usage-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

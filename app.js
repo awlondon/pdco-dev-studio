@@ -3913,6 +3913,33 @@ if (fullscreenToggle && consolePane) {
 
 }
 
+const upgradeModal = document.getElementById('upgradeModal');
+const upgradeCloseButton = document.querySelector('[data-upgrade-close]');
+
+const openUpgradeModal = () => {
+  if (!upgradeModal) {
+    return;
+  }
+  upgradeModal.classList.remove('hidden');
+};
+
+const closeUpgradeModal = () => {
+  if (!upgradeModal) {
+    return;
+  }
+  upgradeModal.classList.add('hidden');
+};
+
+if (upgradeCloseButton) {
+  upgradeCloseButton.addEventListener('click', () => closeUpgradeModal());
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && upgradeModal && !upgradeModal.classList.contains('hidden')) {
+    closeUpgradeModal();
+  }
+});
+
 setStatusOnline(false);
 updateGenerationIndicator();
 setPreviewStatus('Ready — auto-run enabled');

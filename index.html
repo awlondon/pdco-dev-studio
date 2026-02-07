@@ -514,6 +514,68 @@ customer.subscription.deleted → plan = free + cap remaining</code></pre>
       </div>
     </div>
 
+    <div id="upgradeModal" class="upgrade-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+      <div class="upgrade-modal" role="document">
+        <button class="upgrade-close" type="button" data-upgrade-close aria-label="Close upgrade dialog">×</button>
+
+        <header class="upgrade-header">
+          <h2 id="upgrade-title">You’re nearing your usage limit</h2>
+          <p class="upgrade-subtitle">
+            You’ve used <strong>87%</strong> of your monthly credits. Upgrading removes throttles and increases limits.
+          </p>
+        </header>
+
+        <section class="upgrade-status">
+          <div><span>Current plan</span><strong>Free</strong></div>
+          <div><span>Credits remaining</span><strong>62 / 500</strong></div>
+          <div><span>Daily throttle</span><strong>2 requests left</strong></div>
+        </section>
+
+        <section class="upgrade-plans">
+          <div class="plan">
+            <h3>Free</h3>
+            <p class="plan-price">$0</p>
+            <ul>
+              <li>500 credits / month</li>
+              <li>Strict daily throttle</li>
+              <li>Limited large generations</li>
+            </ul>
+          </div>
+
+          <div class="plan plan-featured">
+            <h3>Starter</h3>
+            <p class="plan-price">$12 / mo</p>
+            <ul>
+              <li>5,000 credits / month</li>
+              <li>Relaxed throttling</li>
+              <li>Large generations enabled</li>
+            </ul>
+            <button class="plan-cta primary" type="button">Upgrade to Starter</button>
+          </div>
+
+          <div class="plan">
+            <h3>Pro</h3>
+            <p class="plan-price">$29 / mo</p>
+            <ul>
+              <li>20,000 credits / month</li>
+              <li>Minimal throttling</li>
+              <li>Priority queue</li>
+            </ul>
+            <button class="plan-cta" type="button">Upgrade to Pro</button>
+          </div>
+        </section>
+
+        <footer class="upgrade-footer">
+          <p>
+            Credits abstract API costs. On your current usage, Starter supports ~10× more generations than Free.
+          </p>
+          <p class="upgrade-note">
+            Billing handled securely via Stripe. Cancel anytime.
+          </p>
+        </footer>
+      </div>
+    </div>
+
     <div id="usage-modal" class="usage-modal hidden" role="dialog" aria-modal="true" aria-label="Usage analytics">
       <div class="usage-panel">
         <div class="usage-header">
