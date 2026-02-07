@@ -562,9 +562,19 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.message.assistant-thinking {
-  opacity: 0.75;
+.message.assistant.thinking {
+  opacity: 0.55;
   font-style: italic;
+  animation: fadeIn 0.25s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.55;
+  }
 }
 
 .message .assistant-meta {

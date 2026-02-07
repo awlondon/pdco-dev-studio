@@ -37,6 +37,40 @@ const promoteButton = document.getElementById('promoteButton');
 const SANDBOX_TIMEOUT_MS = 4500;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
+const GENERATION_PHASES = [
+  {
+    afterMs: 2500,
+    messages: [
+      'Laying out the structure…',
+      'Sketching the interface…',
+      'Planning visual components…'
+    ]
+  },
+  {
+    afterMs: 8000,
+    messages: [
+      'Refining interactions and layout…',
+      'Balancing structure with visuals…',
+      'Resolving component relationships…'
+    ]
+  },
+  {
+    afterMs: 20000,
+    messages: [
+      'This is a more complex build — working through details…',
+      'Handling multiple layers of logic and presentation…',
+      'Making sure pieces fit together cleanly…'
+    ]
+  },
+  {
+    afterMs: 45000,
+    messages: [
+      'This is a heavy request — taking extra care to get it right…',
+      'Finalizing a larger-than-usual generation…',
+      'Almost there — finishing the remaining pieces…'
+    ]
+  }
+];
 
 const defaultInterfaceCode = `<!doctype html>
 <html>
@@ -351,43 +385,75 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
-function startGenerationNarration(pendingMessageId) {
-  const messages = [
-    'Thinking through the structure…',
-    'Sketching the interface layout…',
-    'Generating visual elements…',
-    'Refining the details…'
-  ];
-
-  let index = 0;
+function createGenerationNarrator({
+  addMessage,
+  minInterval = 1000,
+  maxInterval = 2500
+}) {
+  let startTime = null;
+  let timerId = null;
   let stopped = false;
 
-  const intervalId = setInterval(() => {
+  function pick(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function scheduleNext() {
+    const delay =
+      minInterval + Math.random() * (maxInterval - minInterval);
+
+    timerId = setTimeout(tick, delay);
+  }
+
+  function tick() {
     if (stopped || chatFinalized) {
-      clearInterval(intervalId);
       return;
     }
 
-    const msg = document.createElement('div');
-    msg.className = 'message assistant assistant-thinking';
-    msg.textContent = messages[index % messages.length];
-    msg.dataset.ephemeral = 'true';
-    msg.dataset.pendingMessageId = pendingMessageId;
+    const elapsed = performance.now() - startTime;
 
-    chatMessages.appendChild(msg);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    let phaseIndex = -1;
+    for (let i = 0; i < GENERATION_PHASES.length; i += 1) {
+      if (elapsed >= GENERATION_PHASES[i].afterMs) {
+        phaseIndex = i;
+      }
+    }
 
-    index += 1;
-  }, 1200);
+    if (phaseIndex >= 0) {
+      const pool = GENERATION_PHASES[phaseIndex].messages;
+      const text = pick(pool);
+      const messageId = addMessage('assistant', `<em>${text}</em>`, { className: 'thinking' });
+      const messageEl = document.querySelector(`[data-id="${messageId}"]`);
+      if (messageEl) {
+        messageEl.dataset.ephemeral = 'true';
+      }
+    }
 
-  return () => {
-    stopped = true;
-    clearInterval(intervalId);
+    scheduleNext();
+  }
 
-    document
-      .querySelectorAll('.assistant-thinking[data-ephemeral="true"]')
-      .forEach((el) => el.remove());
+  return {
+    start() {
+      startTime = performance.now();
+      stopped = false;
+      scheduleNext();
+    },
+    stop() {
+      stopped = true;
+      if (timerId) {
+        clearTimeout(timerId);
+      }
+      document
+        .querySelectorAll('.message.assistant.thinking[data-ephemeral="true"]')
+        .forEach((el) => el.remove());
+    }
   };
+}
+
+function startGenerationNarration() {
+  const narrator = createGenerationNarrator({ addMessage });
+  narrator.start();
+  return () => narrator.stop();
 }
 
 function renderAssistantMessage(messageId, text, metadata) {
@@ -1079,7 +1145,7 @@ async function sendChat() {
   );
   currentTurnMessageId = pendingMessageId;
   chatFinalized = false;
-  const stopNarration = startGenerationNarration(pendingMessageId);
+  const stopNarration = startGenerationNarration();
 
   setStatusOnline(false);
   startLoading();
