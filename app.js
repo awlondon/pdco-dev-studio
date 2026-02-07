@@ -34,6 +34,7 @@ const sandboxStopButton = document.getElementById('sandboxStop');
 const runButton = document.getElementById('runCode');
 const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
+const copyCodeBtn = document.getElementById('copyCodeBtn');
 const SANDBOX_TIMEOUT_MS = 4500;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
@@ -78,6 +79,29 @@ const defaultInterfaceCode = `<!doctype html>
 <div id="app"></div>
 </body>
 </html>`;
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+}
 
 function updateLineNumbers() {
   if (!codeEditor || !lineNumbersEl || !lineCountEl) {
@@ -343,6 +367,26 @@ if (stt && micButton && chatInput) {
   micButton.style.display = 'none';
 }
 
+if (copyCodeBtn && codeEditor) {
+  copyCodeBtn.addEventListener('click', async () => {
+    const success = await copyToClipboard(codeEditor.value);
+    if (!success) {
+      return;
+    }
+    if (navigator.vibrate) {
+      navigator.vibrate(15);
+    }
+    copyCodeBtn.classList.add('copied');
+    copyCodeBtn.textContent = '✓';
+    copyCodeBtn.title = 'Copied!';
+    setTimeout(() => {
+      copyCodeBtn.textContent = '📋';
+      copyCodeBtn.classList.remove('copied');
+      copyCodeBtn.title = 'Copy code';
+    }, 1200);
+  });
+}
+
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
   statusLabel.classList.toggle('online', isOnline);
@@ -376,12 +420,52 @@ function addMessage(role, html, options = {}) {
   return id;
 }
 
+function attachCopyButton(messageEl, getTextFn) {
+  if (!messageEl || messageEl.querySelector('.chat-copy-btn')) {
+    return;
+  }
+  const btn = document.createElement('button');
+  btn.className = 'chat-copy-btn';
+  btn.innerHTML = '📋';
+  btn.title = 'Copy';
+
+  btn.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const success = await copyToClipboard(getTextFn());
+    if (!success) {
+      return;
+    }
+    if (navigator.vibrate) {
+      navigator.vibrate(15);
+    }
+    btn.innerHTML = '✓';
+    btn.classList.add('copied');
+    btn.title = 'Copied!';
+    setTimeout(() => {
+      btn.innerHTML = '📋';
+      btn.classList.remove('copied');
+      btn.title = 'Copy';
+    }, 1200);
+  });
+
+  messageEl.appendChild(btn);
+}
+
+function getMessageCopyText(messageEl) {
+  const clone = messageEl.cloneNode(true);
+  clone.querySelectorAll('.assistant-meta, .chat-copy-btn').forEach((el) => el.remove());
+  return clone.innerText.replace(/✓|📋/g, '').trim();
+}
+
 function appendMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}${options.className ? ` ${options.className}` : ''}`;
   message.textContent = content;
   chatMessages.appendChild(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  if (role === 'user') {
+    attachCopyButton(message, () => content);
+  }
   return message;
 }
 
@@ -546,6 +630,10 @@ function renderAssistantMessage(messageId, text, metadata) {
     if (button) {
       metaEl.appendChild(button);
     }
+  }
+
+  if (messageEl) {
+    attachCopyButton(messageEl, () => getMessageCopyText(messageEl));
   }
 }
 
