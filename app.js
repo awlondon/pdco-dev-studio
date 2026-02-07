@@ -82,6 +82,23 @@ function setStatusOnline(isOnline) {
   statusLabel.classList.toggle('online', isOnline);
 }
 
+function addMessage(role, html, options = {}) {
+  const message = document.createElement('div');
+  message.className = `message ${role}${options.className ? ` ${options.className}` : ''}`;
+  message.innerHTML = html;
+
+  if (options.pending) {
+    message.dataset.pending = 'true';
+  }
+
+  const id = crypto.randomUUID();
+  message.dataset.id = id;
+
+  chatMessages.appendChild(message);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return id;
+}
+
 function appendMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}${options.className ? ` ${options.className}` : ''}`;
@@ -91,21 +108,45 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
-function renderAssistantText(text) {
+function updateMessage(id, newHtml) {
+  const message = document.querySelector(`[data-id="${id}"]`);
+  if (!message) {
+    return;
+  }
+  message.innerHTML = newHtml;
+  delete message.dataset.pending;
+}
+
+function escapeHtml(value) {
+  const div = document.createElement('div');
+  div.textContent = value;
+  return div.innerHTML;
+}
+
+function formatAssistantHtml(text) {
   const match = text.match(/^(.*?)(\s*\([^)]*\))$/);
   if (!match) {
-    appendMessage('assistant', text);
-    return;
+    return escapeHtml(text);
   }
 
   const [, main, aside] = match;
   const mainText = main.trim();
   const asideText = aside.trim();
 
-  if (mainText) {
-    appendMessage('assistant', mainText);
+  if (!mainText) {
+    return `<span class="assistant-aside">${escapeHtml(asideText)}</span>`;
   }
-  appendMessage('assistant', asideText, { className: 'assistant-aside' });
+
+  return `${escapeHtml(mainText)} <span class="assistant-aside">${escapeHtml(asideText)}</span>`;
+}
+
+function renderAssistantText(text, messageId) {
+  if (messageId) {
+    updateMessage(messageId, formatAssistantHtml(text));
+    return;
+  }
+
+  appendMessage('assistant', text);
 }
 
 function appendOutput(content, variant = 'success') {
@@ -263,7 +304,11 @@ async function sendChat() {
   chatInput.value = '';
   appendMessage('user', prompt);
 
-  const assistantBubble = appendMessage('assistant', '');
+  const pendingMessageId = addMessage(
+    'assistant',
+    '<em>Generating text + code…</em>',
+    { pending: true }
+  );
 
   sendButton.disabled = true;
   setStatusOnline(false);
@@ -325,8 +370,7 @@ Behavior rules:
     try {
       parsed = JSON.parse(reply);
     } catch {
-      assistantBubble.remove();
-      appendMessage('assistant', reply.trim());
+      updateMessage(pendingMessageId, formatAssistantHtml(reply.trim()));
       if (interfaceStatus) {
         interfaceStatus.textContent = 'Interface unchanged';
         interfaceStatus.className = 'interface-status unchanged';
@@ -335,8 +379,7 @@ Behavior rules:
     }
 
     if (!parsed.text || !parsed.code) {
-      assistantBubble.remove();
-      appendMessage('assistant', '⚠️ Response missing required fields.');
+      updateMessage(pendingMessageId, '⚠️ Response missing required fields.');
       return;
     }
 
@@ -344,8 +387,7 @@ Behavior rules:
       console.warn('⚠️ Literal UI detected — consider prompting expressive response');
     }
 
-    assistantBubble.remove();
-    renderAssistantText(parsed.text);
+    renderAssistantText(parsed.text, pendingMessageId);
     const nextCode = parsed.code;
     const codeChanged = Boolean(nextCode && nextCode !== currentCode);
     if (codeChanged) {
@@ -378,8 +420,10 @@ Behavior rules:
     lastUserIntent = prompt;
     updateGenerationIndicator();
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unexpected error.';
-    appendMessage('system', message);
+    updateMessage(
+      pendingMessageId,
+      '<em>⚠️ Something went wrong while generating the response.</em>'
+    );
   } finally {
     stopLoading();
     sendButton.disabled = false;

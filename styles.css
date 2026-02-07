@@ -360,9 +360,14 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.message.assistant.assistant-aside {
+.message .assistant-aside {
   font-style: italic;
   opacity: 0.7;
+}
+
+.message em {
+  opacity: 0.6;
+  font-style: italic;
 }
 
 .message.system {
