@@ -201,6 +201,14 @@ function renderAssistantText(text, messageId) {
   appendMessage('assistant', text);
 }
 
+function formatGenerationMetadata(durationMs) {
+  if (durationMs > 1500) {
+    const seconds = (durationMs / 1000).toFixed(1);
+    return `— Generated in ${seconds} s · Auto-run enabled`;
+  }
+  return `— Generated in ${Math.round(durationMs)} ms · Auto-run enabled`;
+}
+
 function appendOutput(content, variant = 'success') {
   const line = document.createElement('div');
   line.className = `output-line ${variant}`;
@@ -526,6 +534,7 @@ async function sendChat() {
   startLoading();
 
   try {
+    const llmStartTime = performance.now();
     const systemBase = `You are a helpful conversational assistant.
 
 You are an assistant embedded in an interactive web-based development environment.
@@ -755,6 +764,8 @@ When making interface changes, respond with plain text plus an optional \`\`\`ht
     });
 
     const data = await res.json();
+    const llmEndTime = performance.now();
+    const generationMetadata = formatGenerationMetadata(llmEndTime - llmStartTime);
 
     if (!res.ok) {
       throw new Error(data?.error || 'Unable to reach the chat service.');
@@ -774,9 +785,9 @@ When making interface changes, respond with plain text plus an optional \`\`\`ht
     const hasCode = Boolean(nextCode);
 
     if (chatText) {
-      renderAssistantText(chatText, pendingMessageId);
+      renderAssistantText(`${chatText}\n\n${generationMetadata}`, pendingMessageId);
     } else {
-      updateMessage(pendingMessageId, '');
+      renderAssistantText(generationMetadata, pendingMessageId);
       if (hasCode) {
         setPreviewStatus('Running interactive scene…');
       }
