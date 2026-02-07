@@ -22,6 +22,10 @@ const loadingIndicator = document.getElementById('loadingIndicator');
 const codeIntentBadge = document.getElementById('codeIntentBadge');
 const executionWarnings = document.getElementById('executionWarnings');
 const runButton = document.getElementById('runCode');
+const EXECUTION_TIMEOUT_MS = 5000;
+const MAX_RAF = 600;
+const MAX_INTERVALS = 25;
+const MAX_TIMEOUTS = 50;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
@@ -42,9 +46,10 @@ let editorDirty = false;
 let lastUpdateSource = 'llm';
 let previewIframe = null;
 let previewTimeoutId = null;
-let previewHeavyTimer = null;
+let previewKillSwitchId = null;
 let pendingExecution = null;
 let awaitingConfirmation = false;
+let sandboxListenerBound = false;
 const CODE_INTENT_PATTERNS = [
   /build|create|make|generate/i,
   /show|visualize|diagram|chart|graph|ui|interface|layout/i,
@@ -255,19 +260,11 @@ function analyzeCodeForExecution(code, debugIntent = false) {
     allowed = false;
   }
 
-  const limits = {
-    maxFrames: executionProfile === 'animation' || executionProfile === 'canvas-sim' ? 300 : 120,
-    maxTimeMs: executionProfile === 'canvas-sim' ? 2500 : 2000,
-    allowRAF: flags.hasRAF,
-    allowCanvas: flags.hasCanvas
-  };
-
   if (debugIntent) {
     console.groupCollapsed('🧪 Execution analysis');
     console.log('Profile:', executionProfile);
     console.log('Allowed:', allowed);
     console.log('Flags:', flags);
-    console.log('Limits:', limits);
     console.log('Warnings:', warnings);
     console.groupEnd();
   }
@@ -275,7 +272,6 @@ function analyzeCodeForExecution(code, debugIntent = false) {
   return {
     allowed,
     executionProfile,
-    limits,
     warnings
   };
 }
@@ -344,36 +340,34 @@ function runEditorCode() {
   setExecutionWarnings(analysis.warnings);
   if (!analysis.allowed) {
     setPreviewStatus('Execution blocked — update the code to continue');
-    setPreviewExecutionStatus('stopped', 'Stopped');
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (blocked)');
+    appendOutput('Execution blocked due to a blocking loop.', 'error');
     return;
   }
-  setPreviewExecutionStatus('preparing', 'Preparing');
-  renderToIframe(wrappedUserCode, analysis);
+  setPreviewExecutionStatus('running', '🟢 Running…');
+  renderToIframe(wrappedUserCode);
 }
 
-function injectFrameGuard(html, limits) {
-  const maxFrames = limits?.maxFrames ?? 300;
-  const maxTimeMs = limits?.maxTimeMs ?? 2000;
-  const allowRAF = limits?.allowRAF ?? true;
-  const guardScript = `<script>(function(){let __frameCount=0;const __maxFrames=${maxFrames};const __start=performance.now();const __maxTime=${maxTimeMs};const __raf=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=function(fn){if(!${allowRAF}){throw new Error('requestAnimationFrame not allowed');}if(__frameCount++>__maxFrames){throw new Error('Frame limit exceeded');}if(performance.now()-__start>__maxTime){throw new Error('Time limit exceeded');}return __raf(fn);};const __interval=window.setInterval.bind(window);window.setInterval=function(fn,delay,...rest){const wrapped=function(){if(performance.now()-__start>__maxTime){throw new Error('Time limit exceeded');}return fn();};return __interval(wrapped,delay,...rest);};})();</script>`;
+function injectSafetyLayer(html) {
+  const safetyScript = `<script>(function(){const EXECUTION_TIMEOUT_MS=${EXECUTION_TIMEOUT_MS};const MAX_RAF=${MAX_RAF};const MAX_INTERVALS=${MAX_INTERVALS};const MAX_TIMEOUTS=${MAX_TIMEOUTS};let rafCount=0;let intervalCount=0;let timeoutCount=0;let logCount=0;const post=(payload)=>{try{parent.postMessage(payload,'*');}catch(error){}};const killTimer=setTimeout(()=>{post({type:'SANDBOX_TIMEOUT'});throw new Error('Sandbox execution timeout');},EXECUTION_TIMEOUT_MS);const clearKill=()=>{clearTimeout(killTimer);};window.addEventListener('load',()=>{setTimeout(clearKill,0);});const originalRAF=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=function(cb){rafCount++;if(rafCount>MAX_RAF){post({type:'SANDBOX_RAF_LIMIT'});throw new Error('RAF limit exceeded');}return originalRAF(cb);};const originalSetInterval=window.setInterval.bind(window);window.setInterval=function(fn,delay,...rest){intervalCount++;if(intervalCount>MAX_INTERVALS){post({type:'SANDBOX_INTERVAL_LIMIT'});throw new Error('Too many intervals');}return originalSetInterval(fn,delay,...rest);};const originalSetTimeout=window.setTimeout.bind(window);window.setTimeout=function(fn,delay,...rest){timeoutCount++;if(timeoutCount>MAX_TIMEOUTS){post({type:'SANDBOX_TIMEOUT_LIMIT'});throw new Error('Too many timeouts');}return originalSetTimeout(fn,delay,...rest);};const originalLog=console.log.bind(console);console.log=(...args)=>{logCount++;if(logCount>200){return;}if(args.length>1000){return;}originalLog(...args);};window.addEventListener('error',(event)=>{post({type:'SANDBOX_ERROR',message:event.message});});window.addEventListener('unhandledrejection',(event)=>{const message=event.reason?.message||String(event.reason);post({type:'SANDBOX_ERROR',message});});})();</script>`;
   if (/<head[^>]*>/i.test(html)) {
-    return html.replace(/<head[^>]*>/i, (match) => `${match}\n${guardScript}`);
+    return html.replace(/<head[^>]*>/i, (match) => `${match}\n${safetyScript}`);
   }
   if (/<body[^>]*>/i.test(html)) {
-    return html.replace(/<body[^>]*>/i, (match) => `${match}\n${guardScript}`);
+    return html.replace(/<body[^>]*>/i, (match) => `${match}\n${safetyScript}`);
   }
-  return `${guardScript}\n${html}`;
+  return `${safetyScript}\n${html}`;
 }
 
 function resetPreviewTimers() {
   if (previewTimeoutId) {
     clearTimeout(previewTimeoutId);
   }
-  if (previewHeavyTimer) {
-    clearTimeout(previewHeavyTimer);
-  }
   previewTimeoutId = null;
-  previewHeavyTimer = null;
+  if (previewKillSwitchId) {
+    clearTimeout(previewKillSwitchId);
+  }
+  previewKillSwitchId = null;
 }
 
 function createSandboxedIframe() {
@@ -383,53 +377,94 @@ function createSandboxedIframe() {
   return iframe;
 }
 
-function renderToIframe(html, analysis) {
+function destroyPreviewIframe() {
+  if (previewIframe) {
+    previewIframe.remove();
+    previewIframe = null;
+  }
+  resetPreviewTimers();
+  outputPanel?.classList.remove('loading');
+}
+
+function handleSandboxMessage(event) {
+  if (!previewIframe || event.source !== previewIframe.contentWindow) {
+    return;
+  }
+  const messageType = event?.data?.type;
+  if (!messageType) {
+    return;
+  }
+
+  if (messageType === 'SANDBOX_RAF_LIMIT') {
+    setPreviewExecutionStatus('capped', '🟡 Capped animation');
+    setPreviewStatus('Animation cap reached — sandbox stopped.');
+    appendOutput('RAF limit exceeded — sandbox stopped.', 'error');
+    destroyPreviewIframe();
+    return;
+  }
+
+  if (messageType === 'SANDBOX_TIMEOUT') {
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (timeout)');
+    setPreviewStatus('Execution timed out — sandbox stopped.');
+    appendOutput('Sandbox execution timeout.', 'error');
+    destroyPreviewIframe();
+    return;
+  }
+
+  if (messageType.endsWith('_LIMIT') || messageType === 'SANDBOX_ERROR') {
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (error)');
+    setPreviewStatus('Execution error — sandbox stopped.');
+    const errorMessage = event?.data?.message
+      ? `Sandbox error: ${event.data.message}`
+      : 'Sandbox error.';
+    appendOutput(errorMessage, 'error');
+    destroyPreviewIframe();
+  }
+}
+
+function ensureSandboxListener() {
+  if (sandboxListenerBound) {
+    return;
+  }
+  window.addEventListener('message', handleSandboxMessage);
+  sandboxListenerBound = true;
+}
+
+function renderToIframe(html) {
   console.log('🖼️ Rendering to iframe');
   if (!previewFrameContainer) {
     return;
   }
 
+  ensureSandboxListener();
   const nonce = Date.now();
-  const limits = analysis?.limits ?? {
-    maxFrames: 300,
-    maxTimeMs: 2000,
-    allowRAF: true,
-    allowCanvas: false
-  };
-  const guardedHtml = injectFrameGuard(html, limits);
+  const guardedHtml = injectSafetyLayer(html);
   const wrappedHtml = `<!-- generation:${nonce} -->\n${guardedHtml}`;
 
-  resetPreviewTimers();
-  previewFrameContainer.innerHTML = '';
+  destroyPreviewIframe();
   previewIframe = createSandboxedIframe();
   previewFrameContainer.appendChild(previewIframe);
   outputPanel?.classList.add('loading');
 
-  previewTimeoutId = setTimeout(() => {
-    if (previewIframe) {
-      previewIframe.remove();
-      previewIframe = null;
-    }
-    if (previewHeavyTimer) {
-      clearTimeout(previewHeavyTimer);
-      previewHeavyTimer = null;
-    }
-    outputPanel?.classList.remove('loading');
-    setPreviewExecutionStatus('stopped', 'Stopped (timeout)');
-  }, limits.maxTimeMs + 200);
+  setPreviewExecutionStatus('running', '🟢 Running…');
+  setPreviewStatus('Sandbox running…');
 
-  previewHeavyTimer = setTimeout(() => {
-    setPreviewExecutionStatus('heavy', 'Heavy load');
-  }, Math.min(1200, Math.round(limits.maxTimeMs * 0.6)));
+  previewTimeoutId = setTimeout(() => {
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (timeout)');
+    setPreviewStatus('Execution timed out — sandbox stopped.');
+    appendOutput('Sandbox execution timeout.', 'error');
+    destroyPreviewIframe();
+  }, EXECUTION_TIMEOUT_MS);
+
+  previewKillSwitchId = setTimeout(() => {
+    setPreviewExecutionStatus('stopped', '🔴 Stopped (timeout)');
+    setPreviewStatus('Execution timed out — sandbox stopped.');
+    appendOutput('Sandbox hard stop triggered.', 'error');
+    destroyPreviewIframe();
+  }, EXECUTION_TIMEOUT_MS + 500);
 
   previewIframe.onload = () => {
-    resetPreviewTimers();
     outputPanel?.classList.remove('loading');
-    if (analysis?.executionProfile === 'static') {
-      setPreviewExecutionStatus('completed', 'Completed');
-    } else {
-      setPreviewExecutionStatus('running', 'Running');
-    }
   };
 
   previewIframe.srcdoc = wrappedHtml;

@@ -285,6 +285,12 @@ button:disabled {
   background: rgba(34, 197, 94, 0.12);
 }
 
+.preview-execution-status.capped {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.12);
+}
+
 .preview-execution-status.heavy {
   color: #f59e0b;
   border-color: rgba(245, 158, 11, 0.4);
