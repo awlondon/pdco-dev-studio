@@ -129,11 +129,16 @@ const TOKENS_PER_CREDIT = 250;
 const CREDIT_BAND_MIN = 0.7;
 const CREDIT_BAND_MAX = 1.3;
 const CREDIT_WARNING_THRESHOLD = 0.5;
-const LOW_CREDIT_WARNING_THRESHOLD = 3;
-const SOFT_WARNING_THRESHOLD = 0.3;
-const HARD_WARNING_THRESHOLD = 0.1;
-const UPGRADE_NUDGE_KEY = 'mayaUpgradeNudgeShown';
-const LOW_CREDIT_WARNING_KEY = 'mayaLowCreditWarningShown';
+const MONTHLY_SOFT_USAGE_THRESHOLD = 0.5;
+const MONTHLY_FIRM_USAGE_THRESHOLD = 0.85;
+const DAILY_SOFT_USAGE_THRESHOLD = 0.7;
+const NUDGE_SESSION_KEY = 'mayaNudgeSessionShown';
+const NUDGE_STATE_KEY = 'mayaNudgeState';
+const NUDGE_DISMISS_MS = 7 * 24 * 60 * 60 * 1000;
+const THROTTLE_HIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const LARGE_GENERATION_TOKEN_THRESHOLD = 2400;
+const LARGE_GENERATION_COUNT_THRESHOLD = 3;
+const LARGE_GENERATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const ANALYTICS_CACHE_TTL_MS = 45 * 1000;
 const ANALYTICS_TIMEOUT_MS = 3000;
@@ -174,6 +179,79 @@ const analyticsModalState = {
   data: null,
   watchdogId: null
 };
+
+const NUDGE_COPY = {
+  monthly_soft: {
+    inApp: {
+      message:
+        'Heads up: you’re about halfway through your monthly credits. Pro users get higher limits and faster generations.',
+      primaryCta: 'View plans'
+    },
+    email: {
+      subject: 'You’re building fast — want more room?',
+      body: 'You generated 14 interactive UIs this month. Pro plans unlock higher limits and faster generations.'
+    }
+  },
+  daily_soft: {
+    inApp: {
+      message:
+        'You’re past 70% of today’s credits. Pro plans raise daily limits to keep momentum up.',
+      primaryCta: 'View plans'
+    },
+    email: {
+      subject: 'Daily limits are getting tight',
+      body: 'You’re moving quickly. Pro plans unlock higher daily caps and more uninterrupted runs.'
+    }
+  },
+  large_soft: {
+    inApp: {
+      message:
+        'You’ve run a few large generations. Pro gives you more headroom for complex builds.',
+      primaryCta: 'View plans'
+    },
+    email: {
+      subject: 'Handling bigger generations?',
+      body: 'Looks like you’re running larger builds. Pro keeps large generations smooth with higher limits.'
+    }
+  },
+  monthly_firm: {
+    inApp: {
+      message:
+        'You’re close to your monthly limit. Upgrade now to avoid interruptions on complex generations.',
+      primaryCta: 'Upgrade',
+      secondaryCta: 'Remind me later'
+    },
+    email: {
+      subject: 'Don’t let limits interrupt your next build',
+      body: 'You have 15% of your monthly credits left. Upgrade for uninterrupted generations.'
+    }
+  },
+  daily_firm: {
+    inApp: {
+      message:
+        'You’ve hit daily throttles a couple times this week. Upgrade to remove most slowdowns.',
+      primaryCta: 'Upgrade',
+      secondaryCta: 'Remind me later'
+    },
+    email: {
+      subject: 'Daily throttles are slowing you down',
+      body: 'Upgrade for higher daily limits and fewer slowdowns.'
+    }
+  },
+  hard_stop: {
+    inApp: {
+      message:
+        'You’ve hit your monthly limit. Upgrade to keep generating today.',
+      primaryCta: 'Upgrade'
+    },
+    email: {
+      subject: 'You’ve hit your monthly limit',
+      body: 'Your credits reset next month. Upgrade to keep generating now.'
+    }
+  }
+};
+
+let lastRequestThrottled = false;
 
 function withTimeout(promise, timeoutMs, message) {
   let timeoutId;
@@ -302,6 +380,134 @@ function getCreditState() {
     todayCreditsUsed: Number.isFinite(todayCreditsUsed) ? todayCreditsUsed : null,
     dailyResetTime
   };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getCreditUsagePercent(remaining, total) {
+  if (!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) {
+    return null;
+  }
+  const used = (total - remaining) / total;
+  return clamp(used, 0, 1);
+}
+
+function getDailyUsagePercent(used, limit) {
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) {
+    return null;
+  }
+  return clamp(used / limit, 0, 1);
+}
+
+function loadNudgeState(userId) {
+  if (!userId || !window.localStorage) {
+    return {
+      user_id: userId || null,
+      last_nudge_type: null,
+      last_nudge_at: 0,
+      dismissed_until: 0,
+      throttle_hits: [],
+      large_generations: []
+    };
+  }
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(NUDGE_STATE_KEY) || '{}');
+    if (stored.user_id !== userId) {
+      return {
+        user_id: userId,
+        last_nudge_type: null,
+        last_nudge_at: 0,
+        dismissed_until: 0,
+        throttle_hits: [],
+        large_generations: []
+      };
+    }
+    return {
+      user_id: userId,
+      last_nudge_type: stored.last_nudge_type ?? null,
+      last_nudge_at: stored.last_nudge_at ?? 0,
+      dismissed_until: stored.dismissed_until ?? 0,
+      throttle_hits: Array.isArray(stored.throttle_hits) ? stored.throttle_hits : [],
+      large_generations: Array.isArray(stored.large_generations) ? stored.large_generations : []
+    };
+  } catch {
+    return {
+      user_id: userId,
+      last_nudge_type: null,
+      last_nudge_at: 0,
+      dismissed_until: 0,
+      throttle_hits: [],
+      large_generations: []
+    };
+  }
+}
+
+function saveNudgeState(state) {
+  if (!state || !window.localStorage) {
+    return;
+  }
+  window.localStorage.setItem(NUDGE_STATE_KEY, JSON.stringify(state));
+}
+
+function pruneTimestamps(entries, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  return entries.filter((timestamp) => timestamp >= cutoff);
+}
+
+function recordThrottleHit(userId) {
+  if (!userId) {
+    return null;
+  }
+  const state = loadNudgeState(userId);
+  state.throttle_hits = pruneTimestamps(state.throttle_hits, THROTTLE_HIT_WINDOW_MS);
+  state.throttle_hits.push(Date.now());
+  saveNudgeState(state);
+  return state;
+}
+
+function recordLargeGeneration(userId, tokenEstimate) {
+  if (!userId) {
+    return null;
+  }
+  if (!Number.isFinite(tokenEstimate) || tokenEstimate < LARGE_GENERATION_TOKEN_THRESHOLD) {
+    return null;
+  }
+  const state = loadNudgeState(userId);
+  state.large_generations = pruneTimestamps(state.large_generations, LARGE_GENERATION_WINDOW_MS);
+  state.large_generations.push(Date.now());
+  saveNudgeState(state);
+  return state;
+}
+
+function hasNudgeCooldown(state) {
+  if (!state) {
+    return false;
+  }
+  return Number.isFinite(state.dismissed_until) && state.dismissed_until > Date.now();
+}
+
+function hasShownNudgeThisSession() {
+  return Boolean(window.sessionStorage?.getItem(NUDGE_SESSION_KEY));
+}
+
+function markNudgeShown(state, type) {
+  if (!state) {
+    return;
+  }
+  state.last_nudge_type = type;
+  state.last_nudge_at = Date.now();
+  saveNudgeState(state);
+  window.sessionStorage?.setItem(NUDGE_SESSION_KEY, 'true');
+}
+
+function markNudgeDismissed(state) {
+  if (!state) {
+    return;
+  }
+  state.dismissed_until = Date.now() + NUDGE_DISMISS_MS;
+  saveNudgeState(state);
 }
 
 function computeThrottleState({
@@ -1325,18 +1531,33 @@ function updateCreditBadge({ remaining, total, plan }) {
   }
   const iconEl = creditBadge.querySelector('.icon');
   const countEl = creditBadge.querySelector('.count');
+  const tooltipEl = creditBadge.querySelector('.credit-badge-tooltip');
   if (iconEl) {
     iconEl.textContent = plan?.toLowerCase() === 'free' ? '🟢' : '💎';
   }
   if (countEl && Number.isFinite(remaining)) {
     countEl.textContent = `${remaining.toLocaleString()} credits`;
   }
-  if (Number.isFinite(remaining) && Number.isFinite(total) && total > 0) {
-    const ratio = remaining / total;
-    creditBadge.classList.toggle('low', ratio < 0.2);
-    creditBadge.classList.toggle('warn', ratio < 0.4);
+  const usagePercent = getCreditUsagePercent(remaining, total);
+  if (usagePercent !== null) {
+    creditBadge.classList.remove('badge-soft', 'badge-firm', 'badge-hard');
+    if (usagePercent >= 1) {
+      creditBadge.classList.add('badge-hard');
+    } else if (usagePercent >= MONTHLY_FIRM_USAGE_THRESHOLD) {
+      creditBadge.classList.add('badge-firm');
+    } else if (usagePercent >= MONTHLY_SOFT_USAGE_THRESHOLD) {
+      creditBadge.classList.add('badge-soft');
+    }
+    if (tooltipEl) {
+      const percent = Math.round(usagePercent * 100);
+      tooltipEl.textContent =
+        `You’ve used ${percent}% of your monthly credits. Upgrade for uninterrupted generation.`;
+    }
   } else {
-    creditBadge.classList.remove('low', 'warn');
+    creditBadge.classList.remove('badge-soft', 'badge-firm', 'badge-hard');
+    if (tooltipEl) {
+      tooltipEl.textContent = 'Credits power generations. Resets monthly.';
+    }
   }
 }
 
@@ -1367,17 +1588,125 @@ function updateCreditPanel(state) {
   }
 }
 
+function getInlineNudgeCandidate(state, throttle) {
+  const context = getUserContext();
+  if (!context.id) {
+    return null;
+  }
+  const nudgeState = loadNudgeState(context.id);
+  nudgeState.throttle_hits = pruneTimestamps(nudgeState.throttle_hits, THROTTLE_HIT_WINDOW_MS);
+  nudgeState.large_generations = pruneTimestamps(
+    nudgeState.large_generations,
+    LARGE_GENERATION_WINDOW_MS
+  );
+  saveNudgeState(nudgeState);
+
+  if (hasShownNudgeThisSession() || hasNudgeCooldown(nudgeState)) {
+    return null;
+  }
+
+  const usagePercent = getCreditUsagePercent(state.remainingCredits, state.creditsTotal);
+  const dailyPercent = getDailyUsagePercent(state.todayCreditsUsed, state.dailyLimit);
+  const throttleHits = nudgeState.throttle_hits.length;
+  const largeGenerations = nudgeState.large_generations.length;
+
+  let type = null;
+  if (state.isFreeTier && usagePercent !== null && usagePercent >= 1) {
+    type = 'hard_stop';
+  } else if (usagePercent !== null && usagePercent >= MONTHLY_FIRM_USAGE_THRESHOLD) {
+    type = 'monthly_firm';
+  } else if (throttleHits >= 2) {
+    type = 'daily_firm';
+  } else if (usagePercent !== null && usagePercent >= MONTHLY_SOFT_USAGE_THRESHOLD) {
+    type = 'monthly_soft';
+  } else if (dailyPercent !== null && dailyPercent >= DAILY_SOFT_USAGE_THRESHOLD) {
+    type = 'daily_soft';
+  } else if (largeGenerations >= LARGE_GENERATION_COUNT_THRESHOLD) {
+    type = 'large_soft';
+  }
+
+  if (!type || nudgeState.last_nudge_type === type) {
+    return null;
+  }
+
+  const copy = NUDGE_COPY[type]?.inApp;
+  if (!copy) {
+    return null;
+  }
+
+  return {
+    type,
+    copy,
+    state: nudgeState,
+    throttle
+  };
+}
+
+function buildInlineNudgeElement(nudge) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'usage-nudge';
+  wrapper.dataset.nudgeType = nudge.type;
+
+  const message = document.createElement('div');
+  message.className = 'usage-nudge-message';
+  message.textContent = nudge.copy.message;
+  wrapper.appendChild(message);
+
+  const actions = document.createElement('div');
+  actions.className = 'usage-nudge-actions';
+
+  const primary = document.createElement('button');
+  primary.type = 'button';
+  primary.className = 'ghost-button usage-nudge-primary';
+  primary.textContent = nudge.copy.primaryCta;
+  primary.addEventListener('click', () => openStripeCheckout('subscription'));
+  actions.appendChild(primary);
+
+  if (nudge.copy.secondaryCta) {
+    const secondary = document.createElement('button');
+    secondary.type = 'button';
+    secondary.className = 'ghost-button usage-nudge-secondary';
+    secondary.textContent = nudge.copy.secondaryCta;
+    secondary.addEventListener('click', () => {
+      markNudgeDismissed(nudge.state);
+      wrapper.remove();
+    });
+    actions.appendChild(secondary);
+  }
+
+  wrapper.appendChild(actions);
+  return wrapper;
+}
+
+function maybeShowInlineNudge(messageEl, { throttle } = {}) {
+  if (!messageEl) {
+    return;
+  }
+  const creditState = getCreditState();
+  const candidate = getInlineNudgeCandidate(creditState, throttle);
+  if (!candidate) {
+    return;
+  }
+  const nudgeEl = buildInlineNudgeElement(candidate);
+  messageEl.insertAdjacentElement('afterend', nudgeEl);
+  markNudgeShown(candidate.state, candidate.type);
+}
+
 function shouldShowUpgradeNudge(state, throttle) {
+  const usagePercent = getCreditUsagePercent(state.remainingCredits, state.creditsTotal);
+  const dailyPercent = getDailyUsagePercent(state.todayCreditsUsed, state.dailyLimit);
   const blockedByThrottle = throttle?.state === 'blocked';
-  const blockedByCredits = state.remainingCredits !== null && state.remainingCredits <= 0;
-  return blockedByThrottle || blockedByCredits;
+  if (blockedByThrottle) {
+    return true;
+  }
+  return (usagePercent !== null && usagePercent >= MONTHLY_FIRM_USAGE_THRESHOLD)
+    || (dailyPercent !== null && dailyPercent >= DAILY_SOFT_USAGE_THRESHOLD);
 }
 
 function updateCreditAlerts(state, throttle) {
   if (!creditInlineWarning || !creditBanner || !creditZero) {
     return;
   }
-  const percent = getCreditPercent(state.remainingCredits, state.creditsTotal);
   const dailyCapHit = throttle?.state === 'blocked';
   const outOfCredits = state.remainingCredits !== null && state.remainingCredits <= 0;
 
@@ -1395,21 +1724,8 @@ function updateCreditAlerts(state, throttle) {
     }
   }
 
-  const softWarningShown = window.sessionStorage?.getItem(LOW_CREDIT_WARNING_KEY);
-  if (percent <= SOFT_WARNING_THRESHOLD && percent > HARD_WARNING_THRESHOLD && !softWarningShown) {
-    creditInlineWarning.textContent = '⚠️ You’re getting low on credits.';
-    creditInlineWarning.classList.remove('hidden');
-    window.sessionStorage?.setItem(LOW_CREDIT_WARNING_KEY, 'true');
-  } else if (percent > SOFT_WARNING_THRESHOLD) {
-    creditInlineWarning.classList.add('hidden');
-  }
-
-  if (percent <= HARD_WARNING_THRESHOLD && percent > 0) {
-    creditBanner.textContent = '🚨 Only ~3 generations left this month.';
-    creditBanner.classList.remove('hidden');
-  } else {
-    creditBanner.classList.add('hidden');
-  }
+  creditInlineWarning.classList.add('hidden');
+  creditBanner.classList.add('hidden');
 
   if (creditDailyMessage) {
     if (dailyCapHit) {
@@ -1422,9 +1738,8 @@ function updateCreditAlerts(state, throttle) {
   }
 
   if (creditUpgradeNudge) {
-    if (shouldShowUpgradeNudge(state, throttle) && !window.sessionStorage?.getItem(UPGRADE_NUDGE_KEY)) {
+    if (shouldShowUpgradeNudge(state, throttle)) {
       creditUpgradeNudge.classList.remove('hidden');
-      window.sessionStorage?.setItem(UPGRADE_NUDGE_KEY, 'true');
     } else if (!shouldShowUpgradeNudge(state, throttle)) {
       creditUpgradeNudge.classList.add('hidden');
     }
@@ -1436,20 +1751,30 @@ function updateThrottleUI(throttle) {
     return;
   }
 
-  if (throttle.state === 'ok') {
+  if (!lastRequestThrottled || throttle.state === 'ok') {
     throttleNotice.classList.add('hidden');
     return;
   }
 
   throttleNotice.classList.remove('hidden');
+  throttleNotice.textContent = '';
+  const message = document.createElement('span');
+  const upgrade = document.createElement('button');
+  upgrade.type = 'button';
+  upgrade.className = 'inline-cta';
+  upgrade.textContent = 'Upgrade';
+  upgrade.addEventListener('click', () => openStripeCheckout('subscription'));
 
   if (throttle.state === 'warning') {
-    throttleNotice.textContent = `⏳ About ${throttle.remaining} credits left today.`;
+    message.textContent = 'This request was slowed due to your daily limit. Pro plans remove most throttles.';
   }
 
   if (throttle.state === 'blocked') {
-    throttleNotice.textContent = 'Daily limit reached. More credits unlock at 00:00 UTC.';
+    message.textContent = 'This request was blocked due to your daily limit. Pro plans remove most throttles.';
   }
+
+  throttleNotice.appendChild(message);
+  throttleNotice.appendChild(upgrade);
 }
 
 function updateSendButton(throttle) {
@@ -2068,6 +2393,7 @@ function renderAssistantMessage(messageId, text, metadataParts = []) {
   if (messageEl) {
     attachCopyButton(messageEl, () => getMessageCopyText(messageEl));
   }
+  return messageEl;
 }
 
 function ensureAssistantMeta(message) {
@@ -2771,9 +3097,12 @@ async function sendChat() {
 
   const estimatedNextCost = getEstimatedNextCost();
   const throttle = updateThrottleState({ estimatedNextCost });
+  lastRequestThrottled = throttle.state !== 'ok';
+  updateThrottleUI(throttle);
   const creditState = getCreditState();
 
   if (throttle.state === 'blocked') {
+    recordThrottleHit(getUserContext().id);
     updateCreditUI();
     showPaywall({
       reason: throttle.reason,
@@ -2838,6 +3167,13 @@ async function sendChat() {
   updateCreditPreview({ force: true });
   appendMessage('user', userInput);
 
+  const tokenEstimate = estimateTotalTokens({
+    userInput,
+    currentCode,
+    intentType: resolvedIntent.type
+  });
+  recordLargeGeneration(getUserContext().id, tokenEstimate.totalTokens);
+
   const pendingMessageId = addMessage(
     'assistant',
     '<em>Generating text + code…</em>',
@@ -2854,6 +3190,7 @@ async function sendChat() {
   let generationMetadata = '';
   let rawReply = '';
   let usageMetadata = { usageText: '', warningText: '' };
+  let throttleSnapshot = throttle;
   try {
     const llmStartTime = performance.now();
     const systemPrompt = `You are a coding assistant.
@@ -2906,7 +3243,7 @@ Output rules:
     setStatusOnline(true);
     rawReply = data?.choices?.[0]?.message?.content || 'No response.';
     applyUsageToCredits(data?.usage);
-    const throttleSnapshot = updateThrottleState({ estimatedNextCost: 0 });
+    throttleSnapshot = updateThrottleState({ estimatedNextCost: 0 });
     usageMetadata = formatUsageMetadata(data?.usage, getCreditState(), throttleSnapshot);
     updateCreditPreview({ force: true });
     updateCreditUI();
@@ -2915,12 +3252,12 @@ Output rules:
   } catch (error) {
     generationFeedback.stop();
     finalizeChatOnce(() => {
-    renderAssistantMessage(
-      pendingMessageId,
-      '⚠️ Something went wrong while generating the response.',
-      [{ text: formatGenerationMetadata(performance.now() - startedAt) }]
-    );
-  });
+      renderAssistantMessage(
+        pendingMessageId,
+        '⚠️ Something went wrong while generating the response.',
+        [{ text: formatGenerationMetadata(performance.now() - startedAt) }]
+      );
+    });
     unlockChat();
     stopLoading();
     return;
@@ -2958,7 +3295,8 @@ Output rules:
     metadataParts.push({ text: usageMetadata.warningText, className: 'assistant-meta-warning' });
   }
   finalizeChatOnce(() => {
-    renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
+    const messageEl = renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
+    maybeShowInlineNudge(messageEl, { throttle: throttleSnapshot });
   });
 
   try {
