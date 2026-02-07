@@ -393,6 +393,60 @@ customer.subscription.deleted → plan = free + cap remaining</code></pre>
       </div>
     </main>
 
+    <div id="paywall-modal" class="paywall-modal hidden" role="dialog" aria-modal="true" aria-label="Upgrade options">
+      <div class="paywall-backdrop" data-paywall-backdrop></div>
+      <div class="paywall-sheet" role="document">
+        <div class="paywall-header">
+          <h2 id="paywall-title">Daily limit reached</h2>
+          <button id="paywall-close" class="icon-button hidden" type="button" aria-label="Close paywall">✕</button>
+        </div>
+        <div class="paywall-body">
+          <div class="paywall-copy">
+            <p id="paywall-body-primary"></p>
+            <p id="paywall-body-secondary"></p>
+          </div>
+          <div class="paywall-plans">
+            <table class="paywall-table" aria-label="Plan comparison">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Monthly Credits</th>
+                  <th>Daily Limit</th>
+                  <th>Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Free</td>
+                  <td>500</td>
+                  <td>100</td>
+                  <td>$0</td>
+                </tr>
+                <tr>
+                  <td>Starter</td>
+                  <td>5,000</td>
+                  <td>500</td>
+                  <td>$12</td>
+                </tr>
+                <tr>
+                  <td>Pro</td>
+                  <td>20,000</td>
+                  <td>2,000</td>
+                  <td>$39</td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="paywall-note">All plans include live code execution and sandboxed previews.</p>
+          </div>
+          <div class="paywall-actions">
+            <button id="paywall-primary" class="primary-button" type="button">Upgrade Plan</button>
+            <button id="paywall-secondary" class="ghost-button" type="button">Buy more credits</button>
+            <button id="paywall-tertiary" class="link-button" type="button">Wait for reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="usage-modal" class="usage-modal hidden" role="dialog" aria-modal="true" aria-label="Usage analytics">
       <div class="usage-panel">
         <div class="usage-header">

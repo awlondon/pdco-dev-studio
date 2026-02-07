@@ -1090,6 +1090,132 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.paywall-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  z-index: 50;
+}
+
+.paywall-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 20, 0.72);
+}
+
+.paywall-sheet {
+  position: relative;
+  z-index: 1;
+  width: min(720px, 100%);
+  background: rgba(17, 19, 26, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(4, 10, 24, 0.45);
+  display: grid;
+  gap: 20px;
+}
+
+.paywall-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.paywall-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.paywall-body {
+  display: grid;
+  gap: 20px;
+}
+
+.paywall-copy p {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.paywall-plans {
+  display: grid;
+  gap: 10px;
+}
+
+.paywall-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  background: rgba(12, 14, 20, 0.6);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.paywall-table th,
+.paywall-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.paywall-table thead th {
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.paywall-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.paywall-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.paywall-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.primary-button {
+  width: 100%;
+  background: linear-gradient(135deg, #8b9bff, #6f7cff);
+  color: #0b0b10;
+  font-size: 0.95rem;
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.link-button {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  border: none;
+  padding: 4px 0;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.link-button:hover {
+  color: #fff;
+}
+
+.paywall-modal.dismissable .paywall-backdrop {
+  cursor: pointer;
+}
+
+.paywall-modal.hidden {
+  display: none;
+}
+
 .usage-modal {
   position: fixed;
   inset: 0;
@@ -1330,5 +1456,22 @@ button:disabled {
 
   .usage-panel {
     padding: 16px;
+  }
+
+  .paywall-modal {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .paywall-sheet {
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+    padding: 20px;
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+
+  .paywall-table {
+    font-size: 0.82rem;
   }
 }

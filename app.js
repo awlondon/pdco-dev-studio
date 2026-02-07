@@ -41,6 +41,15 @@ const usageLatencyChart = document.getElementById('latency-chart');
 const usageHistoryBody = document.getElementById('usage-history-body');
 const usageHistoryEmpty = document.getElementById('usage-history-empty');
 const usageLoadMore = document.getElementById('usage-load-more');
+const paywallModal = document.getElementById('paywall-modal');
+const paywallBackdrop = document.querySelector('[data-paywall-backdrop]');
+const paywallTitle = document.getElementById('paywall-title');
+const paywallBodyPrimary = document.getElementById('paywall-body-primary');
+const paywallBodySecondary = document.getElementById('paywall-body-secondary');
+const paywallPrimaryButton = document.getElementById('paywall-primary');
+const paywallSecondaryButton = document.getElementById('paywall-secondary');
+const paywallTertiaryButton = document.getElementById('paywall-tertiary');
+const paywallCloseButton = document.getElementById('paywall-close');
 const codeEditor = document.getElementById('code-editor');
 const lineNumbersEl = document.getElementById('line-numbers');
 const lineCountEl = document.getElementById('line-count');
@@ -241,20 +250,155 @@ function computeThrottleState({
   estimatedNextCost
 }) {
   if (creditsUsedToday >= dailyLimit) {
-    return { state: 'blocked', remaining: 0 };
+    return { state: 'blocked', remaining: 0, reason: 'daily_limit' };
   }
 
   if (creditsUsedToday + estimatedNextCost > dailyLimit) {
     return {
       state: 'warning',
-      remaining: Math.max(0, dailyLimit - creditsUsedToday)
+      remaining: Math.max(0, dailyLimit - creditsUsedToday),
+      reason: 'estimate_high'
     };
   }
 
   return {
     state: 'ok',
-    remaining: dailyLimit - creditsUsedToday
+    remaining: dailyLimit - creditsUsedToday,
+    reason: 'ok'
   };
+}
+
+function isSandboxExecuting() {
+  return previewExecutionStatus?.classList.contains('running') || sandboxAnimationState === 'running';
+}
+
+function canShowPaywall() {
+  return !isGenerating && !isSandboxExecuting();
+}
+
+function setPaywallVisibility(visible, { dismissable = false } = {}) {
+  if (!paywallModal) {
+    return;
+  }
+  paywallModal.classList.toggle('hidden', !visible);
+  paywallModal.classList.toggle('dismissable', dismissable);
+  isPaywallVisible = visible;
+  if (visible) {
+    document.body.style.overflow = 'hidden';
+  } else if (!usageModal || usageModal.classList.contains('hidden')) {
+    document.body.style.overflow = '';
+  }
+  if (isDev) {
+    console.assert(
+      !isGenerating || !isPaywallVisible,
+      'Paywall must not show during generation'
+    );
+  }
+}
+
+function hidePaywall() {
+  setPaywallVisibility(false, { dismissable: false });
+}
+
+function openStripeCheckout(mode) {
+  const checkoutUrl = mode === 'subscription'
+    ? '/checkout/subscription'
+    : '/checkout/credits';
+  window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
+}
+
+function showPaywall({ reason, estimate, remaining }) {
+  if (!paywallModal || !canShowPaywall()) {
+    return false;
+  }
+
+  const creditState = getCreditState();
+  const resetDays = creditState.resetDays ?? 0;
+  const dailyResetTime = creditState.dailyResetTime || 'tomorrow';
+  const isMonthlyExhausted = reason === 'monthly';
+  const isDailyLimit = reason === 'daily_limit';
+  const isPreventive = reason === 'estimate_high';
+
+  if (paywallTitle) {
+    if (isMonthlyExhausted) {
+      paywallTitle.textContent = 'You’ve used all your credits for this month';
+    } else if (isDailyLimit) {
+      paywallTitle.textContent = 'Daily limit reached';
+    } else {
+      paywallTitle.textContent = 'This request is larger than today’s remaining credits';
+    }
+  }
+
+  if (paywallBodyPrimary) {
+    if (isMonthlyExhausted) {
+      paywallBodyPrimary.textContent = 'Your plan includes 5,000 credits per month.';
+    } else if (isDailyLimit) {
+      paywallBodyPrimary.textContent = 'This protects you from burning all your credits in one day.';
+    } else {
+      const estimateText = estimate?.min && estimate?.max
+        ? `${formatCreditNumber(estimate.min)}–${formatCreditNumber(estimate.max)} credits`
+        : '—';
+      paywallBodyPrimary.textContent = `Estimated cost: ${estimateText}`;
+    }
+  }
+
+  if (paywallBodySecondary) {
+    if (isMonthlyExhausted) {
+      paywallBodySecondary.textContent = `Credits reset in ${resetDays} days.`;
+    } else if (isDailyLimit) {
+      paywallBodySecondary.textContent = `More credits unlock in ${dailyResetTime}.`;
+    } else {
+      paywallBodySecondary.textContent = `Remaining today: ${formatCreditNumber(remaining ?? 0)} credits`;
+    }
+  }
+
+  if (paywallPrimaryButton) {
+    if (isDailyLimit) {
+      paywallPrimaryButton.textContent = 'Upgrade for higher daily limits';
+    } else if (isPreventive) {
+      paywallPrimaryButton.textContent = 'Upgrade to continue';
+    } else {
+      paywallPrimaryButton.textContent = 'Upgrade Plan';
+    }
+    paywallPrimaryButton.onclick = () => openStripeCheckout('subscription');
+  }
+
+  if (paywallSecondaryButton) {
+    if (isPreventive) {
+      paywallSecondaryButton.textContent = 'Edit request';
+      paywallSecondaryButton.onclick = () => {
+        hidePaywall();
+        chatInput?.focus();
+      };
+    } else if (isDailyLimit) {
+      paywallSecondaryButton.textContent = 'Buy one-time credits';
+      paywallSecondaryButton.onclick = () => openStripeCheckout('credits');
+    } else {
+      paywallSecondaryButton.textContent = 'Buy more credits';
+      paywallSecondaryButton.onclick = () => openStripeCheckout('credits');
+    }
+  }
+
+  if (paywallTertiaryButton) {
+    if (isMonthlyExhausted) {
+      paywallTertiaryButton.textContent = 'Wait for reset';
+      paywallTertiaryButton.classList.remove('hidden');
+      paywallTertiaryButton.onclick = () => hidePaywall();
+    } else if (isDailyLimit) {
+      paywallTertiaryButton.textContent = 'Close';
+      paywallTertiaryButton.classList.remove('hidden');
+      paywallTertiaryButton.onclick = () => hidePaywall();
+    } else {
+      paywallTertiaryButton.classList.add('hidden');
+    }
+  }
+
+  if (paywallCloseButton) {
+    paywallCloseButton.classList.toggle('hidden', !isDailyLimit);
+  }
+
+  setPaywallVisibility(true, { dismissable: isDailyLimit });
+  return true;
 }
 
 function getUserContext() {
@@ -1297,6 +1441,8 @@ let baselineCode = defaultInterfaceCode;
 let previousCode = null;
 let loadingStartTime = null;
 let loadingInterval = null;
+let isGenerating = false;
+let isPaywallVisible = false;
 let lastLLMCode = null;
 let userHasEditedCode = false;
 let baseExecutionWarnings = [];
@@ -2432,6 +2578,13 @@ function startLoading() {
   if (!loadingIndicator) {
     return;
   }
+  isGenerating = true;
+  if (isDev) {
+    console.assert(
+      !isGenerating || !isPaywallVisible,
+      'Paywall must not show during generation'
+    );
+  }
   const timerEl = loadingIndicator.querySelector('.timer');
   if (!timerEl) {
     return;
@@ -2455,6 +2608,7 @@ function stopLoading() {
   if (!loadingIndicator) {
     return;
   }
+  isGenerating = false;
   loadingIndicator.classList.add('hidden');
 
   if (loadingInterval) {
@@ -2499,21 +2653,50 @@ async function sendChat() {
     return;
   }
 
-  const throttle = updateThrottleState({ estimatedNextCost: getEstimatedNextCost() });
-  if (throttle.state === 'blocked') {
-    updateCreditUI();
-    return;
-  }
-
-  const creditState = getCreditState();
-  if (creditState.remainingCredits !== null && creditState.remainingCredits <= 0) {
-    updateCreditUI();
-    return;
-  }
-
   const userInput = chatInput.value.trim();
   if (!userInput) {
     return;
+  }
+
+  const estimatedNextCost = getEstimatedNextCost();
+  const throttle = updateThrottleState({ estimatedNextCost });
+  const creditState = getCreditState();
+
+  if (throttle.state === 'blocked') {
+    updateCreditUI();
+    showPaywall({
+      reason: throttle.reason,
+      estimate: null,
+      remaining: throttle.remaining
+    });
+    return;
+  }
+
+  if (creditState.remainingCredits !== null && creditState.remainingCredits <= 0) {
+    updateCreditUI();
+    showPaywall({ reason: 'monthly' });
+    return;
+  }
+
+  if (throttle.state === 'warning') {
+    const remainingToday = Math.max(
+      0,
+      (creditState.dailyLimit ?? 0) - (creditState.todayCreditsUsed ?? 0)
+    );
+    if (estimatedNextCost > remainingToday) {
+      const resolvedIntent = resolveIntent(userInput);
+      const estimate = estimateCreditsPreview({
+        userInput,
+        currentCode,
+        intentType: resolvedIntent.type
+      });
+      showPaywall({
+        reason: throttle.reason,
+        estimate,
+        remaining: remainingToday
+      });
+      return;
+    }
   }
 
   const startedAt = performance.now();
@@ -2775,6 +2958,22 @@ if (usageModal) {
   });
 }
 
+if (paywallBackdrop) {
+  paywallBackdrop.addEventListener('click', () => {
+    if (paywallModal?.classList.contains('dismissable')) {
+      hidePaywall();
+    }
+  });
+}
+
+if (paywallCloseButton) {
+  paywallCloseButton.addEventListener('click', () => {
+    if (paywallModal?.classList.contains('dismissable')) {
+      hidePaywall();
+    }
+  });
+}
+
 if (usageTabs.length) {
   usageTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
@@ -2812,6 +3011,9 @@ if (usageApplyFilters) {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     closeUsageModal();
+    if (paywallModal?.classList.contains('dismissable')) {
+      hidePaywall();
+    }
   }
 });
 
