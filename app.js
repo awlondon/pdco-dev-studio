@@ -55,7 +55,9 @@ let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
 let lastCodeSource = null;
-let chatFinalized = false;
+let activeTurnId = 0;
+let currentTurnId = 0;
+const finalizedTurns = new Set();
 let pendingAssistantProposal = null;
 const DEBUG_INTENT = false;
 const chatState = {
@@ -151,26 +153,50 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
-function renderChatMeta({ text, hasCode, metadata, messageId }) {
-  if (text) {
-    renderAssistantText(`${text}\n\n${metadata}`, messageId);
-    return;
-  }
-
-  renderAssistantText(metadata, messageId);
-  if (hasCode) {
-    setPreviewStatus('Running interactive scene…');
-  }
+function startChatTurn() {
+  activeTurnId += 1;
+  currentTurnId = activeTurnId;
+  return currentTurnId;
 }
 
-function finalizeChatOnce(meta) {
-  if (chatFinalized) {
+function renderChatMessage(text, messageId) {
+  renderAssistantText(text ?? '', messageId);
+}
+
+function appendChatMeta(text, messageId) {
+  if (!text) {
     return;
   }
-  chatFinalized = true;
+
+  const message = messageId
+    ? document.querySelector(`[data-id="${messageId}"]`)
+    : null;
+  const meta = document.createElement('div');
+  meta.className = 'assistant-meta';
+  meta.textContent = text;
+
+  if (message) {
+    message.appendChild(meta);
+    delete message.dataset.pending;
+  } else {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message assistant';
+    wrapper.appendChild(meta);
+    chatMessages.appendChild(wrapper);
+  }
+
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function finalizeChatOnce(turnId, finalizeFn) {
+  if (finalizedTurns.has(turnId)) {
+    console.warn('Finalize skipped (already finalized):', turnId);
+    return;
+  }
+  finalizedTurns.add(turnId);
 
   try {
-    renderChatMeta(meta);
+    finalizeFn();
   } catch (err) {
     console.error('[finalizeChatOnce] finalize failed:', err);
   }
@@ -713,6 +739,8 @@ async function sendChat() {
     return;
   }
 
+  const turnId = startChatTurn();
+  const startedAt = performance.now();
   const resolvedIntent = resolveIntent(userInput);
   if (DEBUG_INTENT) {
     console.log('[intent]', {
@@ -731,7 +759,6 @@ async function sendChat() {
   lockChat();
   chatInput.value = '';
   appendMessage('user', userInput);
-  chatFinalized = false;
 
   const pendingMessageId = addMessage(
     'assistant',
@@ -821,35 +848,36 @@ Otherwise, respond with plain text.`;
     }
   }
 
-  finalizeChatOnce({
-    text: chatText,
-    hasCode,
-    metadata: generationMetadata,
-    messageId: pendingMessageId
+  finalizeChatOnce(turnId, () => {
+    const elapsed = performance.now() - startedAt;
+    const metadata = generationMetadata || formatGenerationMetadata(elapsed);
+
+    renderChatMessage(chatText ?? '', pendingMessageId);
+    appendChatMeta(metadata, pendingMessageId);
+
+    try {
+      if (hasCode) {
+        currentCode = nextCode;
+        setCodeFromLLM(nextCode);
+        pendingAssistantProposal = null;
+        runWhenPreviewReady(() => {
+          try {
+            handleLLMOutput(nextCode, 'generated');
+          } catch (error) {
+            console.error('Auto-run failed after generation.', error);
+            addExecutionWarning('Preview auto-run failed. Try Run Code.');
+            setPreviewExecutionStatus('error', 'PREVIEW ERROR');
+          }
+        });
+      }
+      updateGenerationIndicator();
+    } catch (error) {
+      console.error('Post-generation UI update failed.', error);
+    }
   });
 
-  try {
-    if (hasCode) {
-      currentCode = nextCode;
-      setCodeFromLLM(nextCode);
-      pendingAssistantProposal = null;
-      runWhenPreviewReady(() => {
-        try {
-          handleLLMOutput(nextCode, 'generated');
-        } catch (error) {
-          console.error('Auto-run failed after generation.', error);
-          addExecutionWarning('Preview auto-run failed. Try Run Code.');
-          setPreviewExecutionStatus('error', 'PREVIEW ERROR');
-        }
-      });
-    }
-    updateGenerationIndicator();
-  } catch (error) {
-    console.error('Post-generation UI update failed.', error);
-  } finally {
-    unlockChat();
-    stopLoading();
-  }
+  unlockChat();
+  stopLoading();
 }
 
 chatForm.addEventListener('submit', (event) => {
@@ -1017,6 +1045,9 @@ setPreviewExecutionStatus('ready', 'Ready');
 
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
   preview.once('ready', () => {
-    console.assert(chatFinalized, 'Preview ready before chat finalized');
+    console.assert(
+      currentTurnId === 0 || finalizedTurns.has(currentTurnId),
+      'Preview ready before chat finalized'
+    );
   });
 }
