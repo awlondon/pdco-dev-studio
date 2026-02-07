@@ -28,6 +28,10 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
+    console.log('LLM REQUEST:', {
+      model,
+      messages: payloadMessages
+    });
     const upstream = await fetch(apiUrl, {
       method: 'POST',
       headers: {
