@@ -547,6 +547,11 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.message.assistant-thinking {
+  opacity: 0.75;
+  font-style: italic;
+}
+
 .message .assistant-meta {
   margin-top: 8px;
   font-size: 12px;

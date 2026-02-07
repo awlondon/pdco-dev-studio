@@ -183,6 +183,45 @@ function appendMessage(role, content, options = {}) {
   return message;
 }
 
+function startGenerationNarration(pendingMessageId) {
+  const messages = [
+    'Thinking through the structure…',
+    'Sketching the interface layout…',
+    'Generating visual elements…',
+    'Refining the details…'
+  ];
+
+  let index = 0;
+  let stopped = false;
+
+  const intervalId = setInterval(() => {
+    if (stopped || chatFinalized) {
+      clearInterval(intervalId);
+      return;
+    }
+
+    const msg = document.createElement('div');
+    msg.className = 'message assistant assistant-thinking';
+    msg.textContent = messages[index % messages.length];
+    msg.dataset.ephemeral = 'true';
+    msg.dataset.pendingMessageId = pendingMessageId;
+
+    chatMessages.appendChild(msg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    index += 1;
+  }, 1200);
+
+  return () => {
+    stopped = true;
+    clearInterval(intervalId);
+
+    document
+      .querySelectorAll('.assistant-thinking[data-ephemeral="true"]')
+      .forEach((el) => el.remove());
+  };
+}
+
 function renderAssistantMessage(messageId, text, metadata) {
   const safeText =
     (typeof text === 'string' && text.trim().length)
@@ -821,6 +860,7 @@ async function sendChat() {
   );
   currentTurnMessageId = pendingMessageId;
   chatFinalized = false;
+  const stopNarration = startGenerationNarration(pendingMessageId);
 
   setStatusOnline(false);
   startLoading();
@@ -867,7 +907,9 @@ Output rules:
 
     setStatusOnline(true);
     rawReply = data?.choices?.[0]?.message?.content || 'No response.';
+    stopNarration();
   } catch (error) {
+    stopNarration();
     finalizeChatOnce(() => {
       renderAssistantMessage(pendingMessageId, '⚠️ Something went wrong while generating the response.', formatGenerationMetadata(performance.now() - startedAt));
     });
