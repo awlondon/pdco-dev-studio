@@ -6,6 +6,9 @@ const PLAN_BY_PRICE_ID = {
 
 const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
 const GITHUB_API = 'https://api.github.com';
+const ANALYTICS_CACHE_TTL_SECONDS = 60 * 10;
+const DEFAULT_ANALYTICS_DAYS = 14;
+const MAX_ANALYTICS_DAYS = 365;
 const REQUIRED_USER_HEADERS = [
   'user_id',
   'email',
@@ -28,6 +31,10 @@ const REQUIRED_USER_HEADERS = [
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/usage/analytics' && request.method === 'GET') {
+      return handleUsageAnalytics(request, env, ctx);
+    }
 
     if (url.pathname === '/stripe/webhook' && request.method === 'POST') {
       return handleStripeWebhook(request, env, ctx);
@@ -163,6 +170,53 @@ function timingSafeEqualHex(a, b) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
+    headers: { 'content-type': 'application/json' }
+  });
+}
+
+async function handleUsageAnalytics(request, env, ctx) {
+  const url = new URL(request.url);
+  const userId = url.searchParams.get('user_id');
+  const scope = url.searchParams.get('scope') || 'user';
+  const daysRaw = url.searchParams.get('days');
+  const parsedDays = daysRaw ? Number(daysRaw) : DEFAULT_ANALYTICS_DAYS;
+  const days = Number.isFinite(parsedDays) && parsedDays > 0
+    ? Math.min(Math.floor(parsedDays), MAX_ANALYTICS_DAYS)
+    : DEFAULT_ANALYTICS_DAYS;
+
+  // TODO: auth check here (admin vs user)
+  // if scope=admin, ensure caller is admin
+  if (scope !== 'user' && scope !== 'admin') {
+    return json({ error: 'Invalid scope' }, 400);
+  }
+
+  const cacheKey = `analytics:${userId || 'all'}:${days}`;
+  if (env.ANALYTICS_CACHE) {
+    const cached = await env.ANALYTICS_CACHE.get(cacheKey);
+    if (cached) {
+      return new Response(cached, {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  }
+
+  const rows = await readUsageLogRows(env);
+  const filtered = filterRows(rows, { userId, days });
+  const analytics = computeAnalytics(filtered);
+
+  const payload = JSON.stringify({
+    range_days: days,
+    generated_at: new Date().toISOString(),
+    ...analytics
+  });
+
+  if (env.ANALYTICS_CACHE) {
+    ctx.waitUntil(env.ANALYTICS_CACHE.put(cacheKey, payload, { expirationTtl: ANALYTICS_CACHE_TTL_SECONDS }));
+  }
+
+  return new Response(payload, {
+    status: 200,
     headers: { 'content-type': 'application/json' }
   });
 }
@@ -347,6 +401,93 @@ async function readUsersCSV(env) {
   return {
     sha: data.sha,
     rows: parseCSV(content)
+  };
+}
+
+async function readUsageLogRows(env) {
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const res = await githubRequest(env, `/repos/${repo}/contents/data/usage_log.csv?ref=${branch}`);
+  const csv = atob(res.content);
+  return parseCSV(csv);
+}
+
+function filterRows(rows, { userId, days }) {
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - days);
+
+  return rows.filter((row) => {
+    if (userId && row.user_id !== userId) return false;
+    if (!row.timestamp_utc) return false;
+    return new Date(row.timestamp_utc) >= cutoff;
+  });
+}
+
+function computeAnalytics(rows) {
+  const dailyMap = {};
+  let totalCredits = 0;
+  let totalLatency = 0;
+  let successCount = 0;
+
+  for (const row of rows) {
+    if (!row.timestamp_utc) {
+      continue;
+    }
+
+    const date = row.timestamp_utc.slice(0, 10);
+
+    if (!dailyMap[date]) {
+      dailyMap[date] = {
+        date,
+        requests: 0,
+        credits: 0,
+        latency_sum: 0,
+        success: 0,
+        by_intent: {}
+      };
+    }
+
+    const day = dailyMap[date];
+    day.requests += 1;
+
+    const credits = Number(row.credits_charged || 0);
+    const latency = Number(row.latency_ms || 0);
+
+    day.credits += credits;
+    day.latency_sum += latency;
+
+    if (row.status === 'success') {
+      day.success += 1;
+      successCount += 1;
+    }
+
+    if (row.intent_type) {
+      day.by_intent[row.intent_type] = (day.by_intent[row.intent_type] || 0) + 1;
+    }
+
+    totalCredits += credits;
+    totalLatency += latency;
+  }
+
+  const daily = Object.values(dailyMap)
+    .map((day) => ({
+      date: day.date,
+      requests: day.requests,
+      credits: day.credits,
+      avg_latency_ms: day.requests ? Math.round(day.latency_sum / day.requests) : 0,
+      by_intent: day.by_intent
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return {
+    summary: {
+      total_requests: rows.length,
+      total_credits: totalCredits,
+      avg_latency_ms: rows.length ? Math.round(totalLatency / rows.length) : 0,
+      success_rate: rows.length ? Number((successCount / rows.length).toFixed(2)) : 0
+    },
+    daily
   };
 }
 
