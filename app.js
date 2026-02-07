@@ -667,7 +667,7 @@ function prepareSandbox(userHTML) {
   outputPanel?.classList.add('loading');
 
   setPreviewExecutionStatus('ready', 'Ready');
-  setPreviewStatus('Preview updated — click Run Code to execute');
+  setPreviewStatus('Preview updated — auto-running');
   stopSandboxStatus('idle');
 
   sandboxIframe.onload = () => {
@@ -688,6 +688,10 @@ ${deferredHtml}
 </html>
   `);
   doc.close();
+
+  requestAnimationFrame(() => {
+    startSandboxExecution();
+  });
 }
 
 function startSandboxExecution() {
