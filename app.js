@@ -548,6 +548,8 @@ async function sendChat() {
   setStatusOnline(false);
   startLoading();
 
+  let generationMetadata = '';
+  let normalizedReply = '';
   try {
     const llmStartTime = performance.now();
     const systemPrompt = `You are a coding assistant.
@@ -578,7 +580,7 @@ Otherwise, respond with plain text.`;
 
     const data = await res.json();
     const llmEndTime = performance.now();
-    const generationMetadata = formatGenerationMetadata(llmEndTime - llmStartTime);
+    generationMetadata = formatGenerationMetadata(llmEndTime - llmStartTime);
 
     if (!res.ok) {
       throw new Error(data?.error || 'Unable to reach the chat service.');
@@ -586,14 +588,24 @@ Otherwise, respond with plain text.`;
 
     setStatusOnline(true);
     const reply = data?.choices?.[0]?.message?.content || 'No response.';
-    const normalizedReply = normalizeLLMOutput(reply);
+    normalizedReply = normalizeLLMOutput(reply);
     if (reply.includes('```json')) {
       console.warn('⚠️ Model emitted JSON; ignoring structured output');
     }
     if (normalizedReply !== reply) {
       console.warn('⚠️ Normalized LLM output from JSON wrapper');
     }
+  } catch (error) {
+    updateMessage(
+      pendingMessageId,
+      '<em>⚠️ Something went wrong while generating the response.</em>'
+    );
+    unlockChat();
+    stopLoading();
+    return;
+  }
 
+  try {
     let extractedHtml = extractHtml(normalizedReply);
     const extractedText = extractChatText(normalizedReply);
     const chatText =
@@ -611,22 +623,28 @@ Otherwise, respond with plain text.`;
       }
     }
 
-    unlockChat();
     const shouldAutoRun = hasCode && nextCode !== currentCode;
     if (shouldAutoRun) {
       currentCode = nextCode;
       queueMicrotask(() => {
-        setCodeFromLLM(nextCode);
+        try {
+          setCodeFromLLM(nextCode);
+        } catch (error) {
+          console.error('Auto-run failed after generation.', error);
+          addExecutionWarning('Preview auto-run failed. Try Run Code.');
+          setPreviewExecutionStatus('error', 'PREVIEW ERROR');
+        }
       });
     }
     updateGenerationIndicator();
   } catch (error) {
+    console.error('Post-generation UI update failed.', error);
     updateMessage(
       pendingMessageId,
-      '<em>⚠️ Something went wrong while generating the response.</em>'
+      '<em>⚠️ Response received, but the UI failed to update.</em>'
     );
-    unlockChat();
   } finally {
+    unlockChat();
     stopLoading();
   }
 }
