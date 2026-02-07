@@ -243,18 +243,20 @@ function detectCodeIntent(userInput, hasExistingCode) {
 }
 
 function runEditorCode() {
-  console.log('🚀 runEditorCode fired');
-  const html = codeEditor?.value ?? '';
-  console.log('HTML length:', html.length);
-
-  if (!html || html.trim().length < 10) {
-    console.warn('⚠️ No runnable code in editor');
+  if (!previewFrameContainer) {
     return;
   }
 
-  setPreviewExecutionStatus('running', 'Running');
-  renderToIframe(html);
-  setPreviewStatus('Preview updated from editor');
+  const wrappedUserCode = codeEditor?.value ?? '';
+  previewFrameContainer.innerHTML = '';
+
+  const iframe = document.createElement('iframe');
+  iframe.sandbox = 'allow-scripts';
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+  iframe.srcdoc = wrappedUserCode;
+
+  previewFrameContainer.appendChild(iframe);
 }
 
 function injectFrameGuard(html) {
