@@ -41,6 +41,24 @@ const CODE_INTENT_PATTERNS = [
   /html|css|js|javascript|code|component/i,
   /add|remove|change|modify|update|refactor/i
 ];
+const CREATIVE_CONTINUATION_PATTERNS = [
+  /do your own thing/i,
+  /surprise me/i,
+  /take it further/i,
+  /push it/i,
+  /riff/i,
+  /polish/i,
+  /improve it/i,
+  /make it cooler/i,
+  /make it better/i,
+  /enhance/i
+];
+
+function getHasExistingCode() {
+  const code = codeEditor?.value ?? '';
+  const trimmed = code.trim();
+  return Boolean(trimmed && trimmed.includes('<html'));
+}
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -157,13 +175,25 @@ function buildWrappedPrompt(userInput, currentCode) {
   return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
 }
 
-function detectCodeIntent(userInput) {
+function detectCodeIntent(userInput, hasExistingCode) {
   if (/^\/ui\b|^\/code\b/i.test(userInput)) {
     return {
       intent: true,
       source: 'explicit',
       match: '/ui or /code prefix'
     };
+  }
+
+  if (hasExistingCode) {
+    for (const rx of CREATIVE_CONTINUATION_PATTERNS) {
+      if (rx.test(userInput)) {
+        return {
+          intent: true,
+          source: 'creative-continuation',
+          match: rx.toString()
+        };
+      }
+    }
   }
 
   for (const rx of CODE_INTENT_PATTERNS) {
@@ -174,6 +204,14 @@ function detectCodeIntent(userInput) {
         match: rx.toString()
       };
     }
+  }
+
+  if (hasExistingCode && userInput.length < 40) {
+    return {
+      intent: true,
+      source: 'context-default',
+      match: 'existing code + short prompt'
+    };
   }
 
   return {
@@ -277,7 +315,8 @@ async function sendChat() {
 
   chatInput.value = '';
   appendMessage('user', userInput);
-  const intentInfo = detectCodeIntent(userInput);
+  const hasExistingCode = getHasExistingCode();
+  const intentInfo = detectCodeIntent(userInput, hasExistingCode);
   const codeIntent = intentInfo.intent;
   if (DEBUG_INTENT) {
     console.groupCollapsed('🧠 Code Intent Decision');
