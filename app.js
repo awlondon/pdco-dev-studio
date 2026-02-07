@@ -47,6 +47,7 @@ let sandboxStartTime = null;
 let sandboxFrameCount = 0;
 let sandboxStatusTimer = null;
 let rafMonitorId = null;
+let baseExecutionWarnings = [];
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -132,6 +133,19 @@ function setExecutionWarnings(warnings = []) {
 
   executionWarnings.textContent = warnings.map((warning) => `⚠️ ${warning}`).join(' ');
   executionWarnings.classList.remove('hidden');
+}
+
+function applyExecutionWarnings(warnings = []) {
+  baseExecutionWarnings = warnings;
+  setExecutionWarnings(warnings);
+}
+
+function addExecutionWarning(warning) {
+  const nextWarnings = [...baseExecutionWarnings];
+  if (!nextWarnings.includes(warning)) {
+    nextWarnings.push(warning);
+  }
+  setExecutionWarnings(nextWarnings);
 }
 
 function setPreviewExecutionStatus(state, message) {
@@ -251,7 +265,7 @@ function resetExecutionPreparation({ clearWarnings = true } = {}) {
 
 function updateExecutionWarningsFor(code) {
   const analysis = analyzeCodeForExecution(code);
-  setExecutionWarnings(analysis.warnings);
+  applyExecutionWarnings(analysis.warnings);
   if (!analysis.allowed) {
     appendOutput('Execution warning: blocking loop detected.', 'error');
   }
@@ -291,7 +305,7 @@ function clearSandbox() {
   activeIframe = null;
 }
 
-function stopSandbox(reason) {
+function stopSandbox(reason, options = {}) {
   if (sandboxKillTimer) {
     clearTimeout(sandboxKillTimer);
     sandboxKillTimer = null;
@@ -305,8 +319,21 @@ function stopSandbox(reason) {
     sandboxStatusTimer = null;
   }
   if (reason) {
-    setPreviewExecutionStatus('stopped', `🔴 Stopped (${reason})`);
-    setPreviewStatus(`Execution stopped — ${reason}.`);
+    const {
+      state = 'stopped',
+      label = `🔴 Stopped (${reason})`,
+      statusMessage = `Execution stopped — ${reason}.`,
+      warning
+    } = options;
+    setPreviewExecutionStatus(state, label);
+    setPreviewStatus(statusMessage);
+    if (warning) {
+      addExecutionWarning(warning);
+    }
+  }
+  const statusEl = document.getElementById('sandbox-status');
+  if (statusEl) {
+    statusEl.textContent = reason ? `stopped • ${reason}` : 'stopped';
   }
   clearSandbox();
   outputPanel?.classList.remove('loading');
@@ -317,8 +344,13 @@ function armTimeoutKillSwitch() {
     clearTimeout(sandboxKillTimer);
   }
   sandboxKillTimer = setTimeout(() => {
-    appendOutput('Sandbox hard stop triggered.', 'error');
-    stopSandbox('timeout');
+    appendOutput('Sandbox limit reached — auto-stopped.', 'success');
+    stopSandbox('timeout', {
+      state: 'capped',
+      label: '⚠️ Sandbox limit reached',
+      statusMessage: 'Sandbox limit reached — animation paused.',
+      warning: 'Animation reached sandbox frame limit. Consider adding a frame cap or reset control.'
+    });
   }, SANDBOX_TIMEOUT_MS);
 }
 
@@ -344,8 +376,13 @@ function armRAFMonitor() {
   const step = (timestamp) => {
     sandboxFrameCount++;
     if (sandboxFrameCount > MAX_RAF || timestamp - sandboxStartTime > SANDBOX_TIMEOUT_MS) {
-      appendOutput('Sandbox stopped due to safety cap.', 'error');
-      stopSandbox('safety cap');
+      appendOutput('Sandbox limit reached — auto-stopped.', 'success');
+      stopSandbox('safety cap', {
+        state: 'capped',
+        label: '⚠️ Sandbox limit reached',
+        statusMessage: 'Sandbox limit reached — animation paused.',
+        warning: 'Animation reached sandbox frame limit. Consider adding a frame cap or reset control.'
+      });
       return;
     }
     rafMonitorId = win.requestAnimationFrame(step);
@@ -577,6 +614,13 @@ FAILSAFE:
 If you are unsure how to respond:
 - Output plain conversational text only
 - Do NOT invent structure, schemas, or placeholders
+
+COOPERATIVE ANIMATION (REQUIRED):
+When intent implies movement, animation, simulation, random patterns, or competitors, include a cooperative loop scaffold by default:
+- Use requestAnimationFrame with a frame budget and time budget (default).
+- Alternative: setInterval stepping when smoothness is not critical.
+- Optional: start/stop hooks for user-controlled runs.
+Treat sandbox limits as expected; stop cleanly without errors.
 
 If you generate code, include it in a single \`\`\`html code block.
 Do not include JSON, metadata, or explanations inside the code block.
