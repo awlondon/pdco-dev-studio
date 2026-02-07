@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { calculateCreditsUsed } from './api/credits.js';
-import { appendUsageLog } from './api/usageLog.js';
+import { appendUsageLog, readUsageLog } from './api/usageLog.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -17,6 +17,12 @@ const OUTPUT_ESTIMATE_MULTIPLIER = {
   code: 2.5,
   text: 1.2,
   creative: 1.2
+};
+const DAILY_LIMITS = {
+  free: 100,
+  starter: 500,
+  pro: 2000,
+  power: 10000
 };
 
 function normalizeNumber(value) {
@@ -38,6 +44,133 @@ function estimateCreditUpperBound({ inputChars, intentType }) {
   const multiplier = intentType === 'code' ? 1.0 : 0.6;
   const totalTokens = Math.ceil((inputTokens + outputTokens) * multiplier);
   return Math.ceil(totalTokens / 250);
+}
+
+function parseCsvRow(row) {
+  const out = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < row.length; i += 1) {
+    const char = row[i];
+    if (char === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      out.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  out.push(current);
+  return out;
+}
+
+function parseCsv(text) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const lines = trimmed.split(/\r?\n/);
+  const headers = parseCsvRow(lines[0]);
+  return lines.slice(1).filter(Boolean).map((line) => {
+    const values = parseCsvRow(line);
+    return headers.reduce((acc, header, index) => {
+      acc[header] = values[index] ?? '';
+      return acc;
+    }, {});
+  });
+}
+
+function creditsUsedToday(rows, userId) {
+  const today = new Date().toISOString().slice(0, 10);
+  return rows
+    .filter((row) => (
+      row.user_id === userId
+      && row.timestamp_utc?.startsWith(today)
+      && row.status === 'success'
+    ))
+    .reduce((sum, row) => sum + Number(row.credits_charged || 0), 0);
+}
+
+function checkDailyThrottle({
+  planTier,
+  creditsUsedToday: creditsUsed,
+  estimatedNextCost
+}) {
+  const limit = DAILY_LIMITS[planTier] ?? DAILY_LIMITS.free;
+
+  if (creditsUsed >= limit) {
+    return {
+      allowed: false,
+      reason: 'DAILY_LIMIT_REACHED',
+      remaining: 0
+    };
+  }
+
+  if (creditsUsed + estimatedNextCost > limit) {
+    return {
+      allowed: false,
+      reason: 'WOULD_EXCEED_DAILY_LIMIT',
+      remaining: Math.max(0, limit - creditsUsed)
+    };
+  }
+
+  return {
+    allowed: true,
+    remaining: limit - creditsUsed
+  };
+}
+
+function decodeBase64(value) {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(value, 'base64').toString('utf8');
+  }
+  return atob(value);
+}
+
+async function readUsersCsv(githubEnv) {
+  const apiBase = githubEnv.GITHUB_API_BASE || 'https://api.github.com';
+  const repo = githubEnv.GITHUB_REPO;
+  const branch = githubEnv.GITHUB_BRANCH || 'main';
+
+  const response = await fetch(
+    `${apiBase}/repos/${repo}/contents/data/users.csv?ref=${encodeURIComponent(branch)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${githubEnv.GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json'
+      }
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Users CSV fetch failed: ${response.status} ${text}`);
+  }
+
+  const data = await response.json();
+  const content = decodeBase64(String(data.content || '').replace(/\n/g, ''));
+  return parseCsv(content);
+}
+
+async function resolvePlanTier({ userId, fallbackTier, githubEnv }) {
+  if (!githubEnv?.GITHUB_TOKEN || !githubEnv?.GITHUB_REPO) {
+    return fallbackTier;
+  }
+
+  try {
+    const rows = await readUsersCsv(githubEnv);
+    const user = rows.find((row) => row.user_id === userId);
+    return user?.plan_tier || fallbackTier;
+  } catch (error) {
+    console.error('Plan tier lookup failed:', error);
+    return fallbackTier;
+  }
 }
 
 function getRequestId() {
@@ -84,8 +217,6 @@ app.post('/api/chat', async (req, res) => {
   const totalEstTokens = inputEstTokens + outputEstTokens;
 
   const remainingCredits = normalizeNumber(user?.remainingCredits);
-  const dailyLimit = normalizeNumber(user?.dailyLimit);
-  const todayCreditsUsed = normalizeNumber(user?.todayCreditsUsed);
   const estimatedMaxCredits = estimateCreditUpperBound({
     inputChars,
     intentType: resolvedIntent
@@ -104,12 +235,59 @@ app.post('/api/chat', async (req, res) => {
     return;
   }
 
-  if (dailyLimit !== null && todayCreditsUsed !== null && todayCreditsUsed >= dailyLimit) {
-    res.status(429).json({
-      error: 'DAILY_LIMIT_REACHED',
-      requestId
-    });
-    return;
+  if (githubToken && user?.id) {
+    try {
+      const githubEnv = {
+        GITHUB_TOKEN: githubToken,
+        GITHUB_REPO: githubRepo,
+        GITHUB_BRANCH: githubLogBranch || 'main',
+        GITHUB_USAGE_LOG_PATH: githubLogPath,
+        ...(githubApiBase ? { GITHUB_API_BASE: githubApiBase } : {})
+      };
+      const { content } = await readUsageLog(githubEnv);
+      const usageRows = parseCsv(content);
+      const usedToday = creditsUsedToday(usageRows, user.id);
+      const planTier = await resolvePlanTier({
+        userId: user.id,
+        fallbackTier: user?.planTier || user?.plan_tier || 'free',
+        githubEnv
+      });
+      const throttle = checkDailyThrottle({
+        planTier,
+        creditsUsedToday: usedToday,
+        estimatedNextCost: estimatedMaxCredits
+      });
+      if (!throttle.allowed) {
+        const entry = {
+          timestamp_utc: new Date().toISOString(),
+          user_id: user?.id || '',
+          email: user?.email || '',
+          session_id: sessionId || '',
+          request_id: requestId,
+          intent_type: resolvedIntent,
+          model,
+          input_chars: inputChars,
+          input_est_tokens: inputEstTokens,
+          output_chars: 0,
+          output_est_tokens: 0,
+          total_est_tokens: totalEstTokens,
+          credits_charged: 0,
+          latency_ms: 0,
+          status: 'blocked'
+        };
+        void appendUsageLog(githubEnv, entry).catch((error) => {
+          console.error('Usage log append failed:', error);
+        });
+        res.status(429).json({
+          error: throttle.reason,
+          remaining_today: throttle.remaining,
+          requestId
+        });
+        return;
+      }
+    } catch (error) {
+      console.error('Daily throttle check failed:', error);
+    }
   }
 
   try {
