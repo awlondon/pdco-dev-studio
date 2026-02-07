@@ -58,6 +58,11 @@ const defaultInterfaceCode = `<!doctype html>
     position: relative;
   }
 
+  .core.active {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+
   @keyframes breathe {
     0%   { transform: scale(0.98); opacity: 0.6; }
     50%  { transform: scale(1.02); opacity: 0.85; }
@@ -89,17 +94,24 @@ const defaultInterfaceCode = `<!doctype html>
 
 <script>
   const core = document.getElementById("core");
+  const field = document.querySelector(".field");
 
   document.addEventListener("click", (e) => {
     const ripple = document.createElement("div");
     ripple.className = "ripple";
-    ripple.style.width = "220px";
-    ripple.style.height = "220px";
-    ripple.style.left = "50%";
-    ripple.style.top = "50%";
-    ripple.style.transformOrigin = "center";
+    const rect = core.getBoundingClientRect();
+    ripple.style.width = rect.width + "px";
+    ripple.style.height = rect.height + "px";
+    ripple.style.left = rect.left + rect.width / 2 + "px";
+    ripple.style.top = rect.top + rect.height / 2 + "px";
+    ripple.style.position = "absolute";
+    ripple.style.transform = "translate(-50%, -50%) scale(0)";
 
-    core.appendChild(ripple);
+    field.appendChild(ripple);
+    core.classList.add("active");
+    setTimeout(() => {
+      core.classList.remove("active");
+    }, 300);
 
     ripple.addEventListener("animationend", () => {
       ripple.remove();
