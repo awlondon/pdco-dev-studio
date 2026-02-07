@@ -1,0 +1,1 @@
+user_id,created_at,email,auth_provider,display_name,newsletter_opt_in,account_status,plan,monthly_credit_limit,monthly_credits_used,hard_daily_limit,soft_daily_limit,last_request_at,last_reset_at,total_requests,total_tokens_estimated,notes
