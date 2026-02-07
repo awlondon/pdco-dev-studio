@@ -11,8 +11,11 @@
     data-user-id="user_demo"
     data-email="demo@maya.dev"
     data-remaining-credits="500"
+    data-credits-total="500"
     data-daily-limit="50"
     data-today-credits-used="0"
+    data-credits-reset-days="12"
+    data-daily-reset-time="6h 12m"
     data-plan-label="Free"
     data-free-tier-remaining="10"
   >
@@ -21,8 +24,35 @@
         <h1>Maya Dev UI</h1>
         <p class="subtitle">Chat with the model, edit code, and run it live.</p>
       </div>
-      <span id="status-label">Offline</span>
+      <div class="top-bar-actions">
+        <span id="status-label">Offline</span>
+        <button id="credit-badge" class="credit-badge" type="button" aria-haspopup="dialog" aria-expanded="false">
+          <span class="credit-badge-icon" aria-hidden="true">🟢</span>
+          <span class="credit-badge-text">
+            <span class="credit-badge-count">312</span>
+            <span class="credit-badge-label">credits</span>
+          </span>
+          <span class="credit-badge-tooltip">Credits power generations. Resets monthly.</span>
+        </button>
+        <div class="avatar-chip" aria-label="User profile">JD</div>
+      </div>
     </header>
+
+    <div id="credit-panel" class="credit-panel hidden" role="dialog" aria-label="Credits">
+      <div class="credit-panel-header">Credits</div>
+      <div class="credit-meter">
+        <div class="credit-meter-fill"></div>
+        <span class="credit-meter-label">0 / 0</span>
+      </div>
+      <div class="credit-panel-meta">
+        <div id="credit-reset">Resets in 12 days</div>
+        <div id="credit-daily-limit">Daily limit: 500 credits</div>
+      </div>
+      <div id="credit-daily-message" class="credit-panel-callout hidden"></div>
+      <div id="credit-upgrade-nudge" class="credit-panel-nudge hidden">
+        Running low? Pro unlocks 4× more credits and faster runs.
+      </div>
+    </div>
 
     <main id="workspace">
       <div id="left-pane" class="left-pane">
@@ -30,6 +60,15 @@
           <div class="panel-header">Chat</div>
           <div id="chat-messages" class="panel-body"></div>
           <form id="chat-form" class="panel-footer">
+            <div id="credit-banner" class="credit-banner hidden"></div>
+            <div id="credit-inline-warning" class="credit-inline-warning hidden"></div>
+            <div id="credit-zero" class="credit-zero hidden">
+              <span>Out of credits — upgrade or wait for reset.</span>
+              <div class="credit-cta">
+                <button class="ghost-button" type="button">Upgrade Plan</button>
+                <button class="ghost-button" type="button">View Usage</button>
+              </div>
+            </div>
             <div id="loadingIndicator" class="loading hidden">
               <span class="dot">•</span>
               <span class="dot">•</span>

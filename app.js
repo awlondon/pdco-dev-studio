@@ -6,6 +6,17 @@ const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
 const creditPreviewEl = document.getElementById('credit-preview');
 const micButton = document.getElementById('btn-mic');
+const creditBadge = document.getElementById('credit-badge');
+const creditPanel = document.getElementById('credit-panel');
+const creditMeterFill = document.querySelector('.credit-meter-fill');
+const creditMeterLabel = document.querySelector('.credit-meter-label');
+const creditResetLabel = document.getElementById('credit-reset');
+const creditDailyLimitLabel = document.getElementById('credit-daily-limit');
+const creditInlineWarning = document.getElementById('credit-inline-warning');
+const creditBanner = document.getElementById('credit-banner');
+const creditZero = document.getElementById('credit-zero');
+const creditDailyMessage = document.getElementById('credit-daily-message');
+const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
 const codeEditor = document.getElementById('code-editor');
 const lineNumbersEl = document.getElementById('line-numbers');
 const lineCountEl = document.getElementById('line-count');
@@ -86,6 +97,10 @@ const CREDIT_BAND_MIN = 0.7;
 const CREDIT_BAND_MAX = 1.3;
 const CREDIT_WARNING_THRESHOLD = 0.5;
 const LOW_CREDIT_WARNING_THRESHOLD = 3;
+const SOFT_WARNING_THRESHOLD = 0.3;
+const HARD_WARNING_THRESHOLD = 0.1;
+const UPGRADE_NUDGE_KEY = 'mayaUpgradeNudgeShown';
+const LOW_CREDIT_WARNING_KEY = 'mayaLowCreditWarningShown';
 
 const sessionId = (() => {
   if (typeof window === 'undefined') {
@@ -143,11 +158,21 @@ function getCreditState() {
   const remainingCredits = Number.parseInt(root?.dataset.remainingCredits ?? '', 10);
   const freeTierRemaining = Number.parseInt(root?.dataset.freeTierRemaining ?? '', 10);
   const planLabel = root?.dataset.planLabel?.trim() || '';
+  const creditsTotal = Number.parseInt(root?.dataset.creditsTotal ?? '', 10);
+  const resetDays = Number.parseInt(root?.dataset.creditsResetDays ?? '', 10);
+  const dailyLimit = Number.parseInt(root?.dataset.dailyLimit ?? '', 10);
+  const todayCreditsUsed = Number.parseInt(root?.dataset.todayCreditsUsed ?? '', 10);
+  const dailyResetTime = root?.dataset.dailyResetTime?.trim() || '';
   return {
     remainingCredits: Number.isFinite(remainingCredits) ? remainingCredits : null,
     freeTierRemaining: Number.isFinite(freeTierRemaining) ? freeTierRemaining : null,
     planLabel: planLabel || null,
-    isFreeTier: planLabel.toLowerCase() === 'free'
+    isFreeTier: planLabel.toLowerCase() === 'free',
+    creditsTotal: Number.isFinite(creditsTotal) ? creditsTotal : null,
+    resetDays: Number.isFinite(resetDays) ? resetDays : null,
+    dailyLimit: Number.isFinite(dailyLimit) ? dailyLimit : null,
+    todayCreditsUsed: Number.isFinite(todayCreditsUsed) ? todayCreditsUsed : null,
+    dailyResetTime
   };
 }
 
@@ -280,6 +305,147 @@ function updateCreditPreview({ force = false } = {}) {
   }
 
   creditPreviewEl.textContent = previewText;
+}
+
+function formatCreditNumber(value) {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function getCreditPercent(remaining, total) {
+  if (!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(remaining / total, 1));
+}
+
+function updateCreditBadge(state) {
+  if (!creditBadge) {
+    return;
+  }
+  const iconEl = creditBadge.querySelector('.credit-badge-icon');
+  const countEl = creditBadge.querySelector('.credit-badge-count');
+  const isFree = state.isFreeTier;
+  const isCompact = window.matchMedia?.('(max-width: 640px)').matches;
+  if (iconEl) {
+    iconEl.textContent = isCompact ? '●' : (isFree ? '🟢' : '💎');
+  }
+  if (countEl) {
+    countEl.textContent = formatCreditNumber(state.remainingCredits);
+  }
+  const percent = getCreditPercent(state.remainingCredits, state.creditsTotal);
+  creditBadge.classList.remove('credit-badge--warn', 'credit-badge--critical');
+  if (percent < 0.2) {
+    creditBadge.classList.add('credit-badge--critical');
+  } else if (percent < 0.5) {
+    creditBadge.classList.add('credit-badge--warn');
+  }
+}
+
+function updateCreditPanel(state) {
+  if (!creditPanel) {
+    return;
+  }
+  const percent = getCreditPercent(state.remainingCredits, state.creditsTotal);
+  if (creditMeterFill) {
+    creditMeterFill.style.width = `${percent * 100}%`;
+  }
+  if (creditMeterLabel) {
+    creditMeterLabel.textContent = `${formatCreditNumber(state.remainingCredits)} / ${formatCreditNumber(state.creditsTotal)}`;
+  }
+  if (creditResetLabel && Number.isFinite(state.resetDays)) {
+    creditResetLabel.textContent = `Resets in ${state.resetDays} days`;
+  }
+  if (creditDailyLimitLabel && Number.isFinite(state.dailyLimit)) {
+    creditDailyLimitLabel.textContent = `Daily limit: ${formatCreditNumber(state.dailyLimit)} credits`;
+  }
+}
+
+function shouldShowUpgradeNudge(state) {
+  const percent = getCreditPercent(state.remainingCredits, state.creditsTotal);
+  const dailyCapHit = Number.isFinite(state.dailyLimit)
+    && Number.isFinite(state.todayCreditsUsed)
+    && state.todayCreditsUsed >= state.dailyLimit;
+  const blocked = state.remainingCredits !== null && state.remainingCredits <= 0;
+  return percent < 0.2 || dailyCapHit || blocked;
+}
+
+function updateCreditAlerts(state) {
+  if (!creditInlineWarning || !creditBanner || !creditZero) {
+    return;
+  }
+  const percent = getCreditPercent(state.remainingCredits, state.creditsTotal);
+  const dailyCapHit = Number.isFinite(state.dailyLimit)
+    && Number.isFinite(state.todayCreditsUsed)
+    && state.todayCreditsUsed >= state.dailyLimit;
+  const outOfCredits = state.remainingCredits !== null && state.remainingCredits <= 0;
+
+  if (outOfCredits) {
+    creditZero.classList.remove('hidden');
+    creditBanner.classList.add('hidden');
+    creditInlineWarning.classList.add('hidden');
+    chatInput?.setAttribute('disabled', 'true');
+    setSendDisabled(true);
+  } else {
+    creditZero.classList.add('hidden');
+    chatInput?.removeAttribute('disabled');
+    if (!chatState.locked) {
+      setSendDisabled(false);
+    }
+  }
+
+  const softWarningShown = window.sessionStorage?.getItem(LOW_CREDIT_WARNING_KEY);
+  if (percent <= SOFT_WARNING_THRESHOLD && percent > HARD_WARNING_THRESHOLD && !softWarningShown) {
+    creditInlineWarning.textContent = '⚠️ You’re getting low on credits.';
+    creditInlineWarning.classList.remove('hidden');
+    window.sessionStorage?.setItem(LOW_CREDIT_WARNING_KEY, 'true');
+  } else if (percent > SOFT_WARNING_THRESHOLD) {
+    creditInlineWarning.classList.add('hidden');
+  }
+
+  if (percent <= HARD_WARNING_THRESHOLD && percent > 0) {
+    creditBanner.textContent = '🚨 Only ~3 generations left this month.';
+    creditBanner.classList.remove('hidden');
+  } else {
+    creditBanner.classList.add('hidden');
+  }
+
+  if (dailyCapHit) {
+    const resetTime = state.dailyResetTime || 'tomorrow';
+    creditInlineWarning.textContent = `⏳ Daily limit reached. More credits unlock in ${resetTime}.`;
+    creditInlineWarning.classList.remove('hidden');
+    if (!state.isFreeTier) {
+      creditInlineWarning.innerHTML = `⏳ Daily limit reached. More credits unlock in ${resetTime}. <span class="credit-link">Need more today? Buy a top-up →</span>`;
+    }
+  }
+
+  if (creditDailyMessage) {
+    if (dailyCapHit) {
+      const resetTime = state.dailyResetTime || 'tomorrow';
+      creditDailyMessage.innerHTML = `⏳ Daily limit reached. More credits unlock in ${resetTime}.${!state.isFreeTier ? ' <span class="credit-link">Need more today? Buy a top-up →</span>' : ''}`;
+      creditDailyMessage.classList.remove('hidden');
+    } else {
+      creditDailyMessage.classList.add('hidden');
+    }
+  }
+
+  if (creditUpgradeNudge) {
+    if (shouldShowUpgradeNudge(state) && !window.sessionStorage?.getItem(UPGRADE_NUDGE_KEY)) {
+      creditUpgradeNudge.classList.remove('hidden');
+      window.sessionStorage?.setItem(UPGRADE_NUDGE_KEY, 'true');
+    } else if (!shouldShowUpgradeNudge(state)) {
+      creditUpgradeNudge.classList.add('hidden');
+    }
+  }
+}
+
+function updateCreditUI() {
+  const state = getCreditState();
+  updateCreditBadge(state);
+  updateCreditPanel(state);
+  updateCreditAlerts(state);
 }
 
 function debounce(fn, delayMs) {
@@ -785,7 +951,7 @@ function createGenerationFeedback({ addMessage, updateMessage }) {
   };
 }
 
-function renderAssistantMessage(messageId, text, metadata) {
+function renderAssistantMessage(messageId, text, metadataParts = []) {
   const safeText =
     (typeof text === 'string' && text.trim().length)
       ? text.trim()
@@ -800,8 +966,8 @@ function renderAssistantMessage(messageId, text, metadata) {
   }
 
   let metaEl = null;
-  if (metadata) {
-    metaEl = appendChatMeta(metadata, messageId);
+  if (metadataParts.length) {
+    metaEl = renderAssistantMeta(messageId, metadataParts);
   } else if (messageEl) {
     metaEl = ensureAssistantMeta(messageEl);
   }
@@ -831,9 +997,9 @@ function ensureAssistantMeta(message) {
   return meta;
 }
 
-function appendChatMeta(text, messageId) {
-  if (!text) {
-    return;
+function renderAssistantMeta(messageId, parts = []) {
+  if (!parts.length) {
+    return null;
   }
 
   const message = messageId
@@ -841,7 +1007,19 @@ function appendChatMeta(text, messageId) {
     : null;
   const meta = message ? ensureAssistantMeta(message) : document.createElement('div');
   meta.classList.add('assistant-meta');
-  meta.textContent = text;
+  meta.textContent = '';
+
+  parts.forEach((part) => {
+    if (!part?.text) {
+      return;
+    }
+    const span = document.createElement('span');
+    span.textContent = part.text;
+    if (part.className) {
+      span.classList.add(part.className);
+    }
+    meta.appendChild(span);
+  });
 
   if (message) {
     message.appendChild(meta);
@@ -1075,14 +1253,14 @@ function setPreviewExecutionStatus(state, message) {
 function formatGenerationMetadata(durationMs) {
   if (durationMs > 1500) {
     const seconds = (durationMs / 1000).toFixed(1);
-    return `— Generated in ${seconds} s · Auto-run enabled`;
+    return `Generated in ${seconds} s · Auto-run enabled`;
   }
-  return `— Generated in ${Math.round(durationMs)} ms · Auto-run enabled`;
+  return `Generated in ${Math.round(durationMs)} ms · Auto-run enabled`;
 }
 
-function formatUsageMetadata(usage) {
+function formatUsageMetadata(usage, context) {
   if (!usage || !Number.isFinite(usage.creditsCharged)) {
-    return '';
+    return { usageText: '', warningText: '' };
   }
   const pieces = [`Used ${usage.creditsCharged} credits`];
   if (Number.isFinite(usage.remainingCredits)) {
@@ -1091,7 +1269,15 @@ function formatUsageMetadata(usage) {
       pieces.push(`⚠️ ${usage.remainingCredits} runs remaining this month`);
     }
   }
-  return pieces.join(' · ');
+  const usageText = `— ${pieces.join(' · ')}`;
+  let warningText = '';
+  if (context?.dailyLimit && Number.isFinite(context.dailyLimit) && context.dailyLimit > 0) {
+    const percent = Math.round((usage.creditsCharged / context.dailyLimit) * 100);
+    if (percent >= 18) {
+      warningText = `⚠️ Large generation · ${percent}% of daily limit`;
+    }
+  }
+  return { usageText, warningText };
 }
 
 function applyUsageToCredits(usage) {
@@ -1101,6 +1287,11 @@ function applyUsageToCredits(usage) {
   const root = document.getElementById('root');
   if (root) {
     root.dataset.remainingCredits = usage.remainingCredits;
+    if (Number.isFinite(usage.creditsCharged)) {
+      const currentUsed = Number.parseInt(root.dataset.todayCreditsUsed ?? '0', 10);
+      const updatedUsed = Number.isFinite(currentUsed) ? currentUsed + usage.creditsCharged : usage.creditsCharged;
+      root.dataset.todayCreditsUsed = `${updatedUsed}`;
+    }
   }
 }
 
@@ -1471,6 +1662,12 @@ async function sendChat() {
     return;
   }
 
+  const creditState = getCreditState();
+  if (creditState.remainingCredits !== null && creditState.remainingCredits <= 0) {
+    updateCreditUI();
+    return;
+  }
+
   const userInput = chatInput.value.trim();
   if (!userInput) {
     return;
@@ -1519,7 +1716,7 @@ async function sendChat() {
 
   let generationMetadata = '';
   let rawReply = '';
-  let usageMetadata = '';
+  let usageMetadata = { usageText: '', warningText: '' };
   try {
     const llmStartTime = performance.now();
     const systemPrompt = `You are a coding assistant.
@@ -1571,15 +1768,20 @@ Output rules:
 
     setStatusOnline(true);
     rawReply = data?.choices?.[0]?.message?.content || 'No response.';
-    usageMetadata = formatUsageMetadata(data?.usage);
+    usageMetadata = formatUsageMetadata(data?.usage, getCreditState());
     applyUsageToCredits(data?.usage);
     updateCreditPreview({ force: true });
+    updateCreditUI();
     generationFeedback.stop();
   } catch (error) {
     generationFeedback.stop();
     finalizeChatOnce(() => {
-      renderAssistantMessage(pendingMessageId, '⚠️ Something went wrong while generating the response.', formatGenerationMetadata(performance.now() - startedAt));
-    });
+    renderAssistantMessage(
+      pendingMessageId,
+      '⚠️ Something went wrong while generating the response.',
+      [{ text: formatGenerationMetadata(performance.now() - startedAt) }]
+    );
+  });
     unlockChat();
     stopLoading();
     return;
@@ -1609,11 +1811,15 @@ Output rules:
 
   const elapsed = performance.now() - startedAt;
   const baseMetadata = generationMetadata || formatGenerationMetadata(elapsed);
-  const metadataText = usageMetadata
-    ? `${baseMetadata} · ${usageMetadata}`
-    : baseMetadata;
+  const metadataParts = [{ text: baseMetadata }];
+  if (usageMetadata.usageText) {
+    metadataParts.push({ text: usageMetadata.usageText, className: 'assistant-meta-usage' });
+  }
+  if (usageMetadata.warningText) {
+    metadataParts.push({ text: usageMetadata.warningText, className: 'assistant-meta-warning' });
+  }
   finalizeChatOnce(() => {
-    renderAssistantMessage(pendingMessageId, extractedText, metadataText);
+    renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
   });
 
   try {
@@ -1654,6 +1860,43 @@ if (chatInput) {
     requestCreditPreviewUpdate();
   });
 }
+
+if (creditBadge && creditPanel) {
+  const closeCreditPanel = () => {
+    creditPanel.classList.add('hidden');
+    creditBadge.setAttribute('aria-expanded', 'false');
+  };
+
+  const openCreditPanel = () => {
+    creditPanel.classList.remove('hidden');
+    creditBadge.setAttribute('aria-expanded', 'true');
+  };
+
+  creditBadge.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (creditPanel.classList.contains('hidden')) {
+      openCreditPanel();
+    } else {
+      closeCreditPanel();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!creditPanel.contains(event.target) && !creditBadge.contains(event.target)) {
+      closeCreditPanel();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeCreditPanel();
+    }
+  });
+}
+
+window.addEventListener('resize', () => {
+  updateCreditBadge(getCreditState());
+});
 
 codeEditor.addEventListener('input', () => {
   const hasEdits = codeEditor.value !== baselineCode;
@@ -1743,6 +1986,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sandboxStopButton) {
     sandboxStopButton.addEventListener('click', stopSandboxFromUser);
   }
+
+  updateCreditUI();
 });
 
 codeEditor.addEventListener('keydown', (event) => {
