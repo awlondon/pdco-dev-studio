@@ -1,0 +1,1 @@
+event_id,timestamp,user_id,request_id,plan,endpoint,intent_type,model_variant,credits_charged,credits_remaining,tokens_estimated,latency_ms,generation_duration_ms,output_type,status,throttle_state,client_origin,ip_hash,user_agent,notes
