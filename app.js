@@ -139,6 +139,73 @@ if (sandboxFrame) {
   preview.attach(sandboxFrame);
 }
 
+const tts = (() => {
+  if (!('speechSynthesis' in window)) {
+    return null;
+  }
+
+  let currentUtterance = null;
+  let currentButton = null;
+
+  function applyPreferredVoice(utterance) {
+    const voices = speechSynthesis.getVoices();
+    const preferred = voices.find((voice) =>
+      /en/i.test(voice.lang) && /natural|google|neural/i.test(voice.name)
+    );
+    if (preferred) {
+      utterance.voice = preferred;
+    }
+  }
+
+  function resetButton() {
+    if (!currentButton) {
+      return;
+    }
+    currentButton.dataset.playing = 'false';
+    currentButton.textContent = '🔊 Listen';
+  }
+
+  function speak(text, button) {
+    if (!text || !text.trim()) {
+      return;
+    }
+    stop();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    applyPreferredVoice(utterance);
+
+    currentUtterance = utterance;
+    currentButton = button || null;
+
+    utterance.addEventListener('end', () => {
+      resetButton();
+      currentUtterance = null;
+      currentButton = null;
+    });
+    utterance.addEventListener('error', () => {
+      resetButton();
+      currentUtterance = null;
+      currentButton = null;
+    });
+
+    speechSynthesis.speak(utterance);
+  }
+
+  function stop() {
+    if (speechSynthesis.speaking || speechSynthesis.pending) {
+      speechSynthesis.cancel();
+    }
+    resetButton();
+    currentUtterance = null;
+    currentButton = null;
+  }
+
+  return { speak, stop };
+})();
+
 updateLineNumbers();
 
 function setStatusOnline(isOnline) {
@@ -228,15 +295,40 @@ function renderAssistantMessage(messageId, text, metadata) {
       ? text.trim()
       : '';
 
+  let messageEl = null;
   if (messageId) {
     updateMessage(messageId, safeText ? formatAssistantHtml(safeText) : '');
+    messageEl = document.querySelector(`[data-id="${messageId}"]`);
   } else if (safeText) {
-    appendMessage('assistant', safeText);
+    messageEl = appendMessage('assistant', safeText);
   }
 
+  let metaEl = null;
   if (metadata) {
-    appendChatMeta(metadata, messageId);
+    metaEl = appendChatMeta(metadata, messageId);
+  } else if (messageEl) {
+    metaEl = ensureAssistantMeta(messageEl);
   }
+
+  if (metaEl) {
+    const button = createTTSButton(safeText);
+    if (button) {
+      metaEl.appendChild(button);
+    }
+  }
+}
+
+function ensureAssistantMeta(message) {
+  if (!message) {
+    return null;
+  }
+  let meta = message.querySelector('.assistant-meta');
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.className = 'assistant-meta';
+    message.appendChild(meta);
+  }
+  return meta;
 }
 
 function appendChatMeta(text, messageId) {
@@ -247,8 +339,8 @@ function appendChatMeta(text, messageId) {
   const message = messageId
     ? document.querySelector(`[data-id="${messageId}"]`)
     : null;
-  const meta = document.createElement('div');
-  meta.className = 'assistant-meta';
+  const meta = message ? ensureAssistantMeta(message) : document.createElement('div');
+  meta.classList.add('assistant-meta');
   meta.textContent = text;
 
   if (message) {
@@ -262,6 +354,32 @@ function appendChatMeta(text, messageId) {
   }
 
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  return meta;
+}
+
+function createTTSButton(text) {
+  if (!tts || !text || !text.trim()) {
+    return null;
+  }
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tts-btn';
+  button.textContent = '🔊 Listen';
+  button.dataset.playing = 'false';
+
+  button.addEventListener('click', () => {
+    const isPlaying = button.dataset.playing === 'true';
+    if (!isPlaying) {
+      tts.speak(text, button);
+      button.dataset.playing = 'true';
+      button.textContent = '⏹ Stop';
+    } else {
+      tts.stop();
+    }
+  });
+
+  return button;
 }
 
 function finalizeChatOnce(fn) {
