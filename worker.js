@@ -5,6 +5,25 @@ const PLAN_BY_PRICE_ID = {
 };
 
 const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
+const GITHUB_API = 'https://api.github.com';
+const REQUIRED_USER_HEADERS = [
+  'user_id',
+  'email',
+  'auth_provider',
+  'provider_user_id',
+  'display_name',
+  'created_at',
+  'last_login_at',
+  'plan_tier',
+  'credits_total',
+  'credits_remaining',
+  'monthly_reset_at',
+  'newsletter_opt_in',
+  'account_status',
+  'stripe_customer_id',
+  'stripe_subscription_id',
+  'billing_status'
+];
 
 export default {
   async fetch(request, env, ctx) {
@@ -256,13 +275,105 @@ async function findUserIdByStripeCustomer(env, stripeCustomerId) {
 }
 
 async function getUserFromStore(env, userId) {
-  throw new Error('Not implemented');
+  const { rows } = await readUsersCSV(env);
+  return rows.find((row) => row.user_id === userId) || null;
 }
 
 async function upsertUserToStore(env, userId, patch) {
-  throw new Error('Not implemented');
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const { sha, rows } = await readUsersCSV(env);
+
+  const user = rows.find((row) => row.user_id === userId);
+  if (!user) {
+    throw new Error(`User ${userId} not found`);
+  }
+
+  Object.entries(patch).forEach(([key, value]) => {
+    if (key === 'clamp_remaining_to_total' && value === true) {
+      const total = Number(user.credits_total || 0);
+      user.credits_remaining = Math.min(Number(user.credits_remaining || 0), total);
+    } else {
+      user[key] = value;
+    }
+  });
+
+  const csv = serializeCSV(rows);
+  const encoded = btoa(csv);
+
+  await githubRequest(env, `/repos/${repo}/contents/data/users.csv`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      message: `Update billing for user ${userId}`,
+      content: encoded,
+      sha,
+      branch
+    })
+  });
 }
 
 async function findUserIdByStripeCustomerInStore(env, stripeCustomerId) {
-  throw new Error('Not implemented');
+  const { rows } = await readUsersCSV(env);
+  const user = rows.find((row) => row.stripe_customer_id === stripeCustomerId);
+  return user ? user.user_id : null;
+}
+
+async function githubRequest(env, path, options = {}) {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'maya-dev-worker',
+      ...(options.headers || {})
+    }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API error ${res.status}: ${text}`);
+  }
+
+  return res.json();
+}
+
+async function readUsersCSV(env) {
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const data = await githubRequest(env, `/repos/${repo}/contents/data/users.csv?ref=${branch}`);
+  const content = atob(data.content);
+  return {
+    sha: data.sha,
+    rows: parseCSV(content)
+  };
+}
+
+function parseCSV(csvText) {
+  const trimmed = csvText.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const lines = trimmed.split('\n');
+  const headers = lines.shift().split(',');
+
+  return lines.map((line) => {
+    const values = line.split(',');
+    const obj = {};
+    headers.forEach((header, index) => {
+      obj[header] = values[index] ?? '';
+    });
+    return obj;
+  });
+}
+
+function serializeCSV(rows) {
+  const headers = REQUIRED_USER_HEADERS;
+  const lines = [
+    headers.join(','),
+    ...rows.map((row) => headers.map((header) => String(row[header] ?? '')).join(','))
+  ];
+
+  return lines.join('\n') + '\n';
 }

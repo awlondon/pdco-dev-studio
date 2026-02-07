@@ -8,7 +8,6 @@ Canonical file: `data/users.csv`.
 | --- | --- | --- |
 | user_id | string (uuid) | Primary key. Never changes. |
 | email | string | Normalized lowercase email. Used for identity merging. |
-| email_verified | boolean | Whether the email is verified. |
 | auth_provider | enum | `google`, `apple`, `email`. |
 | provider_user_id | string | OAuth subject/Apple user identifier (nullable for email). |
 | display_name | string | Optional (Google/Apple name or user-provided). |
@@ -20,6 +19,9 @@ Canonical file: `data/users.csv`.
 | monthly_reset_at | ISO 8601 | Next monthly reset timestamp. |
 | newsletter_opt_in | boolean | Always true by default. |
 | account_status | enum | `active`, `suspended`. |
+| stripe_customer_id | string | Stripe customer identifier. |
+| stripe_subscription_id | string | Stripe subscription identifier. |
+| billing_status | enum | `active`, `past_due`, `canceled`. |
 
 ## Notes
 
