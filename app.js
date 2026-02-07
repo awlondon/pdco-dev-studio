@@ -49,47 +49,30 @@ function handleConsoleLog(...args) {
 function buildWrappedPrompt(userInput, currentCode) {
   if (!currentCode) {
     return `
-Return JSON ONLY.
-
-Schema:
+Return JSON ONLY with this schema:
 {
-  "text": "Explanation of what you built",
-  "code": "Complete self-contained HTML/CSS/JS"
+  "text": "...",
+  "code": "..."
 }
 
-Rules:
-- No markdown
-- Inline CSS and JS only
-- Code must run in a browser
-- Do not escape HTML
-
-User request:
+User message:
 ${userInput}
 `;
   }
 
   return `
-You are modifying an existing working interface.
+You are continuing an ongoing interaction.
 
-Return JSON ONLY.
-
-Schema:
+Return JSON ONLY with this schema:
 {
-  "text": "Explanation of the changes you made",
-  "code": "Updated full HTML/CSS/JS (not a diff)"
+  "text": "...",
+  "code": "..."
 }
 
-Rules:
-- Preserve existing functionality unless explicitly changed
-- Modify the code below to satisfy the new request
-- Return the FULL updated document
-- No markdown
-- No commentary outside JSON
-
-Current code:
+Current interface (may be reused unchanged):
 ${currentCode}
 
-User change request:
+User message:
 ${userInput}
 `;
 }
@@ -168,7 +151,16 @@ async function sendChat() {
     const messages = [
       {
         role: 'system',
-        content: 'You generate and modify interactive web interfaces.'
+        content: `You are an interactive interface designer.
+
+You always maintain a working executable web interface as part of your response.
+
+Rules:
+- You MUST always return a valid HTML/CSS/JS document.
+- You MAY choose to leave the interface unchanged if the user’s message does not require modification.
+- You SHOULD modify the interface when it meaningfully improves clarity, usability, or embodiment of the conversation.
+- Do NOT describe code unless the user explicitly asks about implementation.
+- Treat the interface as the primary artifact, and text as supporting explanation.`
       },
       {
         role: 'user',
@@ -207,9 +199,12 @@ async function sendChat() {
 
     assistantBubble.textContent = parsed.text;
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    currentCode = parsed.code;
-    codeEditor.value = parsed.code;
-    runGeneratedCode(parsed.code);
+    const nextCode = parsed.code;
+    if (nextCode && nextCode !== currentCode) {
+      currentCode = nextCode;
+      codeEditor.value = nextCode;
+      runGeneratedCode(nextCode);
+    }
     lastUserIntent = prompt;
     updateGenerationIndicator();
   } catch (error) {
