@@ -1,3 +1,5 @@
+import { createSandboxController } from './sandboxController.js';
+
 const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
@@ -5,7 +7,7 @@ const sendButton = document.getElementById('btn-send');
 const codeEditor = document.getElementById('code-editor');
 const consoleLog = document.getElementById('console-output-log');
 const consolePane = document.getElementById('consoleOutput');
-const previewFrameContainer = document.getElementById('previewFrameContainer');
+const sandboxFrame = document.getElementById('sandbox');
 const statusLabel = document.getElementById('status-label');
 const generationIndicator = document.getElementById('generation-indicator');
 const previewStatus = document.getElementById('previewStatus');
@@ -29,7 +31,6 @@ const runButton = document.getElementById('runCode');
 const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const SANDBOX_TIMEOUT_MS = 4500;
-const MAX_RAF = 300;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
@@ -42,22 +43,23 @@ const defaultInterfaceCode = `<!doctype html>
 
 codeEditor.value = defaultInterfaceCode;
 let currentCode = defaultInterfaceCode;
+let baselineCode = defaultInterfaceCode;
 let previousCode = null;
 let loadingStartTime = null;
 let loadingInterval = null;
 let lastLLMCode = null;
 let userHasEditedCode = false;
-let activeIframe = null;
-let sandboxKillTimer = null;
-let sandboxStartTime = null;
-let sandboxFrameCount = 0;
-let sandboxStatusTimer = null;
-let rafMonitorId = null;
 let baseExecutionWarnings = [];
 let sandboxMode = 'finite';
 let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
+
+const sandbox = createSandboxController({
+  iframe: sandboxFrame,
+  statusEl: sandboxStatus,
+  maxFiniteMs: SANDBOX_TIMEOUT_MS
+});
 
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
@@ -336,79 +338,24 @@ function setStatus(state, source = null) {
   }
 }
 
-function setSandboxStatusText(message) {
-  if (!sandboxStatus) {
-    return;
-  }
-  sandboxStatus.textContent = message;
-}
-
-function clearSandbox() {
-  if (!previewFrameContainer) {
-    return;
-  }
-  previewFrameContainer.innerHTML = '';
-  activeIframe = null;
-}
-
-function stopSandbox(reason, options = {}) {
-  if (sandboxKillTimer) {
-    clearTimeout(sandboxKillTimer);
-    sandboxKillTimer = null;
-  }
-  if (rafMonitorId && activeIframe?.contentWindow) {
-    activeIframe.contentWindow.cancelAnimationFrame(rafMonitorId);
-    rafMonitorId = null;
-  }
-  if (sandboxStatusTimer) {
-    clearInterval(sandboxStatusTimer);
-    sandboxStatusTimer = null;
-  }
-  if (reason) {
-    const {
-      state = 'stopped',
-      label = `🔴 Stopped (${reason})`,
-      statusMessage = `Execution stopped — ${reason}.`,
-      warning
-    } = options;
-    setPreviewExecutionStatus(state, label);
-    setPreviewStatus(statusMessage);
-    if (warning) {
-      addExecutionWarning(warning);
-    }
-  }
-  setSandboxStatusText(reason ? `stopped • ${reason}` : 'stopped');
-  setSandboxAnimationState('stopped');
-  setSandboxControlsVisible(false);
-  clearSandbox();
-  outputPanel?.classList.remove('loading');
-}
-
-function callSandboxControl(action) {
-  const control = activeIframe?.contentWindow?.__MAYA_ANIMATION_CONTROL__;
-  if (!control || typeof control[action] !== 'function') {
-    return false;
-  }
-  control[action]();
-  return true;
-}
-
 function pauseSandbox() {
   if (sandboxMode !== 'animation') {
     return;
   }
-  if (callSandboxControl('pause')) {
-    setSandboxAnimationState('paused');
-  }
+  sandbox.pause();
+  setSandboxAnimationState('paused');
+  setPreviewExecutionStatus('paused', 'PAUSED');
+  setPreviewStatus('Animation paused');
 }
 
 function resumeSandbox() {
   if (sandboxMode !== 'animation') {
     return;
   }
-  if (callSandboxControl('resume')) {
-    setSandboxAnimationState('running');
-  }
+  sandbox.resume();
+  setSandboxAnimationState('running');
+  setPreviewExecutionStatus('running', 'RUNNING · ANIMATION MODE');
+  setPreviewStatus('Running animation…');
 }
 
 function resetSandbox() {
@@ -419,172 +366,11 @@ function resetSandbox() {
 }
 
 function stopSandboxFromUser() {
-  stopSandbox('user-stop', {
-    state: 'stopped',
-    label: '🛑 Stopped',
-    statusMessage: 'Sandbox stopped by user.'
-  });
-}
-
-function armTimeoutKillSwitch() {
-  if (sandboxKillTimer) {
-    clearTimeout(sandboxKillTimer);
-  }
-  sandboxKillTimer = setTimeout(() => {
-    appendOutput('Sandbox limit reached — auto-stopped.', 'success');
-    stopSandbox('timeout', {
-      state: 'capped',
-      label: '⚠️ Sandbox limit reached',
-      statusMessage: 'Sandbox limit reached — animation paused.',
-      warning: 'Animation reached sandbox frame limit. Consider adding a frame cap or reset control.'
-    });
-  }, SANDBOX_TIMEOUT_MS);
-}
-
-function armRAFMonitor({ enforceLimits = true, mode = 'finite' } = {}) {
-  if (!activeIframe?.contentWindow) {
-    return;
-  }
-  const win = activeIframe.contentWindow;
-  sandboxStartTime = performance.now();
-  sandboxFrameCount = 0;
-  setSandboxAnimationState('running');
-  if (sandboxStatusTimer) {
-    clearInterval(sandboxStatusTimer);
-  }
-  sandboxStatusTimer = setInterval(() => {
-    const elapsed = performance.now() - sandboxStartTime;
-    const stateLabel =
-      sandboxAnimationState === 'paused'
-        ? 'paused'
-        : mode === 'animation'
-          ? 'running · animation mode'
-          : 'running';
-    setSandboxStatusText(
-      `${stateLabel} • ${sandboxFrameCount} frames • ${(elapsed / 1000).toFixed(2)}s`
-    );
-  }, 100);
-
-  const step = (timestamp) => {
-    sandboxFrameCount++;
-    if (
-      enforceLimits &&
-      (sandboxFrameCount > MAX_RAF || timestamp - sandboxStartTime > SANDBOX_TIMEOUT_MS)
-    ) {
-      appendOutput('Sandbox limit reached — auto-stopped.', 'success');
-      stopSandbox('safety cap', {
-        state: 'capped',
-        label: '⚠️ Sandbox limit reached',
-        statusMessage: 'Sandbox limit reached — animation paused.',
-        warning: 'Animation reached sandbox frame limit. Consider adding a frame cap or reset control.'
-      });
-      return;
-    }
-    rafMonitorId = win.requestAnimationFrame(step);
-  };
-  rafMonitorId = win.requestAnimationFrame(step);
-}
-
-function injectAnimationControls(html) {
-  if (html.includes('__MAYA_ANIMATION_CONTROL__')) {
-    return html;
-  }
-
-  const controlScript = `
-<script>
-(() => {
-  const root = window;
-  if (root.__MAYA_ANIMATION_CONTROL__) return;
-  let running = true;
-  const queuedRaf = [];
-  const realRAF = root.requestAnimationFrame.bind(root);
-  const realSetInterval = root.setInterval.bind(root);
-
-  root.__MAYA_ANIMATION_CONTROL__ = {
-    pause() {
-      running = false;
-    },
-    resume() {
-      if (running) return;
-      running = true;
-      const queued = queuedRaf.splice(0);
-      queued.forEach((cb) => realRAF(cb));
-    },
-    reset() {
-      running = true;
-      queuedRaf.length = 0;
-    },
-    stop() {
-      running = false;
-      queuedRaf.length = 0;
-    }
-  };
-
-  root.requestAnimationFrame = (cb) => {
-    if (!running) {
-      queuedRaf.push(cb);
-      return 0;
-    }
-    return realRAF((ts) => {
-      if (!running) {
-        queuedRaf.push(cb);
-        return;
-      }
-      cb(ts);
-    });
-  };
-
-  root.setInterval = (cb, delay, ...args) => {
-    return realSetInterval(() => {
-      if (!running) {
-        return;
-      }
-      cb(...args);
-    }, delay);
-  };
-})();
-</script>
-`.trim();
-
-  if (/<\/head>/i.test(html)) {
-    return html.replace(/<\/head>/i, `${controlScript}\n</head>`);
-  }
-  if (/<body[^>]*>/i.test(html)) {
-    return html.replace(/<body[^>]*>/i, (match) => `${match}\n${controlScript}`);
-  }
-  return `${controlScript}\n${html}`;
-}
-
-function injectIntoSandbox(html, mode = 'finite') {
-  const iframe = document.createElement('iframe');
-
-  iframe.sandbox = 'allow-scripts allow-same-origin allow-pointer-lock';
-  iframe.style.width = '100%';
-  iframe.style.height = '100%';
-  iframe.style.border = '0';
-  iframe.setAttribute('aria-label', 'Live preview');
-
-  iframe.srcdoc = mode === 'animation' ? injectAnimationControls(html) : html;
-
-  return iframe;
-}
-
-function runSandbox(iframe, mode = 'finite') {
-  const win = iframe.contentWindow;
-
-  if (mode === 'finite') {
-    armTimeoutKillSwitch();
-  }
-  armRAFMonitor({ enforceLimits: mode === 'finite', mode });
-  setSandboxControlsVisible(mode === 'animation');
-
-  if (typeof win.__MAYA_SAFE_START__ === 'function') {
-    win.__MAYA_SAFE_START__();
-    console.log('MAYA: explicit start()');
-    return;
-  }
-
-  console.log('MAYA: inline execution only');
+  sandbox.stop('user');
+  setSandboxAnimationState('stopped');
+  setSandboxControlsVisible(false);
+  setPreviewExecutionStatus('stopped', '🛑 Stopped');
+  setPreviewStatus('Sandbox stopped by user.');
 }
 
 function handleLLMOutput(code, source = 'generated') {
@@ -594,28 +380,17 @@ function handleLLMOutput(code, source = 'generated') {
   sandboxMode = getSandboxModeForExecution(analysis.executionProfile);
   lastRunCode = code;
   lastRunSource = source;
-
-  if (!previewFrameContainer) {
+  if (!sandboxFrame) {
+    appendOutput('Sandbox iframe missing.', 'error');
     return;
   }
 
-  stopSandbox();
-  clearSandbox();
-
-  const iframe = injectIntoSandbox(code, sandboxMode);
-  previewFrameContainer.appendChild(iframe);
-  activeIframe = iframe;
-
   outputPanel?.classList.add('loading');
-  iframe.addEventListener('load', () => {
-    outputPanel?.classList.remove('loading');
-    setStatus('READY');
-
-    requestAnimationFrame(() => {
-      runSandbox(activeIframe, sandboxMode);
-      setStatus('RUNNING', source);
-    });
-  });
+  setSandboxControlsVisible(sandboxMode === 'animation');
+  setSandboxAnimationState('running');
+  sandbox.run(code);
+  outputPanel?.classList.remove('loading');
+  setStatus('RUNNING', source);
 }
 
 function updateGenerationIndicator() {
@@ -662,6 +437,7 @@ function updatePromoteVisibility() {
 function setCodeFromLLM(code) {
   lastLLMCode = code;
   codeEditor.value = code;
+  baselineCode = code;
   userHasEditedCode = false;
   updateRunButtonVisibility();
   updateRollbackVisibility();
@@ -671,6 +447,11 @@ function setCodeFromLLM(code) {
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
+  baselineCode = code;
+  userHasEditedCode = false;
+  updateRunButtonVisibility();
+  updateRollbackVisibility();
+  updatePromoteVisibility();
   setPreviewStatus(statusMessage);
   handleLLMOutput(code, source);
 }
@@ -1053,11 +834,14 @@ chatForm.addEventListener('submit', (event) => {
 });
 
 codeEditor.addEventListener('input', () => {
-  userHasEditedCode = true;
+  const hasEdits = codeEditor.value !== baselineCode;
+  userHasEditedCode = hasEdits;
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
-  markPreviewStale();
+  if (hasEdits) {
+    markPreviewStale();
+  }
   resetExecutionPreparation();
 });
 
@@ -1076,9 +860,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     handleUserRun(codeEditor.value);
-    updateRunButtonVisibility();
-    updateRollbackVisibility();
-    updatePromoteVisibility();
   });
   if (!rollbackButton) {
     console.warn('⚠️ Rollback button not found');
@@ -1090,6 +871,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     userHasEditedCode = false;
     codeEditor.value = lastLLMCode;
+    baselineCode = lastLLMCode;
     updateRunButtonVisibility();
     updateRollbackVisibility();
     updatePromoteVisibility();
@@ -1103,6 +885,7 @@ document.addEventListener('DOMContentLoaded', () => {
   promoteButton.addEventListener('click', () => {
     const currentCode = codeEditor.value;
     lastLLMCode = currentCode;
+    baselineCode = currentCode;
     userHasEditedCode = false;
     updateRunButtonVisibility();
     updateRollbackVisibility();
@@ -1132,9 +915,6 @@ codeEditor.addEventListener('keydown', (event) => {
       return;
     }
     handleUserRun(codeEditor.value);
-    updateRunButtonVisibility();
-    updateRollbackVisibility();
-    updatePromoteVisibility();
   }
 });
 
