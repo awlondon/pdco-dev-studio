@@ -45,6 +45,9 @@ let editorDirty = false;
 let lastUpdateSource = 'llm';
 let sandboxIframe = null;
 let sandboxKillTimer = null;
+let sandboxStartTime = null;
+let sandboxFrameCount = 0;
+let sandboxStatusTimer = null;
 let pendingExecution = null;
 let awaitingConfirmation = false;
 let sandboxListenerBound = false;
@@ -363,6 +366,7 @@ function buildSafetyShim() {
 
   window.requestAnimationFrame = function (cb) {
     rafCount++;
+    parent.postMessage({ type: "SANDBOX_FRAME" }, "*");
     if (rafCount > MAX_RAF) {
       throw new Error("RAF limit exceeded");
     }
@@ -412,12 +416,13 @@ function injectSafetyLayer(html) {
 
 function createSandboxedIframe() {
   const iframe = document.createElement('iframe');
-  iframe.setAttribute('sandbox', 'allow-scripts');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   iframe.setAttribute('aria-label', 'Live preview');
   return iframe;
 }
 
 function destroySandbox() {
+  stopSandboxStatus('stopped');
   if (sandboxKillTimer) {
     clearTimeout(sandboxKillTimer);
     sandboxKillTimer = null;
@@ -445,6 +450,7 @@ function handleSandboxMessage(event) {
     setPreviewStatus('Execution timed out — sandbox stopped.');
     appendOutput('Sandbox execution timeout.', 'error');
     destroySandbox();
+    stopSandboxStatus('⛔ timeout');
     return;
   }
 
@@ -456,6 +462,11 @@ function handleSandboxMessage(event) {
       : 'Sandbox error.';
     appendOutput(errorMessage, 'error');
     destroySandbox();
+    stopSandboxStatus('⚠️ error');
+  }
+
+  if (messageType === 'SANDBOX_FRAME') {
+    sandboxFrameCount++;
   }
 }
 
@@ -471,6 +482,38 @@ function showSandboxStatus(text) {
   setPreviewStatus(text);
 }
 
+function startSandboxStatus() {
+  sandboxStartTime = performance.now();
+  sandboxFrameCount = 0;
+
+  const statusEl = document.getElementById('sandbox-status');
+  if (!statusEl) {
+    return;
+  }
+
+  if (sandboxStatusTimer) {
+    clearInterval(sandboxStatusTimer);
+  }
+
+  sandboxStatusTimer = setInterval(() => {
+    const elapsed = performance.now() - sandboxStartTime;
+    statusEl.textContent =
+      `running • ${sandboxFrameCount} frames • ${(elapsed / 1000).toFixed(2)}s`;
+  }, 100);
+}
+
+function stopSandboxStatus(reason = 'idle') {
+  if (sandboxStatusTimer) {
+    clearInterval(sandboxStatusTimer);
+    sandboxStatusTimer = null;
+  }
+
+  const statusEl = document.getElementById('sandbox-status');
+  if (statusEl) {
+    statusEl.textContent = reason;
+  }
+}
+
 function runInSandbox(userHTML) {
   console.log('🖼️ Rendering to iframe');
   if (!previewFrameContainer) {
@@ -478,9 +521,9 @@ function runInSandbox(userHTML) {
   }
 
   ensureSandboxListener();
-  const guardedHtml = injectSafetyLayer(userHTML);
-
   destroySandbox();
+  startSandboxStatus();
+
   sandboxIframe = createSandboxedIframe();
   previewFrameContainer.appendChild(sandboxIframe);
   outputPanel?.classList.add('loading');
@@ -493,13 +536,26 @@ function runInSandbox(userHTML) {
     setPreviewExecutionStatus('stopped', '🔴 Stopped (timeout)');
     showSandboxStatus('⛔ Execution stopped (timeout)');
     appendOutput('Sandbox hard stop triggered.', 'error');
+    stopSandboxStatus('⛔ timeout');
   }, SANDBOX_TIMEOUT_MS + 500);
 
   sandboxIframe.onload = () => {
     outputPanel?.classList.remove('loading');
   };
 
-  sandboxIframe.srcdoc = guardedHtml;
+  const safety = buildSafetyShim();
+  const doc = sandboxIframe.contentDocument;
+  doc.open();
+  doc.write(`
+<!DOCTYPE html>
+<html>
+<body>
+${safety}
+${userHTML}
+</body>
+</html>
+  `);
+  doc.close();
 }
 
 function updateGenerationIndicator() {
