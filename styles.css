@@ -556,6 +556,10 @@ button:disabled {
   margin-top: 8px;
   font-size: 12px;
   opacity: 0.7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .message .assistant-aside {
@@ -566,6 +570,19 @@ button:disabled {
 .message em {
   opacity: 0.6;
   font-style: italic;
+}
+
+.tts-btn {
+  background: none;
+  border: none;
+  color: #9aa4ff;
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 0;
+}
+
+.tts-btn:hover {
+  opacity: 1;
 }
 
 .message.system {
