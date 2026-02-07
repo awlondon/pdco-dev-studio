@@ -100,9 +100,27 @@ function runGeneratedCode(code) {
   }
   outputPanel?.classList.add('loading');
   setTimeout(() => {
-    previewFrame.srcdoc = code;
+    previewFrame.srcdoc = injectEscListener(code);
     outputPanel?.classList.remove('loading');
   }, 150);
+}
+
+function injectEscListener(html) {
+  const escScript = `
+<script>
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      window.parent.postMessage('exit-fullscreen', '*');
+    }
+  });
+</script>
+`;
+
+  if (html.includes('</body>')) {
+    return html.replace('</body>', `${escScript}\n</body>`);
+  }
+
+  return `${html}${escScript}`;
 }
 
 function updateGenerationIndicator() {
@@ -255,6 +273,14 @@ if (fullscreenToggle && consolePane) {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && consolePane.classList.contains('preview-fullscreen')) {
       exitFullscreen();
+    }
+  });
+
+  window.addEventListener('message', (event) => {
+    if (event.data === 'exit-fullscreen') {
+      if (consolePane.classList.contains('preview-fullscreen')) {
+        exitFullscreen();
+      }
     }
   });
 }
