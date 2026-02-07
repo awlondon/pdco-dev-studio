@@ -54,6 +54,10 @@ let sandboxMode = 'finite';
 let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
+const chatState = {
+  locked: false,
+  unlockTimerId: null
+};
 
 const sandbox = createSandboxController({
   iframe: sandboxFrame,
@@ -443,12 +447,47 @@ function stopLoading() {
   loadingStartTime = null;
 }
 
+function setSendDisabled(isDisabled) {
+  if (!sendButton) {
+    return;
+  }
+  sendButton.disabled = isDisabled;
+}
+
+function unlockChat() {
+  chatState.locked = false;
+  if (chatState.unlockTimerId) {
+    clearTimeout(chatState.unlockTimerId);
+    chatState.unlockTimerId = null;
+  }
+  setSendDisabled(false);
+}
+
+function lockChat() {
+  chatState.locked = true;
+  setSendDisabled(true);
+  if (chatState.unlockTimerId) {
+    clearTimeout(chatState.unlockTimerId);
+  }
+  chatState.unlockTimerId = setTimeout(() => {
+    if (chatState.locked) {
+      console.warn('Chat lock recovered');
+      unlockChat();
+    }
+  }, 15000);
+}
+
 async function sendChat() {
+  if (chatState.locked) {
+    return;
+  }
+
   const userInput = chatInput.value.trim();
   if (!userInput) {
     return;
   }
 
+  lockChat();
   chatInput.value = '';
   appendMessage('user', userInput);
 
@@ -458,7 +497,6 @@ async function sendChat() {
     { pending: true }
   );
 
-  sendButton.disabled = true;
   setStatusOnline(false);
   startLoading();
 
@@ -719,7 +757,7 @@ Rules:
     const extractedText = extractChatText(reply);
     const chatText = extractedText || (extractedHtml ? '' : reply.trim());
 
-    let nextCode = extractedHtml;
+    const nextCode = extractedHtml;
     const hasCode = Boolean(nextCode);
 
     if (chatText) {
@@ -731,24 +769,20 @@ Rules:
       }
     }
 
-    assistantBubble.textContent = parsed.text;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    const nextCode = parsed.code;
-    if (nextCode && nextCode !== currentCode) {
+    unlockChat();
+    if (hasCode && nextCode !== currentCode) {
       currentCode = nextCode;
-      codeEditor.value = nextCode;
-      runGeneratedCode(nextCode);
+      setCodeFromLLM(nextCode);
     }
-    lastUserIntent = prompt;
     updateGenerationIndicator();
   } catch (error) {
     updateMessage(
       pendingMessageId,
       '<em>⚠️ Something went wrong while generating the response.</em>'
     );
+    unlockChat();
   } finally {
     stopLoading();
-    sendButton.disabled = false;
   }
 }
 
