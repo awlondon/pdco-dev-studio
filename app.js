@@ -136,6 +136,8 @@ const UPGRADE_NUDGE_KEY = 'mayaUpgradeNudgeShown';
 const LOW_CREDIT_WARNING_KEY = 'mayaLowCreditWarningShown';
 const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const ANALYTICS_CACHE_TTL_MS = 45 * 1000;
+const ANALYTICS_TIMEOUT_MS = 3000;
+const USAGE_FETCH_TIMEOUT_MS = 5000;
 const USAGE_RANGE_STEPS = [14, 30, 60, 90];
 const PLAN_DAILY_CAPS = {
   free: 100,
@@ -164,6 +166,64 @@ const analyticsCache = {
   fetchedAt: 0,
   data: null
 };
+
+const analyticsModalState = {
+  open: false,
+  loading: false,
+  error: null,
+  data: null,
+  watchdogId: null
+};
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
+function startAnalyticsModalWatchdog() {
+  if (!analyticsModalState.open) {
+    return;
+  }
+  if (analyticsModalState.watchdogId) {
+    clearTimeout(analyticsModalState.watchdogId);
+  }
+  analyticsModalState.watchdogId = window.setTimeout(() => {
+    if (!analyticsModalState.open) {
+      return;
+    }
+    console.warn('Analytics modal watchdog triggered');
+    analyticsModalState.loading = false;
+    analyticsModalState.error = 'Analytics took too long to load.';
+  }, 5000);
+}
+
+function clearAnalyticsModalWatchdog() {
+  if (analyticsModalState.watchdogId) {
+    clearTimeout(analyticsModalState.watchdogId);
+    analyticsModalState.watchdogId = null;
+  }
+}
+
+function closeAllModals() {
+  closeUsageModal();
+  hidePaywall();
+}
+
+function unlockUI() {
+  unlockChat();
+  stopLoading();
+  document.body.style.overflow = '';
+}
 
 const sessionId = (() => {
   if (typeof window === 'undefined') {
@@ -454,18 +514,31 @@ async function fetchUsageAnalytics({ force = false } = {}) {
     return null;
   }
 
-  const res = await fetch(`/usage/analytics?user_id=${encodeURIComponent(context.id)}&days=1`, {
-    cache: 'no-store'
-  });
+  try {
+    const res = await withTimeout(
+      fetch(`/usage/analytics?user_id=${encodeURIComponent(context.id)}&days=1`, {
+        cache: 'no-store'
+      }),
+      ANALYTICS_TIMEOUT_MS,
+      'Analytics request timed out'
+    );
 
-  if (!res.ok) {
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = await withTimeout(
+      res.json(),
+      ANALYTICS_TIMEOUT_MS,
+      'Analytics response timed out'
+    );
+    analyticsCache.data = data;
+    analyticsCache.fetchedAt = now;
+    return data;
+  } catch (error) {
+    console.warn('Usage analytics fetch failed.', error);
     return null;
   }
-
-  const data = await res.json();
-  analyticsCache.data = data;
-  analyticsCache.fetchedAt = now;
-  return data;
 }
 
 function parseCsvRow(row) {
@@ -603,13 +676,25 @@ async function loadUsageCsv() {
   }
 
   const [usageRes, usersRes] = await Promise.all([
-    fetch('data/usage_log.csv', { cache: 'no-store' }),
-    fetch('data/users.csv', { cache: 'no-store' })
+    withTimeout(
+      fetch('data/usage_log.csv', { cache: 'no-store' }),
+      USAGE_FETCH_TIMEOUT_MS,
+      'Usage log request timed out'
+    ),
+    withTimeout(
+      fetch('data/users.csv', { cache: 'no-store' }),
+      USAGE_FETCH_TIMEOUT_MS,
+      'Usage users request timed out'
+    )
   ]);
 
   const [usageText, usersText] = await Promise.all([
-    usageRes.ok ? usageRes.text() : '',
-    usersRes.ok ? usersRes.text() : ''
+    usageRes.ok
+      ? withTimeout(usageRes.text(), USAGE_FETCH_TIMEOUT_MS, 'Usage log response timed out')
+      : '',
+    usersRes.ok
+      ? withTimeout(usersRes.text(), USAGE_FETCH_TIMEOUT_MS, 'Usage users response timed out')
+      : ''
   ]);
 
   let usageRows = parseCsv(usageText);
@@ -978,44 +1063,62 @@ function updateUsageScopeLabel(isAdmin, filters) {
 }
 
 async function refreshUsageView() {
-  const { usageRows, userRows } = await loadUsageCsv();
-  const isAdmin = window.location.pathname.startsWith('/admin/usage');
-  const usersById = buildUsersById(userRows);
-  const baseUserId = getUserContext().id;
-
-  const filters = {
-    userId: isAdmin ? (usageUserFilter?.value || 'all') : baseUserId,
-    planTier: isAdmin ? (usagePlanFilter?.value || 'all') : 'all',
-    startDate: isAdmin ? usageStartDate?.value : '',
-    endDate: isAdmin ? usageEndDate?.value : ''
-  };
-
-  const filteredRows = filterUsageRows(usageRows, filters, usersById, isAdmin);
-  const dailyAggregates = buildDailyAggregates(filteredRows);
-  const rangeDays = USAGE_RANGE_STEPS[usageState.rangeIndex] || USAGE_RANGE_STEPS[0];
-  const dailyRange = clampDailyRange(dailyAggregates, rangeDays, filters.startDate, filters.endDate);
-  const monthTotals = getMonthTotals(filteredRows);
-
-  updateUsageScopeLabel(isAdmin, filters);
-  updateUsageCards(monthTotals, getCreditState());
-  if (usageRangeLabel) {
-    usageRangeLabel.textContent = filters.startDate || filters.endDate
-      ? 'Custom range'
-      : getRangeLabel(rangeDays);
+  if (analyticsModalState.open) {
+    analyticsModalState.loading = true;
+    analyticsModalState.error = null;
   }
+  try {
+    const { usageRows, userRows } = await loadUsageCsv();
+    if (analyticsModalState.open) {
+      analyticsModalState.data = { usageRows, userRows };
+    }
+    const isAdmin = window.location.pathname.startsWith('/admin/usage');
+    const usersById = buildUsersById(userRows);
+    const baseUserId = getUserContext().id;
 
-  renderCreditsChart(dailyRange, getCreditState(), isAdmin, filters.planTier);
-  renderRequestsChart(dailyRange);
-  renderLatencyChart(dailyRange);
-  buildUsageHistory(dailyRange, isAdmin);
+    const filters = {
+      userId: isAdmin ? (usageUserFilter?.value || 'all') : baseUserId,
+      planTier: isAdmin ? (usagePlanFilter?.value || 'all') : 'all',
+      startDate: isAdmin ? usageStartDate?.value : '',
+      endDate: isAdmin ? usageEndDate?.value : ''
+    };
 
-  if (usageLoadMore) {
-    const canLoadMore = usageState.rangeIndex < USAGE_RANGE_STEPS.length - 1
-      && !filters.startDate
-      && !filters.endDate
-      && dailyAggregates.length > dailyRange.length;
-    usageLoadMore.disabled = !canLoadMore;
-    usageLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
+    const filteredRows = filterUsageRows(usageRows, filters, usersById, isAdmin);
+    const dailyAggregates = buildDailyAggregates(filteredRows);
+    const rangeDays = USAGE_RANGE_STEPS[usageState.rangeIndex] || USAGE_RANGE_STEPS[0];
+    const dailyRange = clampDailyRange(dailyAggregates, rangeDays, filters.startDate, filters.endDate);
+    const monthTotals = getMonthTotals(filteredRows);
+
+    updateUsageScopeLabel(isAdmin, filters);
+    updateUsageCards(monthTotals, getCreditState());
+    if (usageRangeLabel) {
+      usageRangeLabel.textContent = filters.startDate || filters.endDate
+        ? 'Custom range'
+        : getRangeLabel(rangeDays);
+    }
+
+    renderCreditsChart(dailyRange, getCreditState(), isAdmin, filters.planTier);
+    renderRequestsChart(dailyRange);
+    renderLatencyChart(dailyRange);
+    buildUsageHistory(dailyRange, isAdmin);
+
+    if (usageLoadMore) {
+      const canLoadMore = usageState.rangeIndex < USAGE_RANGE_STEPS.length - 1
+        && !filters.startDate
+        && !filters.endDate
+        && dailyAggregates.length > dailyRange.length;
+      usageLoadMore.disabled = !canLoadMore;
+      usageLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
+    }
+  } catch (error) {
+    console.warn('Usage analytics refresh failed.', error);
+    if (analyticsModalState.open) {
+      analyticsModalState.error = 'Usage analytics took too long to load.';
+    }
+  } finally {
+    if (analyticsModalState.open) {
+      analyticsModalState.loading = false;
+    }
   }
 }
 
@@ -1047,6 +1150,10 @@ function openUsageModal() {
   if (!usageModal) {
     return;
   }
+  analyticsModalState.open = true;
+  analyticsModalState.loading = true;
+  analyticsModalState.error = null;
+  startAnalyticsModalWatchdog();
   usageModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   refreshUsageView();
@@ -1056,6 +1163,10 @@ function closeUsageModal() {
   if (!usageModal) {
     return;
   }
+  analyticsModalState.open = false;
+  analyticsModalState.loading = false;
+  analyticsModalState.error = null;
+  clearAnalyticsModalWatchdog();
   usageModal.classList.add('hidden');
   document.body.style.overflow = '';
 }
@@ -3010,10 +3121,8 @@ if (usageApplyFilters) {
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
-    closeUsageModal();
-    if (paywallModal?.classList.contains('dismissable')) {
-      hidePaywall();
-    }
+    closeAllModals();
+    unlockUI();
   }
 });
 
