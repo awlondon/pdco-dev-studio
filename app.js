@@ -1068,14 +1068,18 @@ if (splitter && rightPane && codePanel && outputPanel) {
 if (fullscreenToggle && consolePane) {
   const enterFullscreen = () => {
     consolePane.classList.add('preview-fullscreen');
+    outputPanel?.classList.add('preview-fullscreen');
     document.body.style.overflow = 'hidden';
     fullscreenToggle.textContent = '⤡ Exit Fullscreen';
+    fullscreenToggle.classList.add('fullscreen-exit');
   };
 
   const exitFullscreen = () => {
     consolePane.classList.remove('preview-fullscreen');
+    outputPanel?.classList.remove('preview-fullscreen');
     document.body.style.overflow = '';
     fullscreenToggle.textContent = '⤢ Fullscreen';
+    fullscreenToggle.classList.remove('fullscreen-exit');
   };
 
   fullscreenToggle.addEventListener('click', () => {
@@ -1085,6 +1089,12 @@ if (fullscreenToggle && consolePane) {
       return;
     }
     enterFullscreen();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && consolePane.classList.contains('preview-fullscreen')) {
+      exitFullscreen();
+    }
   });
 
   consolePane.addEventListener('dblclick', (event) => {

@@ -452,6 +452,18 @@ button:disabled {
   cursor: zoom-out;
 }
 
+.output-panel.preview-fullscreen #fullscreenToggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000000;
+}
+
+.fullscreen-exit {
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid #555;
+}
+
 .output-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
