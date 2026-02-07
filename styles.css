@@ -14,6 +14,10 @@
   box-sizing: border-box;
 }
 
+.hidden {
+  display: none !important;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -1183,9 +1187,20 @@ button:disabled {
   gap: 16px;
 }
 
+.paywall-header-copy {
+  display: grid;
+  gap: 6px;
+}
+
 .paywall-header h2 {
   margin: 0;
   font-size: 1.4rem;
+}
+
+.paywall-subtext {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.92rem;
 }
 
 .paywall-body {
@@ -1193,15 +1208,103 @@ button:disabled {
   gap: 20px;
 }
 
-.paywall-copy p {
-  margin: 0 0 8px;
-  font-size: 0.95rem;
-  color: rgba(255, 255, 255, 0.82);
+.paywall-status-card {
+  border-radius: 14px;
+  background: rgba(12, 14, 20, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.paywall-status-card .status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.paywall-status-card .status-row strong {
+  color: #fff;
+  font-weight: 600;
 }
 
 .paywall-plans {
   display: grid;
   gap: 10px;
+}
+
+.paywall-plan-compact {
+  display: grid;
+  gap: 12px;
+}
+
+.paywall-plan-card {
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(14, 16, 24, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 12px 30px rgba(8, 12, 24, 0.35);
+}
+
+.paywall-plan-card h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.paywall-plan-card .plan-label {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.paywall-plan-card .plan-price {
+  margin: 4px 0 0;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.paywall-plan-card ul {
+  margin: 0;
+  padding-left: 16px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.88rem;
+  display: grid;
+  gap: 6px;
+}
+
+.paywall-plan-card.is-recommended,
+.paywall-plan-card.is-selected {
+  border-color: rgba(124, 155, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(124, 155, 255, 0.4),
+    0 18px 35px rgba(90, 120, 255, 0.25);
+}
+
+.paywall-plan-selector {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-chip {
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.plan-chip.is-selected {
+  background: rgba(124, 155, 255, 0.2);
+  border-color: rgba(124, 155, 255, 0.6);
+  color: #e3e9ff;
 }
 
 .paywall-table {
@@ -1228,6 +1331,31 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
+.paywall-compare-table th[scope="row"] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.paywall-compare-table [data-paywall-plan-cell].is-selected {
+  background: rgba(124, 155, 255, 0.12);
+  color: #f2f4ff;
+}
+
+.paywall-compare-table .is-recommended {
+  position: relative;
+}
+
+.paywall-compare-table .is-recommended::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(124, 155, 255, 0.3);
+  pointer-events: none;
+}
+
 .paywall-table tbody tr:last-child td {
   border-bottom: none;
 }
@@ -1236,6 +1364,50 @@ button:disabled {
   margin: 0;
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.6);
+}
+
+.paywall-cost-line {
+  margin: 0;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.62);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.paywall-inline-link {
+  font-size: 0.82rem;
+}
+
+.paywall-inline-link[data-tooltip] {
+  position: relative;
+}
+
+.paywall-inline-link[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: #0f0f1a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  width: max-content;
+  max-width: 220px;
+  z-index: 10;
+}
+
+.paywall-inline-link[data-tooltip]:hover::after,
+.paywall-inline-link[data-tooltip]:focus::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .paywall-actions {
@@ -1271,6 +1443,12 @@ button:disabled {
 
 .paywall-modal.hidden {
   display: none;
+}
+
+.paywall-footer {
+  margin: 0;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .usage-modal {
