@@ -365,6 +365,10 @@ html, body {
   border-radius: 10px;
 }
 
+.pricing-card + .pricing-card {
+  margin-top: 12px;
+}
+
 .pricing-card p {
   margin: 0 0 8px;
   font-size: 13px;
@@ -421,6 +425,10 @@ html, body {
   border-bottom: 1px solid var(--panel-border);
 }
 
+.pricing-table.two-col .pricing-table-row {
+  grid-template-columns: 1fr 1fr;
+}
+
 .pricing-table-row:last-child {
   border-bottom: none;
 }
@@ -447,6 +455,18 @@ html, body {
   background: rgba(255, 107, 107, 0.12);
   border: 1px solid rgba(255, 107, 107, 0.3);
   font-size: 12.5px;
+}
+
+.pricing-code {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .pricing-muted {

@@ -215,6 +215,110 @@
               <p class="pricing-warning">⚠️ Large generation · 18% of daily limit</p>
               <p class="pricing-muted">Clear callouts reduce complaints and chargebacks.</p>
             </div>
+
+            <div class="pricing-section">
+              <h3>7. Stripe billing flow (boring, robust, scales)</h3>
+              <p class="pricing-muted">Designed to plug into your credits system without surprises.</p>
+
+              <div class="pricing-card">
+                <p><strong>Stripe objects</strong></p>
+                <div class="pricing-table two-col">
+                  <div class="pricing-table-row pricing-table-header">
+                    <span>Products (one per tier)</span>
+                    <span>Recurring prices (monthly)</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>maya-free (internal, $0)</span>
+                    <span>Starter → $12</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>maya-starter</span>
+                    <span>Pro → $39</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>maya-pro</span>
+                    <span>Power → $149</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>maya-power</span>
+                    <span>Top-ups are one-time prices</span>
+                  </div>
+                </div>
+                <ul class="pricing-sublist">
+                  <li>Top-ups: credits-1k ($5), credits-5k ($20), credits-20k ($60).</li>
+                  <li>Credits are managed by you, not Stripe metadata.</li>
+                </ul>
+              </div>
+
+              <div class="pricing-card">
+                <p><strong>User record fields (source of truth)</strong></p>
+                <div class="pricing-table two-col">
+                  <div class="pricing-table-row pricing-table-header">
+                    <span>Billing identifiers</span>
+                    <span>Credits + status</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>stripe_customer_id</span>
+                    <span>credits_total</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>stripe_subscription_id</span>
+                    <span>credits_remaining</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>plan_tier</span>
+                    <span>billing_status (active | past_due | canceled)</span>
+                  </div>
+                  <div class="pricing-table-row">
+                    <span>monthly_reset_at</span>
+                    <span>Stripe never decides credits.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pricing-card">
+                <p><strong>Checkout flow (subscription)</strong></p>
+                <ul>
+                  <li>Client: user clicks Upgrade → POST /billing/create-checkout-session.</li>
+                  <li>Stripe Checkout mode: <strong>subscription</strong>.</li>
+                  <li>Success URL: /billing/success · Cancel URL: /billing/canceled.</li>
+                  <li>Allow promo codes and tax collection as needed.</li>
+                </ul>
+              </div>
+
+              <div class="pricing-card">
+                <p><strong>Webhook events (critical)</strong></p>
+                <pre class="pricing-code"><code>checkout.session.completed → link customer + subscription
+customer.subscription.created → grant credits + set monthly reset
+customer.subscription.updated → upgrade now, downgrade next cycle
+invoice.payment_succeeded → monthly reset
+invoice.payment_failed → billing_status = past_due
+customer.subscription.deleted → plan = free + cap remaining</code></pre>
+                <ul class="pricing-sublist">
+                  <li>Verify webhook signatures and use idempotency keys.</li>
+                  <li>Log every billing event to billing_log.csv.</li>
+                </ul>
+              </div>
+
+              <div class="pricing-card">
+                <p><strong>Top-up flow (one-time)</strong></p>
+                <ul>
+                  <li>Stripe Checkout mode: <strong>payment</strong>.</li>
+                  <li>On checkout.session.completed → credits_remaining += purchased_amount.</li>
+                  <li>Top-ups do not expire unless you choose to.</li>
+                </ul>
+              </div>
+
+              <div class="pricing-card">
+                <p><strong>Enforcement + UX rules</strong></p>
+                <ul>
+                  <li>Before every generation: block if credits_remaining &lt; estimated_cost.</li>
+                  <li>Upgrades apply immediately; downgrades next billing cycle.</li>
+                  <li>Cancel → access until period end.</li>
+                  <li>Always show plan · credits remaining · reset date.</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </section>
       </div>
