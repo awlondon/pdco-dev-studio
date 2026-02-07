@@ -41,18 +41,6 @@ const CODE_INTENT_PATTERNS = [
   /html|css|js|javascript|code|component/i,
   /add|remove|change|modify|update|refactor/i
 ];
-const CREATIVE_CONTINUATION_PATTERNS = [
-  /do your own thing/i,
-  /surprise me/i,
-  /take it further/i,
-  /push it/i,
-  /riff/i,
-  /polish/i,
-  /improve it/i,
-  /make it cooler/i,
-  /make it better/i,
-  /enhance/i
-];
 
 function getHasExistingCode() {
   const code = codeEditor?.value ?? '';
@@ -176,7 +164,17 @@ function buildWrappedPrompt(userInput, currentCode) {
 }
 
 function detectCodeIntent(userInput, hasExistingCode) {
-  if (/^\/ui\b|^\/code\b/i.test(userInput)) {
+  const text = userInput.trim().toLowerCase();
+
+  if (/^(explain|tell me about|what is|who is)/i.test(text)) {
+    return {
+      intent: false,
+      source: 'explicit-text',
+      match: text
+    };
+  }
+
+  if (/^\/ui\b|^\/code\b/i.test(text)) {
     return {
       intent: true,
       source: 'explicit',
@@ -185,33 +183,21 @@ function detectCodeIntent(userInput, hasExistingCode) {
   }
 
   if (hasExistingCode) {
-    for (const rx of CREATIVE_CONTINUATION_PATTERNS) {
-      if (rx.test(userInput)) {
-        return {
-          intent: true,
-          source: 'creative-continuation',
-          match: rx.toString()
-        };
-      }
-    }
+    return {
+      intent: true,
+      source: 'artifact-default',
+      match: 'existing artifact'
+    };
   }
 
   for (const rx of CODE_INTENT_PATTERNS) {
-    if (rx.test(userInput)) {
+    if (rx.test(text)) {
       return {
         intent: true,
         source: 'heuristic',
         match: rx.toString()
       };
     }
-  }
-
-  if (hasExistingCode && userInput.length < 40) {
-    return {
-      intent: true,
-      source: 'context-default',
-      match: 'existing code + short prompt'
-    };
   }
 
   return {
@@ -413,6 +399,16 @@ The user's message does not require interface changes. Do not modify the code un
 
     if (isOverlyLiteral(parsed.code, parsed.text)) {
       console.warn('⚠️ Literal UI detected — consider prompting expressive response');
+    }
+
+    if (
+      codeIntent
+      && intentInfo.source === 'artifact-default'
+      && parsed.code.trim().length < 50
+    ) {
+      console.warn('⚠️ Refusing to render trivial HTML');
+      parsed.code = currentCode;
+      parsed.code_unchanged = true;
     }
 
     renderAssistantText(parsed.text, pendingMessageId);
