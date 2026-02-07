@@ -133,6 +133,7 @@ let lastCodeSource = null;
 let chatFinalized = false;
 let currentTurnMessageId = null;
 let pendingAssistantProposal = null;
+let intentAnchor = null;
 const DEBUG_INTENT = false;
 const chatState = {
   locked: false,
@@ -973,6 +974,7 @@ function inferIntentFromText(userText) {
 function resolveIntent(userText) {
   if (
     pendingAssistantProposal
+    && intentAnchor === pendingAssistantProposal.type
     && /^(yes|ok|sure|do it|go ahead)$/i.test(userText.trim())
   ) {
     return {
@@ -989,12 +991,12 @@ function getAssistantProposal(text) {
     return null;
   }
   const proposalMatch = text.match(
-    /\bI can (?:create|build|make|generate|design)\s+([^.\n]+)/i
+    /\b(would you like me to|should I|do you want me to)\s+(create|build|generate)\s+([^.\n]+)/i
   );
   if (!proposalMatch) {
     return null;
   }
-  const description = proposalMatch[1]?.trim();
+  const description = proposalMatch[3]?.trim();
   if (!description) {
     return null;
   }
@@ -1272,6 +1274,9 @@ async function sendChat() {
 
   const startedAt = performance.now();
   const resolvedIntent = resolveIntent(userInput);
+  if (!intentAnchor && !resolvedIntent.inferred) {
+    intentAnchor = resolvedIntent.type;
+  }
   if (DEBUG_INTENT) {
     console.log('[intent]', {
       userText: userInput,
@@ -1281,7 +1286,11 @@ async function sendChat() {
   }
 
   let intentAdjustedInput = userInput;
-  if (resolvedIntent.inferred && pendingAssistantProposal) {
+  if (
+    resolvedIntent.inferred
+    && pendingAssistantProposal
+    && intentAnchor === pendingAssistantProposal.type
+  ) {
     const description = pendingAssistantProposal.description || 'the proposed experience';
     intentAdjustedInput = `Yes — please proceed with ${description}.`;
   }
@@ -1314,7 +1323,8 @@ Output rules:
 - If you return HTML, the FIRST line must be:
   <!--CHAT: <a short conversational message for the user> -->
   Then output a complete HTML document.
-- If no HTML is needed, output plain conversational text only.`;
+- If no HTML is needed, output plain conversational text only.
+- If a visual is requested as part of a technical discussion, prioritize correctness and demonstration over expressiveness or celebration.`;
 
     const messages = [
       {
