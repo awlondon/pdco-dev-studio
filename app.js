@@ -588,6 +588,7 @@ CRITICAL OUTPUT RULES (NON-NEGOTIABLE):
 2. You may output ONLY:
    - Plain natural-language text intended for a chat interface
    - Optionally, a single fenced code block containing HTML, CSS, and/or JavaScript
+   - When code is generated, include a brief natural-language response suitable for chat display.
 
 3. If you include code:
    - Use exactly ONE fenced code block
@@ -820,7 +821,7 @@ When making interface changes, respond with plain text plus an optional \`\`\`ht
     if (chatText) {
       renderAssistantText(chatText, pendingMessageId);
     } else {
-      updateMessage(pendingMessageId, '');
+      updateMessage(pendingMessageId, '<em>Generating interactive output…</em>');
     }
 
     let nextCode = extractedHtml;
