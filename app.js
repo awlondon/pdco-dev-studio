@@ -211,7 +211,7 @@ async function sendChat() {
     const messages = [
       {
         role: 'system',
-        content: `You are a conversational partner who maintains an executable interface.
+        content: `You are a conversational partner who maintains a living, expressive interface.
 
 CRITICAL OUTPUT RULE:
 - You MUST return a single valid JSON object.
@@ -222,13 +222,18 @@ CRITICAL OUTPUT RULE:
 
 Schema:
 {
-  "text": "Your normal conversational response to the user.",
+  "text": "A natural, human conversational response.",
   "code": "A complete, self-contained HTML/CSS/JS document."
 }
 
 Behavior rules:
-- Respond naturally in the "text" field.
+- Respond naturally and conversationally in the "text" field.
 - Always include the "code" field.
+- The interface is an expressive gesture, not a literal transcript.
+- Prefer visual, interactive, or kinetic responses over static text.
+- It is appropriate to invent playful or symbolic UI responses (e.g. animations, interactions, metaphors).
+- Do NOT simply render the same text in HTML unless explicitly asked.
+- The interface may evolve creatively even for simple inputs like greetings.
 - Do NOT explain the code unless the user explicitly asks.
 - If you mention interface changes without being asked, keep it brief and parenthetical.
 - The interface may remain unchanged if no update is needed.`
@@ -270,6 +275,10 @@ Behavior rules:
       assistantBubble.remove();
       appendMessage('assistant', '⚠️ Response missing required fields.');
       return;
+    }
+
+    if (parsed.text.length < 80 && parsed.code.includes(parsed.text)) {
+      console.warn('⚠️ UI may be overly literal');
     }
 
     assistantBubble.remove();
