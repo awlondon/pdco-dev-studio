@@ -20,6 +20,8 @@ const interfaceStatus = document.getElementById('interfaceStatus');
 const viewDiffBtn = document.getElementById('viewDiffBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
 const codeIntentBadge = document.getElementById('codeIntentBadge');
+const executionWarnings = document.getElementById('executionWarnings');
+const runButton = document.getElementById('runCode');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
@@ -40,6 +42,8 @@ let editorDirty = false;
 let previewIframe = null;
 let previewTimeoutId = null;
 let previewHeavyTimer = null;
+let pendingExecution = null;
+let awaitingConfirmation = false;
 const CODE_INTENT_PATTERNS = [
   /build|create|make|generate/i,
   /show|visualize|diagram|chart|graph|ui|interface|layout/i,
@@ -137,6 +141,21 @@ function setPreviewStatus(message) {
   previewStatus.textContent = message;
 }
 
+function setExecutionWarnings(warnings = []) {
+  if (!executionWarnings) {
+    return;
+  }
+
+  if (!warnings.length) {
+    executionWarnings.classList.add('hidden');
+    executionWarnings.textContent = '';
+    return;
+  }
+
+  executionWarnings.textContent = warnings.map((warning) => `⚠️ ${warning}`).join(' ');
+  executionWarnings.classList.remove('hidden');
+}
+
 function setPreviewExecutionStatus(state, message) {
   if (!previewExecutionStatus) {
     return;
@@ -198,6 +217,78 @@ function buildWrappedPrompt(userInput, currentCode) {
   return `Current code:\n${currentCode}\n\nUser: ${userInput}`;
 }
 
+function analyzeCodeForExecution(code, debugIntent = false) {
+  const flags = {
+    hasRAF: code.includes('requestAnimationFrame'),
+    hasWhileTrue: /while\s*\(\s*true\s*\)/.test(code),
+    hasSetInterval: code.includes('setInterval'),
+    hasCanvas: code.includes('<canvas') || code.includes('getContext('),
+    hasWorker: code.includes('new Worker')
+  };
+
+  let executionProfile = 'static';
+  if (flags.hasRAF || flags.hasSetInterval) {
+    executionProfile = 'animation';
+  }
+  if (flags.hasCanvas) {
+    executionProfile = 'canvas-sim';
+  }
+
+  const warnings = [];
+  if (flags.hasRAF) {
+    warnings.push('requestAnimationFrame detected');
+  }
+  if (flags.hasSetInterval) {
+    warnings.push('setInterval detected');
+  }
+  if (flags.hasCanvas) {
+    warnings.push('canvas detected');
+  }
+  if (flags.hasWorker) {
+    warnings.push('Web Worker detected');
+  }
+
+  let allowed = true;
+  if (flags.hasWhileTrue) {
+    warnings.push('blocking while(true) loop detected');
+    allowed = false;
+  }
+
+  const limits = {
+    maxFrames: executionProfile === 'animation' || executionProfile === 'canvas-sim' ? 300 : 120,
+    maxTimeMs: executionProfile === 'canvas-sim' ? 2500 : 2000,
+    allowRAF: flags.hasRAF,
+    allowCanvas: flags.hasCanvas
+  };
+
+  if (debugIntent) {
+    console.groupCollapsed('🧪 Execution analysis');
+    console.log('Profile:', executionProfile);
+    console.log('Allowed:', allowed);
+    console.log('Flags:', flags);
+    console.log('Limits:', limits);
+    console.log('Warnings:', warnings);
+    console.groupEnd();
+  }
+
+  return {
+    allowed,
+    executionProfile,
+    limits,
+    warnings
+  };
+}
+
+function resetExecutionPreparation() {
+  awaitingConfirmation = false;
+  pendingExecution = null;
+  if (runButton) {
+    runButton.textContent = 'Run Code';
+    runButton.disabled = false;
+  }
+  setExecutionWarnings([]);
+}
+
 function detectCodeIntent(userInput, hasExistingCode) {
   const text = userInput.trim().toLowerCase();
 
@@ -249,16 +340,52 @@ function runEditorCode() {
 
   if (!html || html.trim().length < 10) {
     console.warn('⚠️ No runnable code in editor');
+    setPreviewStatus('No runnable code found');
+    setPreviewExecutionStatus('stopped', 'Stopped');
     return;
   }
 
-  setPreviewExecutionStatus('running', 'Running');
-  renderToIframe(html);
-  setPreviewStatus('Preview updated from editor');
+  if (!awaitingConfirmation) {
+    setPreviewExecutionStatus('preparing', 'Preparing execution');
+    setPreviewStatus('Preparing execution…');
+    const analysis = analyzeCodeForExecution(html, DEBUG_INTENT);
+    pendingExecution = analysis;
+    setExecutionWarnings(analysis.warnings);
+
+    if (!analysis.allowed) {
+      setPreviewExecutionStatus('stopped', 'Stopped (blocked)');
+      setPreviewStatus('Execution blocked due to unsafe loop');
+      if (runButton) {
+        runButton.textContent = 'Run Code';
+        runButton.disabled = true;
+      }
+      return;
+    }
+
+    awaitingConfirmation = true;
+    if (runButton) {
+      runButton.textContent = 'Run (Safe)';
+    }
+    setPreviewExecutionStatus('ready', 'Ready');
+    setPreviewStatus('Ready to run with limits');
+    return;
+  }
+
+  const analysis = pendingExecution || analyzeCodeForExecution(html, DEBUG_INTENT);
+  awaitingConfirmation = false;
+  if (runButton) {
+    runButton.textContent = 'Run Code';
+  }
+  setPreviewExecutionStatus('running', 'Running (sandboxed)');
+  renderToIframe(html, analysis);
+  setPreviewStatus('Executing in sandbox');
 }
 
-function injectFrameGuard(html) {
-  const guardScript = `<script>(function(){let __frameCount=0;const __maxFrames=300;const __raf=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=function(fn){if(__frameCount++>__maxFrames){throw new Error('Frame limit exceeded');}return __raf(fn);};})();</script>`;
+function injectFrameGuard(html, limits) {
+  const maxFrames = limits?.maxFrames ?? 300;
+  const maxTimeMs = limits?.maxTimeMs ?? 2000;
+  const allowRAF = limits?.allowRAF ?? true;
+  const guardScript = `<script>(function(){let __frameCount=0;const __maxFrames=${maxFrames};const __start=performance.now();const __maxTime=${maxTimeMs};const __raf=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=function(fn){if(!${allowRAF}){throw new Error('requestAnimationFrame not allowed');}if(__frameCount++>__maxFrames){throw new Error('Frame limit exceeded');}if(performance.now()-__start>__maxTime){throw new Error('Time limit exceeded');}return __raf(fn);};const __interval=window.setInterval.bind(window);window.setInterval=function(fn,delay,...rest){const wrapped=function(){if(performance.now()-__start>__maxTime){throw new Error('Time limit exceeded');}return fn();};return __interval(wrapped,delay,...rest);};})();</script>`;
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head[^>]*>/i, (match) => `${match}\n${guardScript}`);
   }
@@ -286,14 +413,20 @@ function createSandboxedIframe() {
   return iframe;
 }
 
-function renderToIframe(html) {
+function renderToIframe(html, analysis) {
   console.log('🖼️ Rendering to iframe');
   if (!previewFrameContainer) {
     return;
   }
 
   const nonce = Date.now();
-  const guardedHtml = injectFrameGuard(html);
+  const limits = analysis?.limits ?? {
+    maxFrames: 300,
+    maxTimeMs: 2000,
+    allowRAF: true,
+    allowCanvas: false
+  };
+  const guardedHtml = injectFrameGuard(html, limits);
   const wrappedHtml = `<!-- generation:${nonce} -->\n${guardedHtml}`;
 
   resetPreviewTimers();
@@ -313,16 +446,20 @@ function renderToIframe(html) {
     }
     outputPanel?.classList.remove('loading');
     setPreviewExecutionStatus('stopped', 'Stopped (timeout)');
-  }, 2000);
+  }, limits.maxTimeMs + 200);
 
   previewHeavyTimer = setTimeout(() => {
     setPreviewExecutionStatus('heavy', 'Heavy load');
-  }, 1200);
+  }, Math.min(1200, Math.round(limits.maxTimeMs * 0.6)));
 
   previewIframe.onload = () => {
     resetPreviewTimers();
     outputPanel?.classList.remove('loading');
-    setPreviewExecutionStatus('running', 'Running');
+    if (analysis?.executionProfile === 'static') {
+      setPreviewExecutionStatus('completed', 'Completed');
+    } else {
+      setPreviewExecutionStatus('running', 'Running');
+    }
   };
 
   previewIframe.srcdoc = wrappedHtml;
@@ -542,7 +679,8 @@ The user's message does not require interface changes. Respond with plain text o
       codeEditor.value = nextCode;
       editorDirty = false;
       setPreviewStatus('Code updated — click Run Code to execute');
-      setPreviewExecutionStatus('idle', 'Idle');
+      setPreviewExecutionStatus('ready', 'Ready');
+      resetExecutionPreparation();
     }
     if (interfaceStatus) {
       if (codeChanged) {
@@ -585,10 +723,10 @@ chatForm.addEventListener('submit', (event) => {
 
 codeEditor.addEventListener('input', () => {
   editorDirty = true;
+  resetExecutionPreparation();
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  const runButton = document.getElementById('runCode');
   if (!runButton) {
     console.warn('⚠️ Run Code button not found');
     return;
@@ -673,4 +811,4 @@ if (fullscreenToggle && consolePane) {
 setStatusOnline(false);
 updateGenerationIndicator();
 setPreviewStatus('Ready — click Run Code to execute');
-setPreviewExecutionStatus('idle', 'Idle');
+setPreviewExecutionStatus('ready', 'Ready');
