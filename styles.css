@@ -155,6 +155,21 @@ html, body {
   font-family: inherit;
 }
 
+.code-intent-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  margin-left: 8px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.code-intent-badge.hidden {
+  display: none;
+}
+
 .loading {
   display: flex;
   align-items: center;

@@ -16,6 +16,7 @@ const fullscreenToggle = document.getElementById('fullscreenToggle');
 const interfaceStatus = document.getElementById('interfaceStatus');
 const viewDiffBtn = document.getElementById('viewDiffBtn');
 const loadingIndicator = document.getElementById('loadingIndicator');
+const codeIntentBadge = document.getElementById('codeIntentBadge');
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 
@@ -43,6 +44,13 @@ const CODE_INTENT_PATTERNS = [
 function setStatusOnline(isOnline) {
   statusLabel.textContent = isOnline ? 'API online' : 'Offline';
   statusLabel.classList.toggle('online', isOnline);
+}
+
+function updateCodeIntentBadge(codeIntent) {
+  if (!codeIntentBadge) {
+    return;
+  }
+  codeIntentBadge.classList.toggle('hidden', !codeIntent);
 }
 
 function addMessage(role, html, options = {}) {
@@ -270,6 +278,7 @@ async function sendChat() {
   chatInput.value = '';
   appendMessage('user', prompt);
   const codeIntent = getCodeIntent(prompt);
+  updateCodeIntentBadge(codeIntent);
 
   const pendingMessageId = addMessage(
     'assistant',
