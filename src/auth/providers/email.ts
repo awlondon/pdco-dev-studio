@@ -29,6 +29,15 @@ export async function requestEmailLink(request: Request, env: Env) {
   const origin = env.FRONTEND_URL || new URL(request.url).origin;
   const magicLink = `${origin}/auth/email?token=${encodeURIComponent(token)}`;
 
+  const envLabel = env.ENVIRONMENT || env.ENV || env.NODE_ENV;
+  const isDev = envLabel === 'dev' || envLabel === 'development';
+
+  if (isDev) {
+    return new Response(JSON.stringify({ ok: true, debug_magic_link: magicLink }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
   await sendMagicEmail(email, magicLink, env);
 
   return new Response(JSON.stringify({ ok: true }), {

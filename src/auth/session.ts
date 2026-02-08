@@ -22,7 +22,20 @@ export async function issueSession(user: any, env: Env, request?: Request) {
     {
       headers: {
         'Content-Type': 'application/json',
-        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure`
+        'Set-Cookie': (() => {
+          const envLabel = env.ENVIRONMENT || env.ENV || env.NODE_ENV;
+          const isDev = envLabel === 'dev' || envLabel === 'development';
+          const cookieParts = [
+            `${SESSION_COOKIE_NAME}=${token}`,
+            'Path=/',
+            'HttpOnly',
+            'Secure'
+          ];
+          if (!isDev) {
+            cookieParts.push('SameSite=None');
+          }
+          return cookieParts.join('; ');
+        })()
       }
     }
   );
