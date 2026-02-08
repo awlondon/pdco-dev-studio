@@ -8,11 +8,6 @@ function resolveSessionCookieDomain(request: Request | undefined, env: Env) {
   if (env.SESSION_COOKIE_DOMAIN) {
     return `; Domain=${env.SESSION_COOKIE_DOMAIN}`;
   }
-  const host = request?.headers.get('host') ?? '';
-  const hostname = host.split(':')[0];
-  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
-    return '; Domain=.primarydesignco.com';
-  }
   return '';
 }
 
@@ -39,7 +34,7 @@ export async function issueSession(user: any, env: Env, request?: Request) {
       headers: {
         ...corsHeaders,
         'Content-Type': 'application/json',
-        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${SESSION_MAX_AGE_SECONDS}${cookieDomain}`
+        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${cookieDomain}`
       }
     }
   );

@@ -32,48 +32,46 @@ const REQUIRED_USER_HEADERS = [
 const MAGIC_LINK_TTL_SECONDS = 15 * 60;
 const MAGIC_LINK_DEFAULT_BASE = 'https://dev.primarydesignco.com';
 const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
-const corsHeaders = {
-  'Access-Control-Allow-Origin': 'https://dev.primarydesignco.com',
-  'Access-Control-Allow-Credentials': 'true',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
-};
+const corsHeaders = {};
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const pathname = url.pathname.startsWith('/api/')
+      ? url.pathname.slice(4)
+      : url.pathname;
 
-    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/auth/') || url.pathname === '/me')) {
+    if (request.method === 'OPTIONS' && (pathname.startsWith('/auth/') || pathname === '/me')) {
       return new Response(null, {
         status: 204,
         headers: corsHeaders
       });
     }
 
-    if (url.pathname === '/auth/magic/request' && request.method === 'POST') {
+    if (pathname === '/auth/magic/request' && request.method === 'POST') {
       return requestMagicLink(request, env);
     }
 
-    if (url.pathname === '/auth/magic/verify' && request.method === 'POST') {
+    if (pathname === '/auth/magic/verify' && request.method === 'POST') {
       return verifyMagicLink(request, env);
     }
 
-    if (url.pathname === '/auth/google' && request.method === 'POST') {
+    if (pathname === '/auth/google' && request.method === 'POST') {
       return handleGoogleAuth(request, env);
     }
 
-    if (url.pathname === '/me') {
+    if (pathname === '/me') {
       if (request.method !== 'GET') {
         return new Response('Method not allowed', { status: 405, headers: corsHeaders });
       }
       return handleMe(request, env);
     }
 
-    if (url.pathname === '/usage/analytics' && request.method === 'GET') {
+    if (pathname === '/usage/analytics' && request.method === 'GET') {
       return handleUsageAnalytics(request, env, ctx);
     }
 
-    if (url.pathname === '/stripe/webhook' && request.method === 'POST') {
+    if (pathname === '/stripe/webhook' && request.method === 'POST') {
       return handleStripeWebhook(request, env, ctx);
     }
 
@@ -545,11 +543,6 @@ function resolveSessionCookieDomain(request, env) {
   if (env.SESSION_COOKIE_DOMAIN) {
     return `Domain=${env.SESSION_COOKIE_DOMAIN}`;
   }
-  const host = request?.headers?.get('host') ?? '';
-  const hostname = host.split(':')[0];
-  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
-    return 'Domain=.primarydesignco.com';
-  }
   return null;
 }
 
@@ -572,7 +565,7 @@ async function issueSession(user, env, request) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=None'
+    'SameSite=Lax'
   ];
 
   if (cookieDomain) {

@@ -290,7 +290,8 @@ let uiState = UI_STATE.AUTH;
 let showAnalytics = false;
 let appInitialized = false;
 const BACKEND_URL =
-  'https://api.dev.primarydesignco.com';
+  window.BACKEND_URL
+    || `${window.location.origin}/api`;
 const Auth = {
   user: null,
   token: null,
@@ -4247,7 +4248,7 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
-    const res = await fetch(BACKEND_URL, {
+    const res = await fetch(`${BACKEND_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

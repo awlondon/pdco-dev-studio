@@ -10,11 +10,11 @@ test('app rehydrates session and hides auth modal', async ({ page, context }) =>
     {
       name: 'maya_session',
       value: sessionCookie,
-      domain: '.primarydesignco.com',
+      domain: 'dev.primarydesignco.com',
       path: '/',
       httpOnly: true,
       secure: true,
-      sameSite: 'None'
+      sameSite: 'Lax'
     }
   ]);
 

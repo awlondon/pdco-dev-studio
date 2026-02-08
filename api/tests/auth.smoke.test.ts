@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const API = 'https://api.dev.primarydesignco.com';
+const API = 'https://dev.primarydesignco.com/api';
 
 async function fetchWithCookies(
   url: string,
