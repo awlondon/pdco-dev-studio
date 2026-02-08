@@ -142,7 +142,7 @@ async function refreshAuthDebug() {
       : 'not visible';
 
   try {
-    const res = await fetch('/me', { credentials: 'include' });
+    const res = await fetch(`${BACKEND_URL}/me`, { credentials: 'include' });
     document.getElementById('authDebugMeStatus').textContent =
       `${res.status}`;
 
@@ -286,7 +286,7 @@ let uiState = UI_STATE.AUTH;
 let showAnalytics = false;
 let appInitialized = false;
 const BACKEND_URL =
-  "https://text-code.primarydesigncompany.workers.dev";
+  'https://api.dev.primarydesignco.com';
 const Auth = {
   user: null,
   token: null,

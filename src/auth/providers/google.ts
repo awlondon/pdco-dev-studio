@@ -48,5 +48,5 @@ export async function handleGoogle(request: Request, env: Env) {
     provider: 'google'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
