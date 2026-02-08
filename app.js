@@ -23,7 +23,8 @@ const creditZero = document.getElementById('credit-zero');
 const creditDailyMessage = document.getElementById('credit-daily-message');
 const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
 const userMenuButton = document.getElementById('user-menu-button');
-const userMenu = document.getElementById('user-menu');
+const userMenuDropdown = document.getElementById('user-menu');
+const userMenu = document.querySelector('.user-menu');
 const pricingModal = document.getElementById('pricing-modal');
 const pricingModalBody = document.getElementById('pricing-modal-body');
 const pricingCloseButton = document.getElementById('pricing-close');
@@ -3845,20 +3846,20 @@ if (creditBadge && creditPanel) {
   });
 }
 
-if (userMenuButton && userMenu) {
+if (userMenuButton && userMenu && userMenuDropdown) {
   const closeUserMenu = () => {
-    userMenu.classList.add('hidden');
+    userMenu.classList.remove('open');
     userMenuButton.setAttribute('aria-expanded', 'false');
   };
 
   const openUserMenu = () => {
-    userMenu.classList.remove('hidden');
+    userMenu.classList.add('open');
     userMenuButton.setAttribute('aria-expanded', 'true');
   };
 
   userMenuButton.addEventListener('click', (event) => {
     event.stopPropagation();
-    if (userMenu.classList.contains('hidden')) {
+    if (!userMenu.classList.contains('open')) {
       openUserMenu();
     } else {
       closeUserMenu();
@@ -3868,7 +3869,7 @@ if (userMenuButton && userMenu) {
   userMenuButton.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      if (userMenu.classList.contains('hidden')) {
+      if (!userMenu.classList.contains('open')) {
         openUserMenu();
       } else {
         closeUserMenu();
@@ -3902,7 +3903,7 @@ if (pricingModal) {
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      userMenu?.classList.add('hidden');
+      userMenu?.classList.remove('open');
       userMenuButton?.setAttribute('aria-expanded', 'false');
       openPricingModal();
     });
