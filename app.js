@@ -410,6 +410,7 @@ function renderAuthModalHTML() {
 
         <div class="auth-slot" data-provider="google">
           <div id="google-signin"></div>
+          <p class="auth-helper" id="google-auth-status" data-active="false" aria-live="polite"></p>
         </div>
 
         <div class="auth-slot" data-provider="apple">
@@ -502,21 +503,33 @@ async function handleGoogleCredential(response) {
 
 AuthController.register('google', () => {
   const container = document.getElementById('google-signin');
+  const status = document.getElementById('google-auth-status');
   if (!container) {
     console.warn('Google auth skipped: container missing');
     return;
   }
 
+  const setStatus = (message) => {
+    if (!status) {
+      return;
+    }
+    status.textContent = message;
+    status.dataset.active = message ? 'true' : 'false';
+  };
+
   const tryInit = () => {
     if (!window.google?.accounts?.id) {
+      setStatus('Loading Google sign-in…');
       return false;
     }
     if (!GOOGLE_CLIENT_ID) {
       console.warn('Google auth client ID missing.');
+      setStatus('Missing GOOGLE_CLIENT_ID. Check env injection.');
       return true;
     }
 
     container.textContent = '';
+    setStatus('');
     window.google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
       callback: handleGoogleCredential,
@@ -543,7 +556,15 @@ AuthController.register('google', () => {
     }
   }, 50);
 
-  setTimeout(() => clearInterval(interval), 3000);
+  setTimeout(() => {
+    clearInterval(interval);
+    if (!window.google?.accounts?.id) {
+      setStatus('Google SDK did not load. Check CSP or script blocking.');
+      console.warn(
+        'Google SDK failed to load. Verify https://accounts.google.com/gsi/client is allowed by CSP and not blocked.'
+      );
+    }
+  }, 3000);
 });
 
 AuthController.register('email', () => {

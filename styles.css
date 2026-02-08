@@ -141,6 +141,20 @@ html, body {
   justify-content: center;
 }
 
+.auth-helper {
+  margin: 8px auto 0;
+  width: 100%;
+  max-width: 360px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+  min-height: 16px;
+}
+
+.auth-helper[data-active='false'] {
+  display: none;
+}
+
 /* --- Google auth skeleton --- */
 .auth-slot[data-provider="google"]:has(#google-signin:empty)::before {
   content: "";
