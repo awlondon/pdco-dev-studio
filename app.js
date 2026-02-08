@@ -106,6 +106,13 @@ const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
 const SANDBOX_TIMEOUT_MS = 4500;
+const UI_STATE = {
+  AUTH: 'auth',
+  APP: 'app'
+};
+let uiState = UI_STATE.AUTH;
+let showAnalytics = false;
+let appInitialized = false;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
 const AUTH_STORAGE_KEY = 'maya_session';
@@ -4097,6 +4104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     magicForm.addEventListener('submit', handleMagicLinkRequest);
   }
   bootstrapAuth();
+  bootstrapApp();
   const params = new URLSearchParams(window.location.search);
   const magicToken = params.get('token');
   if (magicToken) {
