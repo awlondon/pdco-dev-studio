@@ -1,0 +1,1 @@
+user_id,email,auth_provider,provider_user_id,display_name,created_at,last_login_at,plan_tier,credits_total,credits_remaining,monthly_reset_at,newsletter_opt_in,account_status,stripe_customer_id,stripe_subscription_id,billing_status

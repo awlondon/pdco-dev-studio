@@ -3,10 +3,19 @@
   "version": "0.1.0",
   "description": "Interactive LLM chat and code playground.",
   "type": "module",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test --import tsx api/tests/auth.*.test.ts",
+    "test:ui": "playwright test ui/tests/auth.rehydrate.spec.ts"
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.2",
+    "tsx": "^4.19.1",
+    "undici": "^6.19.2"
   }
 }

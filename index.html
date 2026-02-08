@@ -6,40 +6,655 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="root">
+  <div id="modal-root" class="modal-root hidden" role="dialog" aria-modal="true" aria-hidden="true"></div>
+  <div
+    id="root"
+    class="hidden"
+    data-user-id=""
+    data-email=""
+    data-remaining-credits="500"
+    data-credits-total="500"
+    data-daily-limit="50"
+    data-today-credits-used="0"
+    data-credits-reset-days="12"
+    data-daily-reset-time="6h 12m"
+    data-plan-label="Free"
+    data-free-tier-remaining="10"
+  >
     <header id="top-bar">
       <div>
         <h1>Maya Dev UI</h1>
         <p class="subtitle">Chat with the model, edit code, and run it live.</p>
       </div>
-      <span id="status-label">Offline</span>
+      <div class="top-bar-actions">
+        <span id="status-label">Offline</span>
+        <div id="creditBadge" class="credit-badge" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false">
+          <span class="icon" aria-hidden="true"></span>
+          <span class="count"></span>
+          <span class="credit-badge-tooltip">Credits power generations. Resets monthly.</span>
+        </div>
+        <div class="user-menu">
+          <button class="user-trigger" id="userMenuTrigger" type="button">
+            <span class="user-avatar" id="userAvatar">JD</span>
+            <span class="user-meta">
+              <span class="user-name" id="userName">Jane Doe</span>
+              <span class="user-plan" id="userPlanCredits">Credits: 0 · Plan: Free</span>
+            </span>
+            <span class="chevron">▾</span>
+          </button>
+
+          <div class="user-dropdown" id="userMenu">
+            <button class="menu-item" id="accountLink">
+              Account
+            </button>
+
+            <button class="menu-item" id="upgradePlan">
+              Billing
+            </button>
+
+            <div class="menu-divider"></div>
+
+            <button class="menu-item danger" id="signOutBtn">
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
     </header>
 
-    <main id="workspace">
-      <section id="chat-panel" class="panel">
-        <div class="panel-header">Chat</div>
-        <div id="chat-messages" class="panel-body"></div>
-        <form id="chat-form" class="panel-footer">
-          <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
-          <button id="btn-send" type="submit">Send Chat</button>
-        </form>
-      </section>
-
-      <section id="code-panel" class="panel">
-        <div class="panel-header">Code Editor</div>
-        <textarea id="code-editor" spellcheck="false"></textarea>
-        <div class="panel-footer actions">
-          <button id="btn-run" type="button">Run Code</button>
+    <div id="credit-panel" class="credit-panel hidden" role="dialog" aria-label="Credits">
+      <div class="credit-panel-header">Credits</div>
+      <button class="ghost-button credit-panel-cta" type="button" data-open-usage>View usage</button>
+      <div class="credit-meter">
+        <div class="bar">
+          <div class="fill"></div>
         </div>
-      </section>
+        <div class="label">0 / 0</div>
+      </div>
+      <div class="credit-panel-meta">
+        <div id="credit-reset">Resets in 12 days</div>
+        <div id="credit-daily-limit">Daily limit: 500 credits</div>
+      </div>
+      <div id="credit-daily-message" class="credit-panel-callout hidden"></div>
+      <div id="credit-upgrade-nudge" class="credit-panel-nudge hidden">
+        Upgrade for higher limits and uninterrupted generation.
+      </div>
+    </div>
 
-      <section id="output-panel" class="panel">
-        <div class="panel-header">Console Output</div>
-        <div id="console-output" class="panel-body"></div>
-      </section>
+    <main id="workspace">
+      <div id="left-pane" class="left-pane">
+        <section id="chat-panel" class="panel">
+          <div class="panel-header">Chat</div>
+          <div id="chat-messages" class="panel-body"></div>
+          <form id="chat-form" class="panel-footer">
+            <div id="credit-banner" class="credit-banner hidden"></div>
+            <div id="credit-inline-warning" class="credit-inline-warning hidden"></div>
+            <div id="throttleNotice" class="throttle hidden"></div>
+            <div id="credit-zero" class="credit-zero hidden">
+              <span>You’ve hit your monthly limit — upgrade or wait for reset.</span>
+              <div class="credit-cta">
+                <button class="ghost-button" type="button">Upgrade Plan</button>
+                <button class="ghost-button" type="button" data-open-usage>View Usage</button>
+              </div>
+            </div>
+            <div id="loadingIndicator" class="loading hidden">
+              <span class="dot">•</span>
+              <span class="dot">•</span>
+              <span class="dot">•</span>
+              <span class="timer">0.0s</span>
+            </div>
+            <div class="chat-input-wrapper">
+              <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
+              <div id="credit-preview" class="credit-preview" aria-live="polite"></div>
+            </div>
+            <button id="btn-mic" title="Speak" type="button">🎙️</button>
+            <button id="btn-send" type="submit">Send Chat</button>
+          </form>
+        </section>
+
+      </div>
+
+      <div id="right-pane" class="right-pane">
+        <section id="code-panel" class="panel code-editor">
+          <div class="panel-header">
+            <span>Code Editor</span>
+            <button id="copyCodeBtn" class="icon-button" title="Copy code" type="button">
+              📋
+            </button>
+          </div>
+          <div id="code-editor-wrapper">
+            <div id="line-numbers" aria-hidden="true"></div>
+            <textarea id="code-editor" spellcheck="false"></textarea>
+          </div>
+          <div class="panel-footer actions">
+            <div id="code-footer">
+              <span id="line-count">Lines: 1</span>
+            </div>
+            <button id="runCode" type="button">Run Code</button>
+            <button id="rollbackButton" type="button">Roll back to last generated</button>
+            <button id="promoteButton" type="button">Promote to baseline</button>
+            <div id="generation-indicator" class="generation-indicator">
+              ✨ Creating new UI
+            </div>
+          </div>
+        </section>
+
+        <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal"></div>
+
+        <section id="output-panel" class="panel output-panel">
+          <div class="panel-header">
+            <div class="panel-header-title">
+              Console Output
+              <span class="panel-header-label">Live Preview</span>
+            </div>
+            <div class="panel-header-actions">
+              <div id="interfaceStatus" class="interface-status unchanged">
+                Interface unchanged
+              </div>
+              <div id="previewExecutionStatus" class="preview-execution-status idle">
+                Idle
+              </div>
+              <div id="executionWarnings" class="execution-warnings hidden" aria-live="polite"></div>
+              <div id="previewStatus" class="preview-status">
+                Preview updated by assistant
+              </div>
+              <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
+                View changes
+              </button>
+              <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="console-output-log" class="console-output-log"></div>
+            <div id="consoleOutput" class="console-output">
+              <div id="sandbox-status" style="font-size:12px; opacity:0.7; font-family:monospace;">idle</div>
+              <div id="sandbox-controls" class="sandbox-controls hidden" aria-label="Sandbox controls">
+                <button id="sandboxPause" class="ghost-button" type="button">Pause</button>
+                <button id="sandboxResume" class="ghost-button hidden" type="button">Resume</button>
+                <button id="sandboxReset" class="ghost-button" type="button">Reset</button>
+                <button id="sandboxStop" class="ghost-button" type="button">Stop</button>
+              </div>
+              <div id="previewFrameContainer" class="preview-frame-container">
+                <iframe id="sandbox" sandbox="allow-scripts allow-same-origin"></iframe>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     </main>
+
+    <div id="pricing-modal" class="pricing-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pricing-title">
+      <div class="pricing-modal-panel">
+        <div class="pricing-modal-header">
+          <div>
+            <h2 id="pricing-title">Simple, predictable pricing — built for creators</h2>
+            <p class="pricing-modal-subtitle">Use credits to generate interfaces, visuals, and interactive code. No surprise bills. No token math.</p>
+          </div>
+          <div class="pricing-modal-actions">
+            <button id="pricing-close" class="ghost-button" type="button">Close</button>
+          </div>
+        </div>
+        <div id="pricing-modal-body" class="pricing-modal-body pricing-body">
+          <div class="pricing-section">
+            <h3>How credits work</h3>
+            <ul>
+              <li>You use credits to generate code and interfaces.</li>
+              <li>Each action costs a small number of credits based on complexity.</li>
+              <li>Daily limits protect you from burning everything at once.</li>
+              <li>You can upgrade or top up anytime.</li>
+            </ul>
+          </div>
+
+          <div class="pricing-section">
+            <h3>Plans</h3>
+            <div class="pricing-tiers">
+              <div class="tier-card">
+                <div class="tier-header">Free</div>
+                <ul>
+                  <li>For exploring and trying things out</li>
+                  <li>500 credits / month</li>
+                  <li>Daily limit: 100 credits</li>
+                  <li>Basic generation speed</li>
+                  <li>Community support</li>
+                </ul>
+                <p class="tier-note">$0 / month</p>
+              </div>
+              <div class="tier-card">
+                <div class="tier-header">Starter</div>
+                <ul>
+                  <li>For individual builders</li>
+                  <li>5,000 credits / month</li>
+                  <li>Daily limit: 500 credits</li>
+                  <li>Faster generation</li>
+                  <li>Priority sandbox execution</li>
+                </ul>
+                <p class="tier-note">$12 / month</p>
+              </div>
+              <div class="tier-card">
+                <div class="tier-header">Pro</div>
+                <ul>
+                  <li>For serious creators</li>
+                  <li>20,000 credits / month</li>
+                  <li>Daily limit: 2,000 credits</li>
+                  <li>Fastest generation</li>
+                  <li>Priority queue + advanced sandbox</li>
+                  <li>Early access to new features</li>
+                </ul>
+                <p class="tier-note">$39 / month</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="pricing-section">
+            <h3>Need more?</h3>
+            <ul>
+              <li>Buy extra credits anytime.</li>
+              <li>Unused credits roll over while your subscription is active.</li>
+            </ul>
+          </div>
+
+          <div class="pricing-section">
+            <h3>Transparency note</h3>
+            <p>You’ll always see:</p>
+            <ul>
+              <li>how many credits an action will likely use</li>
+              <li>how many credits you have left</li>
+              <li>warnings before you run low</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="paywall-modal" class="paywall-modal hidden" role="dialog" aria-modal="true" aria-label="Upgrade options">
+      <div class="paywall-backdrop" data-paywall-backdrop></div>
+      <div class="paywall-sheet" role="document">
+        <div class="paywall-header">
+          <div class="paywall-header-copy">
+            <h2 id="paywall-title">Daily limit reached</h2>
+            <p id="paywall-subtext" class="paywall-subtext"></p>
+          </div>
+          <button id="paywall-close" class="icon-button hidden" type="button" aria-label="Close paywall">✕</button>
+        </div>
+        <div class="paywall-body">
+          <div class="paywall-status-card" aria-live="polite">
+            <div class="status-row">
+              <span>Current plan</span>
+              <strong id="paywall-current-plan">Free</strong>
+            </div>
+            <div class="status-row">
+              <span>Credits remaining</span>
+              <strong id="paywall-credits-remaining">0 / 0</strong>
+            </div>
+            <div class="status-row">
+              <span>Daily throttle</span>
+              <strong id="paywall-daily-throttle">0 credits left today</strong>
+            </div>
+          </div>
+
+          <div class="paywall-plans">
+            <div class="paywall-plan-compact" data-paywall-compact>
+              <div class="paywall-plan-card is-recommended" data-paywall-plan-card="starter">
+                <div>
+                  <p class="plan-label">Starter (recommended)</p>
+                  <h3>Starter</h3>
+                  <p class="plan-price">$12/mo</p>
+                </div>
+                <ul>
+                  <li>5,000 monthly credits</li>
+                  <li>Relaxed daily throttle</li>
+                  <li>Large generations included</li>
+                </ul>
+              </div>
+              <div class="paywall-plan-card hidden" data-paywall-plan-card="pro">
+                <div>
+                  <p class="plan-label">Pro</p>
+                  <h3>Pro</h3>
+                  <p class="plan-price">$29/mo</p>
+                </div>
+                <ul>
+                  <li>20,000 monthly credits</li>
+                  <li>Minimal daily throttle</li>
+                  <li>Priority queue included</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="paywall-plan-comparison hidden" data-paywall-compare>
+              <div class="paywall-plan-selector" role="tablist" aria-label="Select a plan">
+                <button class="plan-chip" type="button" data-paywall-plan="starter" aria-pressed="true">Starter</button>
+                <button class="plan-chip" type="button" data-paywall-plan="pro" aria-pressed="false">Pro</button>
+              </div>
+              <table class="paywall-table paywall-compare-table" aria-label="Plan comparison">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th data-paywall-plan-cell="free">Free</th>
+                    <th data-paywall-plan-cell="starter" class="is-recommended">Starter</th>
+                    <th data-paywall-plan-cell="pro">Pro</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Monthly credits</th>
+                    <td data-paywall-plan-cell="free">500</td>
+                    <td data-paywall-plan-cell="starter">5,000</td>
+                    <td data-paywall-plan-cell="pro">20,000</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Daily throttle</th>
+                    <td data-paywall-plan-cell="free">Strict</td>
+                    <td data-paywall-plan-cell="starter">Relaxed</td>
+                    <td data-paywall-plan-cell="pro">Minimal</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Large generations</th>
+                    <td data-paywall-plan-cell="free">Limited</td>
+                    <td data-paywall-plan-cell="starter">Yes</td>
+                    <td data-paywall-plan-cell="pro">Yes</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Priority queue</th>
+                    <td data-paywall-plan-cell="free">—</td>
+                    <td data-paywall-plan-cell="starter">—</td>
+                    <td data-paywall-plan-cell="pro">✓</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Price</th>
+                    <td data-paywall-plan-cell="free">$0</td>
+                    <td data-paywall-plan-cell="starter">$12/mo</td>
+                    <td data-paywall-plan-cell="pro">$29/mo</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="paywall-note">All plans include live code execution and sandboxed previews.</p>
+            </div>
+          </div>
+
+          <p id="paywall-cost-line" class="paywall-cost-line">
+            Credits abstract API costs. On your usage, Starter covers ~10× more generations than Free.
+            <button class="link-button paywall-inline-link" type="button" data-tooltip="Credits map to API costs so plan limits stay stable." aria-label="Learn how credits work">
+              Learn how credits work
+            </button>
+          </p>
+          <div class="paywall-actions">
+            <button id="paywall-primary" class="primary-button" type="button">Upgrade Plan</button>
+            <button id="paywall-secondary" class="ghost-button" type="button">Compare plans</button>
+            <button id="paywall-tertiary" class="link-button" type="button">Maybe later</button>
+          </div>
+          <p id="paywall-footer" class="paywall-footer">Billing handled securely via Stripe. Cancel anytime.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="upgradeModal" class="upgrade-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+      <div class="upgrade-modal" role="document">
+        <button class="upgrade-close" type="button" data-upgrade-close aria-label="Close upgrade dialog">×</button>
+
+        <header class="upgrade-header">
+          <h2 id="upgrade-title">You’re nearing your usage limit</h2>
+          <p class="upgrade-subtitle">
+            You’ve used <strong>87%</strong> of your monthly credits. Upgrading removes throttles and increases limits.
+          </p>
+        </header>
+
+        <section class="upgrade-status">
+          <div><span>Current plan</span><strong>Free</strong></div>
+          <div><span>Credits remaining</span><strong>62 / 500</strong></div>
+          <div><span>Daily throttle</span><strong>2 requests left</strong></div>
+        </section>
+
+        <section class="upgrade-plans">
+          <div class="plan">
+            <h3>Free</h3>
+            <p class="plan-price">$0</p>
+            <ul>
+              <li>500 credits / month</li>
+              <li>Strict daily throttle</li>
+              <li>Limited large generations</li>
+            </ul>
+          </div>
+
+          <div class="plan plan-featured">
+            <h3>Starter</h3>
+            <p class="plan-price">$12 / mo</p>
+            <ul>
+              <li>5,000 credits / month</li>
+              <li>Relaxed throttling</li>
+              <li>Large generations enabled</li>
+            </ul>
+            <button class="plan-cta primary" type="button">Upgrade to Starter</button>
+          </div>
+
+          <div class="plan">
+            <h3>Pro</h3>
+            <p class="plan-price">$29 / mo</p>
+            <ul>
+              <li>20,000 credits / month</li>
+              <li>Minimal throttling</li>
+              <li>Priority queue</li>
+            </ul>
+            <button class="plan-cta" type="button">Upgrade to Pro</button>
+          </div>
+        </section>
+
+        <footer class="upgrade-footer">
+          <p>
+            Credits abstract API costs. On your current usage, Starter supports ~10× more generations than Free.
+          </p>
+          <p class="upgrade-note">
+            Billing handled securely via Stripe. Cancel anytime.
+          </p>
+        </footer>
+      </div>
+    </div>
+
+    <div id="usage-modal" class="usage-modal hidden" role="dialog" aria-modal="true" aria-label="Usage analytics">
+      <div class="usage-panel">
+        <div class="usage-header">
+          <div>
+            <h2>Usage analytics</h2>
+            <p id="usage-scope-label" class="usage-scope">Your usage this month</p>
+          </div>
+          <button id="usage-close" class="icon-button" type="button" aria-label="Close usage analytics">✕</button>
+        </div>
+
+        <div id="usage-filters" class="usage-filters hidden">
+          <label class="usage-filter">
+            <span>User</span>
+            <select id="usage-user-filter"></select>
+          </label>
+          <label class="usage-filter">
+            <span>Plan tier</span>
+            <select id="usage-plan-filter">
+              <option value="all">All tiers</option>
+              <option value="free">Free</option>
+              <option value="starter">Starter</option>
+              <option value="pro">Pro</option>
+              <option value="power">Power</option>
+            </select>
+          </label>
+          <label class="usage-filter">
+            <span>Date range</span>
+            <div class="usage-filter-range">
+              <input id="usage-start-date" type="date" />
+              <span>→</span>
+              <input id="usage-end-date" type="date" />
+            </div>
+          </label>
+          <button id="usage-apply-filters" class="ghost-button" type="button">Apply</button>
+        </div>
+
+        <div class="usage-tabs" role="tablist">
+          <button class="usage-tab active" type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+          <button class="usage-tab" type="button" role="tab" data-tab="daily" aria-selected="false">Daily</button>
+          <button class="usage-tab" type="button" role="tab" data-tab="history" aria-selected="false">History</button>
+        </div>
+
+        <div class="usage-tab-panel active" data-tab-panel="overview" role="tabpanel">
+          <div class="usage-cards">
+            <div class="usage-card">
+              <span>Credits used (month)</span>
+              <strong id="usage-credits-month">0</strong>
+            </div>
+            <div class="usage-card">
+              <span>Requests (month)</span>
+              <strong id="usage-requests-month">0</strong>
+            </div>
+            <div class="usage-card">
+              <span>Avg latency</span>
+              <strong id="usage-latency-month">0s</strong>
+            </div>
+            <div class="usage-card">
+              <span>Success rate</span>
+              <strong id="usage-success-month">0%</strong>
+            </div>
+          </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Credit burn</h3>
+                <p>Credits used per day · capped by daily limit</p>
+              </div>
+              <span id="usage-range-label" class="usage-range-label">Last 14 days</span>
+            </div>
+            <canvas id="credits-chart" height="150"></canvas>
+          </div>
+        </div>
+
+        <div class="usage-tab-panel" data-tab-panel="daily" role="tabpanel">
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Requests per day</h3>
+                <p>Stacked by intent (code vs text)</p>
+              </div>
+            </div>
+            <canvas id="requests-chart" height="140"></canvas>
+          </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Latency trend</h3>
+                <p>Average latency per day</p>
+              </div>
+            </div>
+            <canvas id="latency-chart" height="140"></canvas>
+          </div>
+          <button id="usage-load-more" class="ghost-button" type="button">Load more</button>
+        </div>
+
+        <div class="usage-tab-panel" data-tab-panel="history" role="tabpanel">
+          <table class="usage-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Requests</th>
+                <th>Credits</th>
+                <th>Avg latency</th>
+                <th>Failures</th>
+              </tr>
+            </thead>
+            <tbody id="usage-history-body"></tbody>
+          </table>
+          <div id="usage-history-empty" class="usage-empty hidden">No usage history yet.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>
+  <script>
+    window.GOOGLE_CLIENT_ID = "136741418395-m12209atcs99mia868fh6o3m266u7noa.apps.googleusercontent.com";
+  </script>
+  <script>
+    window.__MAYA_API_BASE = "https://maya-api-xxxxx-uc.a.run.app";
+  </script>
+  <script type="module" src="app.js"></script>
+  <div id="auth-debug-panel" class="auth-debug hidden">
+    <div class="auth-debug-header">
+      <div class="auth-debug-title">Auth Debug (dev-only)</div>
+      <button id="authDebugToggle" class="auth-debug-toggle" title="Toggle debug panel">▼</button>
+      <button id="authDebugRefresh">↻</button>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Environment</span>
+      <code id="authDebugEnv"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Session cookie present</span>
+      <code id="authDebugCookie"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/me?ts status</span>
+      <code id="authDebugMeStatus"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/me?ts content-type</span>
+      <code id="authDebugMeType"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/me?ts keys</span>
+      <code id="authDebugMeKeys"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/me?ts non-JSON preview</span>
+      <code id="authDebugMePreview"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/debug/env status</span>
+      <code id="authDebugEnvStatus"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/debug/env missing</span>
+      <code id="authDebugEnvMissing"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/health status</span>
+      <code id="authDebugHealthStatus"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/health content-type</span>
+      <code id="authDebugHealthType"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>/api/health non-JSON preview</span>
+      <code id="authDebugHealthPreview"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Magic link (dev)</span>
+      <code><a id="authDebugMagicLink" target="_blank" rel="noreferrer">—</a></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Google auth status</span>
+      <code id="authDebugGoogleStatus"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Google auth response</span>
+      <code id="authDebugGoogleJson"></code>
+    </div>
+
+    <div class="auth-debug-row">
+      <span>Last auth attempt</span>
+      <code id="authDebugLastProvider"></code>
+    </div>
+  </div>
 </body>
 </html>
