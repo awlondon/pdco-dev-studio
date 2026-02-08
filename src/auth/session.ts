@@ -13,13 +13,15 @@ export async function issueSession(user: any, env: Env) {
 
   return new Response(
     JSON.stringify({
-      session: {
-        token,
-        user
-      }
+      token,
+      user,
+      session: { token, user }
     }),
     {
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Set-Cookie': `session=${token}; Path=/; HttpOnly; Secure; SameSite=None`
+      }
     }
   );
 }

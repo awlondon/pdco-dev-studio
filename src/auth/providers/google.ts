@@ -15,23 +15,24 @@ export async function handleGoogle(request: Request, env: Env) {
     return jsonError('Missing id_token', 400);
   }
 
-  const decoded = jwt.decode(id_token);
-  if (!decoded?.payload) {
+  const certsRes = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  if (!certsRes.ok) {
+    return jsonError('Google certs unavailable', 502);
+  }
+
+  const { keys } = await certsRes.json();
+  const verified = await jwt.verify(id_token, keys, {
+    issuer: ['https://accounts.google.com', 'accounts.google.com'],
+    audience: env.GOOGLE_CLIENT_ID
+  });
+
+  if (!verified) {
     return jsonError('Invalid token', 401);
   }
 
-  const payload: any = decoded.payload;
-
-  // Hard security checks
-  if (payload.aud !== env.GOOGLE_CLIENT_ID) {
-    return jsonError('Invalid audience', 401);
-  }
-
-  if (
-    payload.iss !== 'https://accounts.google.com' &&
-    payload.iss !== 'accounts.google.com'
-  ) {
-    return jsonError('Invalid issuer', 401);
+  const payload: any = jwt.decode(id_token).payload;
+  if (!payload) {
+    return jsonError('Invalid token payload', 401);
   }
 
   const user = {

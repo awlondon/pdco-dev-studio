@@ -240,19 +240,9 @@ async function handleGoogleAuth(request, env) {
     return jsonError('Missing id_token', 400);
   }
 
-  const decoded = decodeJwt(idToken);
-  if (!decoded?.payload) {
+  const payload = await verifyGoogleIdToken(idToken, env.GOOGLE_CLIENT_ID);
+  if (!payload) {
     return jsonError('Invalid token', 401);
-  }
-
-  const payload = decoded.payload;
-
-  if (payload.aud !== env.GOOGLE_CLIENT_ID) {
-    return jsonError('Invalid audience', 401);
-  }
-
-  if (payload.iss !== 'https://accounts.google.com') {
-    return jsonError('Invalid issuer', 401);
   }
 
   const user = {
@@ -265,13 +255,92 @@ async function handleGoogleAuth(request, env) {
   return issueSession(user, env);
 }
 
-function decodeJwt(token) {
+let googleJwksCache = { keys: null, expiresAt: 0 };
+
+async function verifyGoogleIdToken(idToken, clientId) {
+  const decoded = decodeJwtParts(idToken);
+  if (!decoded) return null;
+
+  const { header, payload, signingInput, signature } = decoded;
+
+  if (payload.aud !== clientId) {
+    return null;
+  }
+
+  if (
+    payload.iss !== 'https://accounts.google.com' &&
+    payload.iss !== 'accounts.google.com'
+  ) {
+    return null;
+  }
+
+  if (payload.exp && Date.now() / 1000 > payload.exp) {
+    return null;
+  }
+
+  const keys = await getGoogleJwks();
+  const jwk = Array.isArray(keys) ? keys.find((key) => key.kid === header.kid) : null;
+  if (!jwk) {
+    return null;
+  }
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+
+  const data = new TextEncoder().encode(signingInput);
+  const signatureBytes = base64UrlToUint8Array(signature);
+  const verified = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    signatureBytes,
+    data
+  );
+
+  return verified ? payload : null;
+}
+
+async function getGoogleJwks() {
+  if (googleJwksCache.keys && Date.now() < googleJwksCache.expiresAt) {
+    return googleJwksCache.keys;
+  }
+
+  const response = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  if (!response.ok) {
+    throw new Error('Failed to fetch Google certs');
+  }
+
+  const cacheControl = response.headers.get('cache-control') || '';
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeSeconds = maxAgeMatch ? Number(maxAgeMatch[1]) : 300;
+
+  const data = await response.json();
+  googleJwksCache = {
+    keys: data.keys || [],
+    expiresAt: Date.now() + maxAgeSeconds * 1000
+  };
+
+  return googleJwksCache.keys;
+}
+
+function decodeJwtParts(token) {
   if (typeof token !== 'string') return null;
   const parts = token.split('.');
-  if (parts.length < 2) return null;
+  if (parts.length !== 3) return null;
+
   try {
+    const header = JSON.parse(base64UrlDecode(parts[0]));
     const payload = JSON.parse(base64UrlDecode(parts[1]));
-    return { payload };
+    return {
+      header,
+      payload,
+      signingInput: `${parts[0]}.${parts[1]}`,
+      signature: parts[2]
+    };
   } catch (error) {
     return null;
   }
@@ -281,6 +350,17 @@ function base64UrlDecode(input) {
   const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
   const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
   return atob(`${normalized}${padding}`);
+}
+
+function base64UrlToUint8Array(input) {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+  const decoded = atob(`${normalized}${padding}`);
+  const bytes = new Uint8Array(decoded.length);
+  for (let i = 0; i < decoded.length; i += 1) {
+    bytes[i] = decoded.charCodeAt(i);
+  }
+  return bytes;
 }
 
 async function requestMagicLink(request, env) {
@@ -416,12 +496,20 @@ async function issueSession(user, env) {
     },
     env.SESSION_SECRET
   );
-  return json({
-    session: {
+  return new Response(
+    JSON.stringify({
       token,
-      user
+      user,
+      session: { token, user }
+    }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': `session=${token}; Path=/; HttpOnly; Secure; SameSite=None`
+      }
     }
-  });
+  );
 }
 
 async function handleUsageAnalytics(request, env, ctx) {
