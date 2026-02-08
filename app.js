@@ -4425,7 +4425,7 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
-    const res = await fetch(`${API_BASE}/api/llm`, {
+    const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4450,7 +4450,11 @@ Output rules:
     }
 
     setStatusOnline(true);
-    rawReply = data?.choices?.[0]?.message?.content || 'No response.';
+    let textReply = data?.choices?.[0]?.message?.content;
+    if (!textReply && data?.candidates?.length) {
+      textReply = data.candidates[0].content;
+    }
+    rawReply = textReply ?? 'No response.';
     applyUsageToCredits(data?.usage);
     throttleSnapshot = updateThrottleState({ estimatedNextCost: 0 });
     usageMetadata = formatUsageMetadata(data?.usage, getCreditState(), throttleSnapshot);
