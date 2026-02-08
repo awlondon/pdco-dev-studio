@@ -1,4 +1,5 @@
 import jwt from '@tsndr/cloudflare-worker-jwt';
+import { corsHeaders } from '../../cors';
 import { issueSession } from '../session';
 import { jsonError } from '../errors';
 
@@ -31,7 +32,7 @@ export async function requestEmailLink(request: Request, env: Env) {
   await sendMagicEmail(email, magicLink, env);
 
   return new Response(JSON.stringify({ ok: true }), {
-    headers: { 'Content-Type': 'application/json' }
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   });
 }
 

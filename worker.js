@@ -35,7 +35,8 @@ const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
 const corsHeaders = {
   'Access-Control-Allow-Origin': 'https://dev.primarydesignco.com',
   'Access-Control-Allow-Credentials': 'true',
-  'Access-Control-Allow-Headers': 'Content-Type'
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
 };
 
 export default {

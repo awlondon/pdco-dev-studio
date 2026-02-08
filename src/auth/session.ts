@@ -1,4 +1,5 @@
 import jwt from '@tsndr/cloudflare-worker-jwt';
+import { corsHeaders } from '../cors';
 
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_COOKIE_NAME = 'maya_session';
@@ -36,6 +37,7 @@ export async function issueSession(user: any, env: Env, request?: Request) {
     }),
     {
       headers: {
+        ...corsHeaders,
         'Content-Type': 'application/json',
         'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${SESSION_MAX_AGE_SECONDS}${cookieDomain}`
       }
