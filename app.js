@@ -96,11 +96,20 @@ const EmailAuthSlot = (() => {
       render();
 
       try {
-        await fetch(`/api/auth/email/request`, {
+        const res = await fetch(`/api/auth/email/request`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email })
         });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error('Email auth request failed.');
+        }
+        if (data?.debug_magic_link) {
+          setDebugMagicLink(data.debug_magic_link);
+        }
 
         state = 'sent';
         render();
@@ -125,9 +134,24 @@ const isAuthDebugEnabled =
   new URLSearchParams(location.search).has('authDebug');
 
 let lastAuthProvider = '—';
+let lastMagicLink = '—';
 
 export function markAuthAttempt(provider) {
   lastAuthProvider = provider;
+}
+
+function setDebugMagicLink(link) {
+  lastMagicLink = link || '—';
+  const el = document.getElementById('authDebugMagicLink');
+  if (!el) return;
+
+  if (lastMagicLink !== '—') {
+    el.textContent = lastMagicLink;
+    el.href = lastMagicLink;
+  } else {
+    el.textContent = '—';
+    el.removeAttribute('href');
+  }
 }
 
 async function refreshAuthDebug() {
@@ -165,6 +189,8 @@ async function refreshAuthDebug() {
 
   document.getElementById('authDebugLastProvider').textContent =
     lastAuthProvider;
+
+  setDebugMagicLink(lastMagicLink);
 }
 
 function initAuthDebugPanel() {

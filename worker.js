@@ -32,6 +32,11 @@ const REQUIRED_USER_HEADERS = [
 const MAGIC_LINK_TTL_SECONDS = 15 * 60;
 const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
 
+function isDevEnv(env) {
+  const label = env?.ENVIRONMENT || env?.ENV || env?.NODE_ENV;
+  return label === 'dev' || label === 'development';
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -428,8 +433,15 @@ async function requestMagicLink(request, env) {
     console.warn('AUTH_KV is not configured; magic links will fail verification.');
   }
 
+  const requestOrigin = new URL(request.url).origin;
+  const base = env.MAGIC_LINK_BASE || requestOrigin;
+  const link = `${base.replace(/\/$/, '')}/auth/magic?token=${encodeURIComponent(token)}`;
+
+  if (isDevEnv(env)) {
+    return json({ ok: true, debug_magic_link: link });
+  }
+
   try {
-    const requestOrigin = new URL(request.url).origin;
     await sendMagicEmail(email, token, env, requestOrigin);
   } catch (error) {
     console.warn('Magic link email send failed.', error);
@@ -537,9 +549,11 @@ async function issueSession(user, env, request) {
     `${SESSION_COOKIE_NAME}=${token}`,
     'Path=/',
     'HttpOnly',
-    'Secure',
-    'SameSite=None'
+    'Secure'
   ];
+  if (!isDevEnv(env)) {
+    cookieParts.push('SameSite=None');
+  }
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
