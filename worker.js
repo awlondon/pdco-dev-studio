@@ -27,10 +27,21 @@ const REQUIRED_USER_HEADERS = [
   'stripe_subscription_id',
   'billing_status'
 ];
+const MAGIC_LINK_TTL_SECONDS = 15 * 60;
+const MAGIC_LINK_DEFAULT_BASE = 'https://dev.primarydesignco.com';
+const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/auth/magic/request' && request.method === 'POST') {
+      return requestMagicLink(request, env);
+    }
+
+    if (url.pathname === '/auth/magic/verify' && request.method === 'POST') {
+      return verifyMagicLink(request, env);
+    }
 
     if (url.pathname === '/usage/analytics' && request.method === 'GET') {
       return handleUsageAnalytics(request, env, ctx);
@@ -154,8 +165,42 @@ async function hmacSHA256Hex(secret, payload) {
   return bufToHex(sig);
 }
 
+async function hmacSHA256Base64Url(secret, payload) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
+  return base64UrlEncode(new Uint8Array(sig));
+}
+
 function bufToHex(buf) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function base64UrlEncode(input) {
+  const bytes = input instanceof Uint8Array ? input : new TextEncoder().encode(String(input));
+  let binary = '';
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+async function signJwt(payload, secret) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = await hmacSHA256Base64Url(secret, signingInput);
+  return `${signingInput}.${signature}`;
 }
 
 function timingSafeEqualHex(a, b) {
@@ -171,6 +216,151 @@ function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { 'content-type': 'application/json' }
+  });
+}
+
+function jsonError(message, status = 400) {
+  return json({ error: message }, status);
+}
+
+async function requestMagicLink(request, env) {
+  let email = '';
+  try {
+    const body = await request.json();
+    email = typeof body?.email === 'string' ? body.email.trim() : '';
+  } catch (error) {
+    console.warn('Magic link request parse error.', error);
+  }
+
+  if (!email) {
+    return json({ ok: true });
+  }
+
+  const token = crypto.randomUUID();
+  const hash = await hashToken(token);
+
+  if (env.AUTH_KV) {
+    await env.AUTH_KV.put(
+      `magic:${hash}`,
+      JSON.stringify({
+        email,
+        created: Date.now()
+      }),
+      { expirationTtl: MAGIC_LINK_TTL_SECONDS }
+    );
+  } else {
+    console.warn('AUTH_KV is not configured; magic links will fail verification.');
+  }
+
+  try {
+    await sendMagicEmail(email, token, env);
+  } catch (error) {
+    console.warn('Magic link email send failed.', error);
+  }
+
+  return json({ ok: true });
+}
+
+async function verifyMagicLink(request, env) {
+  if (!env.AUTH_KV) {
+    return jsonError('Auth store unavailable', 500);
+  }
+
+  let token = '';
+  try {
+    const body = await request.json();
+    token = typeof body?.token === 'string' ? body.token.trim() : '';
+  } catch (error) {
+    return jsonError('Invalid request payload', 400);
+  }
+
+  if (!token) {
+    return jsonError('Invalid or expired link', 401);
+  }
+
+  const hash = await hashToken(token);
+  const record = await env.AUTH_KV.get(`magic:${hash}`, { type: 'json' });
+  if (!record) {
+    return jsonError('Invalid or expired link', 401);
+  }
+
+  await env.AUTH_KV.delete(`magic:${hash}`);
+
+  const user = {
+    id: `email:${record.email}`,
+    email: record.email,
+    provider: 'email'
+  };
+
+  return issueSession(user, env);
+}
+
+async function hashToken(token) {
+  const data = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return bufToHex(digest);
+}
+
+async function sendMagicEmail(email, token, env) {
+  if (!env.MAGIC_EMAIL_FROM) {
+    console.warn('MAGIC_EMAIL_FROM is not configured; skipping email send.');
+    return;
+  }
+
+  const base = env.MAGIC_LINK_BASE || MAGIC_LINK_DEFAULT_BASE;
+  const link = `${base.replace(/\/$/, '')}/auth/magic?token=${encodeURIComponent(token)}`;
+  const subject = 'Sign in to Maya Dev UI';
+  const bodyText = `Click the link below to sign in:\n\n${link}\n\nThis link expires in 15 minutes.\nIf you didn’t request this, you can ignore this email.`;
+
+  const payload = {
+    personalizations: [
+      {
+        to: [{ email }]
+      }
+    ],
+    from: {
+      email: env.MAGIC_EMAIL_FROM,
+      name: env.MAGIC_EMAIL_FROM_NAME || 'Maya Dev UI'
+    },
+    subject,
+    content: [
+      {
+        type: 'text/plain',
+        value: bodyText
+      }
+    ]
+  };
+
+  const response = await fetch(MAILCHANNELS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Mail send failed: ${response.status} ${text}`);
+  }
+}
+
+async function issueSession(user, env) {
+  if (!env.SESSION_SECRET) {
+    return jsonError('Missing SESSION_SECRET', 500);
+  }
+  const token = await signJwt(
+    {
+      sub: user.id,
+      email: user.email,
+      provider: user.provider,
+      iat: Math.floor(Date.now() / 1000)
+    },
+    env.SESSION_SECRET
+  );
+  return json({
+    session: {
+      token,
+      user
+    }
   });
 }
 
