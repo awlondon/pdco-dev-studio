@@ -85,7 +85,7 @@
             JD
           </button>
           <div id="user-menu" class="user-menu-dropdown hidden" role="menu" aria-label="User menu">
-            <button class="user-menu-item" type="button" role="menuitem" data-open-pricing>Pricing model</button>
+            <button class="user-menu-item" type="button" role="menuitem" data-open-pricing>Upgrade subscription</button>
           </div>
         </div>
       </div>
@@ -217,249 +217,80 @@
       <div class="pricing-modal-panel">
         <div class="pricing-modal-header">
           <div>
-            <h2 id="pricing-title">Pricing model</h2>
-            <p class="pricing-modal-subtitle">The full pricing strategy in one place, with margins and usage guardrails.</p>
+            <h2 id="pricing-title">Simple, predictable pricing — built for creators</h2>
+            <p class="pricing-modal-subtitle">Use credits to generate interfaces, visuals, and interactive code. No surprise bills. No token math.</p>
           </div>
           <div class="pricing-modal-actions">
-            <button id="pricing-collapse" class="ghost-button" type="button" aria-expanded="true" aria-controls="pricing-modal-body">
-              Collapse
-            </button>
             <button id="pricing-close" class="ghost-button" type="button">Close</button>
           </div>
         </div>
         <div id="pricing-modal-body" class="pricing-modal-body pricing-body">
-          <p class="pricing-intro">
-              A clean, defensible pricing model that hits the 3–5× margin target, maps cleanly to credits,
-              and is easy to explain to both users and finance.
-            </p>
+          <div class="pricing-section">
+            <h3>How credits work</h3>
+            <ul>
+              <li>You use credits to generate code and interfaces.</li>
+              <li>Each action costs a small number of credits based on complexity.</li>
+              <li>Daily limits protect you from burning everything at once.</li>
+              <li>You can upgrade or top up anytime.</li>
+            </ul>
+          </div>
 
-            <div class="pricing-section">
-              <h3>1. First principles (non-negotiable)</h3>
-              <ul>
-                <li>You sell credits, not tokens.</li>
-                <li>Credits abstract away model volatility.</li>
-                <li>Margin target: 3–5× API cost.</li>
-                <li>Users must not be able to burn a month in one day.</li>
-                <li>Free tier demonstrates value but enforces discipline.</li>
-              </ul>
-            </div>
-
-            <div class="pricing-section">
-              <h3>2. Internal cost model (example numbers)</h3>
-              <div class="pricing-card">
-                <p><strong>Assumptions</strong></p>
+          <div class="pricing-section">
+            <h3>Plans</h3>
+            <div class="pricing-tiers">
+              <div class="tier-card">
+                <div class="tier-header">Free</div>
                 <ul>
-                  <li>Blended API cost (input + output, mixed use): <strong>$0.003 per 1K tokens</strong>.</li>
-                  <li><strong>1 credit = 250 tokens</strong>.</li>
+                  <li>For exploring and trying things out</li>
+                  <li>500 credits / month</li>
+                  <li>Daily limit: 100 credits</li>
+                  <li>Basic generation speed</li>
+                  <li>Community support</li>
                 </ul>
-                <p class="pricing-math">
-                  Cost per credit ≈ <strong>$0.00075</strong> · Cost per 1,000 credits ≈ <strong>$0.75</strong>
-                </p>
+                <p class="tier-note">$0 / month</p>
               </div>
-            </div>
-
-            <div class="pricing-section">
-              <h3>3. Public pricing tiers (clean + familiar)</h3>
-              <div class="pricing-tiers">
-                <div class="tier-card">
-                  <div class="tier-header">🟢 Free (acquisition tier)</div>
-                  <ul>
-                    <li>Credits/month: <strong>500</strong></li>
-                    <li>Daily cap: <strong>100</strong></li>
-                    <li>Price: <strong>$0</strong></li>
-                    <li>Hard stops: <strong>yes</strong></li>
-                    <li>Cost to you: <strong>~$0.38</strong></li>
-                  </ul>
-                  <p class="tier-note">Purpose: demo + habit formation.</p>
-                </div>
-                <div class="tier-card">
-                  <div class="tier-header">🔵 Starter (individual builders)</div>
-                  <ul>
-                    <li>Credits/month: <strong>5,000</strong></li>
-                    <li>Daily cap: <strong>500</strong></li>
-                    <li>Price: <strong>$12/month</strong></li>
-                    <li>Cost to you: <strong>~$3.75</strong></li>
-                    <li>Margin: <strong>~3.2×</strong></li>
-                  </ul>
-                  <p class="tier-note">For people actively building and experimenting.</p>
-                </div>
-                <div class="tier-card">
-                  <div class="tier-header">🟣 Pro (serious creators)</div>
-                  <ul>
-                    <li>Credits/month: <strong>20,000</strong></li>
-                    <li>Daily cap: <strong>2,000</strong></li>
-                    <li>Price: <strong>$39/month</strong></li>
-                    <li>Cost to you: <strong>~$15</strong></li>
-                    <li>Margin: <strong>~2.6×</strong></li>
-                  </ul>
-                  <p class="tier-note">Adds priority queue, higher sandbox limits, faster generation.</p>
-                </div>
-                <div class="tier-card">
-                  <div class="tier-header">⚫ Power / Studio</div>
-                  <ul>
-                    <li>Credits/month: <strong>100,000</strong></li>
-                    <li>Daily cap: <strong>10,000</strong></li>
-                    <li>Price: <strong>$149/month</strong></li>
-                    <li>Cost to you: <strong>~$75</strong></li>
-                    <li>Margin: <strong>~2×</strong></li>
-                  </ul>
-                  <p class="tier-note">Predictable revenue, power users, fewer support headaches.</p>
-                </div>
-              </div>
-            </div>
-
-            <div class="pricing-section">
-              <h3>4. Credit top-ups (high-margin add-on)</h3>
-              <p>Top-ups are intentionally more expensive than subscriptions to encourage plan upgrades.</p>
-              <div class="pricing-table">
-                <div class="pricing-table-row pricing-table-header">
-                  <span>Credits</span>
-                  <span>Price</span>
-                  <span>Margin</span>
-                </div>
-                <div class="pricing-table-row">
-                  <span>1,000</span>
-                  <span>$5</span>
-                  <span>~6.5×</span>
-                </div>
-                <div class="pricing-table-row">
-                  <span>5,000</span>
-                  <span>$20</span>
-                  <span>~5.3×</span>
-                </div>
-                <div class="pricing-table-row">
-                  <span>20,000</span>
-                  <span>$60</span>
-                  <span>~4×</span>
-                </div>
-              </div>
-              <ul class="pricing-sublist">
-                <li>Encourages upgrading plans.</li>
-                <li>Smooths burst usage.</li>
-                <li>Avoids rage quits.</li>
-              </ul>
-            </div>
-
-            <div class="pricing-section">
-              <h3>5. Throttling model (critical)</h3>
-              <ul>
-                <li><strong>Monthly credits</strong> (hard cap) to stop abuse.</li>
-                <li><strong>Daily burn limit</strong> (soft cap) to stop accidental nukes.</li>
-              </ul>
-              <p class="pricing-callout">“You’ve used 80% of today’s credits. More unlocks tomorrow.”</p>
-              <p class="pricing-muted">This mirrors OpenAI’s usage model, so users already understand it.</p>
-            </div>
-
-            <div class="pricing-section">
-              <h3>6. Credit burn transparency (trust builder)</h3>
-              <p class="pricing-callout">Used 142 credits · 4,858 remaining</p>
-              <p class="pricing-warning">⚠️ Large generation · 18% of daily limit</p>
-              <p class="pricing-muted">Clear callouts reduce complaints and chargebacks.</p>
-            </div>
-
-            <div class="pricing-section">
-              <h3>7. Stripe billing flow (boring, robust, scales)</h3>
-              <p class="pricing-muted">Designed to plug into your credits system without surprises.</p>
-
-              <div class="pricing-card">
-                <p><strong>Stripe objects</strong></p>
-                <div class="pricing-table two-col">
-                  <div class="pricing-table-row pricing-table-header">
-                    <span>Products (one per tier)</span>
-                    <span>Recurring prices (monthly)</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>maya-free (internal, $0)</span>
-                    <span>Starter → $12</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>maya-starter</span>
-                    <span>Pro → $39</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>maya-pro</span>
-                    <span>Power → $149</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>maya-power</span>
-                    <span>Top-ups are one-time prices</span>
-                  </div>
-                </div>
-                <ul class="pricing-sublist">
-                  <li>Top-ups: credits-1k ($5), credits-5k ($20), credits-20k ($60).</li>
-                  <li>Credits are managed by you, not Stripe metadata.</li>
-                </ul>
-              </div>
-
-              <div class="pricing-card">
-                <p><strong>User record fields (source of truth)</strong></p>
-                <div class="pricing-table two-col">
-                  <div class="pricing-table-row pricing-table-header">
-                    <span>Billing identifiers</span>
-                    <span>Credits + status</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>stripe_customer_id</span>
-                    <span>credits_total</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>stripe_subscription_id</span>
-                    <span>credits_remaining</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>plan_tier</span>
-                    <span>billing_status (active | past_due | canceled)</span>
-                  </div>
-                  <div class="pricing-table-row">
-                    <span>monthly_reset_at</span>
-                    <span>Stripe never decides credits.</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="pricing-card">
-                <p><strong>Checkout flow (subscription)</strong></p>
+              <div class="tier-card">
+                <div class="tier-header">Starter</div>
                 <ul>
-                  <li>Client: user clicks Upgrade → POST /billing/create-checkout-session.</li>
-                  <li>Stripe Checkout mode: <strong>subscription</strong>.</li>
-                  <li>Success URL: /billing/success · Cancel URL: /billing/canceled.</li>
-                  <li>Allow promo codes and tax collection as needed.</li>
+                  <li>For individual builders</li>
+                  <li>5,000 credits / month</li>
+                  <li>Daily limit: 500 credits</li>
+                  <li>Faster generation</li>
+                  <li>Priority sandbox execution</li>
                 </ul>
+                <p class="tier-note">$12 / month</p>
               </div>
-
-              <div class="pricing-card">
-                <p><strong>Webhook events (critical)</strong></p>
-                <pre class="pricing-code"><code>checkout.session.completed → link customer + subscription
-customer.subscription.created → grant credits + set monthly reset
-customer.subscription.updated → upgrade now, downgrade next cycle
-invoice.payment_succeeded → monthly reset
-invoice.payment_failed → billing_status = past_due
-customer.subscription.deleted → plan = free + cap remaining</code></pre>
-                <ul class="pricing-sublist">
-                  <li>Verify webhook signatures and use idempotency keys.</li>
-                  <li>Log every billing event to billing_log.csv.</li>
-                </ul>
-              </div>
-
-              <div class="pricing-card">
-                <p><strong>Top-up flow (one-time)</strong></p>
+              <div class="tier-card">
+                <div class="tier-header">Pro</div>
                 <ul>
-                  <li>Stripe Checkout mode: <strong>payment</strong>.</li>
-                  <li>On checkout.session.completed → credits_remaining += purchased_amount.</li>
-                  <li>Top-ups do not expire unless you choose to.</li>
+                  <li>For serious creators</li>
+                  <li>20,000 credits / month</li>
+                  <li>Daily limit: 2,000 credits</li>
+                  <li>Fastest generation</li>
+                  <li>Priority queue + advanced sandbox</li>
+                  <li>Early access to new features</li>
                 </ul>
-              </div>
-
-              <div class="pricing-card">
-                <p><strong>Enforcement + UX rules</strong></p>
-                <ul>
-                  <li>Before every generation: block if credits_remaining &lt; estimated_cost.</li>
-                  <li>Upgrades apply immediately; downgrades next billing cycle.</li>
-                  <li>Cancel → access until period end.</li>
-                  <li>Always show plan · credits remaining · reset date.</li>
-                </ul>
+                <p class="tier-note">$39 / month</p>
               </div>
             </div>
+          </div>
+
+          <div class="pricing-section">
+            <h3>Need more?</h3>
+            <ul>
+              <li>Buy extra credits anytime.</li>
+              <li>Unused credits roll over while your subscription is active.</li>
+            </ul>
+          </div>
+
+          <div class="pricing-section">
+            <h3>Transparency note</h3>
+            <p>You’ll always see:</p>
+            <ul>
+              <li>how many credits an action will likely use</li>
+              <li>how many credits you have left</li>
+              <li>warnings before you run low</li>
+            </ul>
           </div>
         </div>
       </div>
