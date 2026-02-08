@@ -503,68 +503,56 @@ async function handleGoogleCredential(response) {
 
 AuthController.register('google', () => {
   const container = document.getElementById('google-signin');
-  const status = document.getElementById('google-auth-status');
-  if (!container) {
-    console.warn('Google auth skipped: container missing');
-    return;
-  }
+  if (!container) return;
 
-  const setStatus = (message) => {
-    if (!status) {
-      return;
-    }
-    status.textContent = message;
-    status.dataset.active = message ? 'true' : 'false';
+  let resolved = false;
+
+  const fail = () => {
+    if (resolved) return;
+    resolved = true;
+
+    container.innerHTML = `
+      <button class="auth-btn" disabled>
+        Google unavailable
+      </button>
+    `;
   };
 
   const tryInit = () => {
-    if (!window.google?.accounts?.id) {
-      setStatus('Loading Google sign-in…');
-      return false;
-    }
-    if (!GOOGLE_CLIENT_ID) {
-      console.warn('Google auth client ID missing.');
-      setStatus('Missing GOOGLE_CLIENT_ID. Check env injection.');
-      return true;
-    }
+    if (!window.google?.accounts?.id) return false;
 
-    container.textContent = '';
-    setStatus('');
-    window.google.accounts.id.initialize({
+    google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
       callback: handleGoogleCredential,
       ux_mode: 'popup'
     });
 
-    window.google.accounts.id.renderButton(container, {
+    google.accounts.id.renderButton(container, {
       theme: 'outline',
       size: 'large',
       width: 360,
       text: 'continue_with'
     });
 
+    resolved = true;
     return true;
   };
 
-  if (tryInit()) {
-    return;
-  }
+  // Try immediately
+  if (tryInit()) return;
 
+  // Retry briefly
   const interval = setInterval(() => {
     if (tryInit()) {
       clearInterval(interval);
     }
   }, 50);
 
+  // Hard timeout (2.5s)
   setTimeout(() => {
     clearInterval(interval);
-    if (!window.google?.accounts?.id) {
-      setStatus('Google SDK did not load. Check CSP or script blocking.');
-      console.warn(
-        'Google SDK failed to load. Verify https://accounts.google.com/gsi/client is allowed by CSP and not blocked.'
-      );
-    }
-  }, 3000);
+    fail();
+  }, 2500);
 });
 
 AuthController.register('email', () => {

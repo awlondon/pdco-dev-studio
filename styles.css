@@ -141,6 +141,11 @@ html, body {
   justify-content: center;
 }
 
+.auth-slot[data-provider="google"] button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .auth-helper {
   margin: 8px auto 0;
   width: 100%;
