@@ -1,5 +1,9 @@
 import { createSandboxController } from './sandboxController.js';
 
+if (!window.GOOGLE_CLIENT_ID) {
+  console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
+}
+
 const AuthController = (() => {
   const providers = new Map();
 
@@ -504,6 +508,16 @@ async function handleGoogleCredential(response) {
 AuthController.register('google', () => {
   const container = document.getElementById('google-signin');
   if (!container) return;
+
+  if (!window.GOOGLE_CLIENT_ID) {
+    container.innerHTML = `
+      <div class="auth-error">
+        Missing GOOGLE_CLIENT_ID.<br/>
+        Check env injection.
+      </div>
+    `;
+    return;
+  }
 
   let resolved = false;
 
