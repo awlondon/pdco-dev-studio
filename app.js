@@ -4,7 +4,7 @@ if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
 }
 
-const API_BASE = window.__MAYA_API_BASE || '';
+const API_BASE = window.__MAYA_API_BASE;
 
 const AuthController = (() => {
   const providers = new Map();
@@ -3366,6 +3366,22 @@ function addMessage(role, html, options = {}) {
   return id;
 }
 
+function renderSystemMessage(messageId, text) {
+  const safeText = escapeHtml(text ?? '');
+  if (messageId) {
+    updateMessage(messageId, `<em>${safeText}</em>`);
+    const messageEl = document.querySelector(`[data-id="${messageId}"]`);
+    if (messageEl) {
+      messageEl.classList.add('system');
+      delete messageEl.dataset.pending;
+    }
+    return messageEl;
+  }
+
+  const id = addMessage('assistant', `<em>${safeText}</em>`, { className: 'system' });
+  return document.querySelector(`[data-id="${id}"]`);
+}
+
 function attachCopyButton(messageEl, getTextFn) {
   if (!messageEl || messageEl.querySelector('.chat-copy-btn')) {
     return;
@@ -4425,6 +4441,10 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
+    if (!API_BASE) {
+      throw new Error('API_BASE is not configured');
+    }
+
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4436,9 +4456,10 @@ Output rules:
       })
     });
 
+    const responseText = await res.text();
     let data = null;
     try {
-      data = await res.json();
+      data = responseText ? JSON.parse(responseText) : null;
     } catch {
       data = null;
     }
@@ -4446,15 +4467,19 @@ Output rules:
     generationMetadata = formatGenerationMetadata(llmEndTime - llmStartTime);
 
     if (!res.ok) {
-      throw new Error(data?.message || data?.error || 'Unable to reach the chat service.');
+      throw new Error(`Chat API failed (${res.status}): ${responseText || data?.message || data?.error || 'Unknown error'}`);
     }
 
     setStatusOnline(true);
-    let textReply = data?.choices?.[0]?.message?.content;
-    if (!textReply && data?.candidates?.length) {
-      textReply = data.candidates[0].content;
+    const content =
+      data?.choices?.[0]?.message?.content
+      ?? data?.candidates?.[0]?.content
+      ?? data?.output_text
+      ?? null;
+    if (!content) {
+      throw new Error('No model output returned');
     }
-    rawReply = textReply ?? 'No response.';
+    rawReply = content;
     applyUsageToCredits(data?.usage);
     throttleSnapshot = updateThrottleState({ estimatedNextCost: 0 });
     usageMetadata = formatUsageMetadata(data?.usage, getCreditState(), throttleSnapshot);
@@ -4464,11 +4489,12 @@ Output rules:
     generationFeedback.stop();
   } catch (error) {
     generationFeedback.stop();
+    console.error(error);
+    const message = error instanceof Error ? error.message : String(error);
     finalizeChatOnce(() => {
-      renderAssistantMessage(
+      renderSystemMessage(
         pendingMessageId,
-        '⚠️ Something went wrong while generating the response.',
-        [{ text: formatGenerationMetadata(performance.now() - startedAt) }]
+        `Backend error: ${message || 'Unknown error'}`
       );
     });
     unlockChat();
