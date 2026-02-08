@@ -265,7 +265,7 @@ async function handleGoogleAuth(request, env) {
     provider: 'google'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
 
 let googleJwksCache = { keys: null, expiresAt: 0 };
@@ -445,7 +445,7 @@ async function verifyMagicLink(request, env) {
     provider: 'email'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
 
 async function hashToken(token) {
@@ -496,7 +496,19 @@ async function sendMagicEmail(email, token, env) {
   }
 }
 
-async function issueSession(user, env) {
+function resolveSessionCookieDomain(request, env) {
+  if (env.SESSION_COOKIE_DOMAIN) {
+    return `; Domain=${env.SESSION_COOKIE_DOMAIN}`;
+  }
+  const host = request?.headers?.get('host') || '';
+  const hostname = host.split(':')[0];
+  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
+    return '; Domain=.primarydesignco.com';
+  }
+  return '';
+}
+
+async function issueSession(user, env, request) {
   if (!env.SESSION_SECRET) {
     return jsonError('Missing SESSION_SECRET', 500);
   }
@@ -519,7 +531,7 @@ async function issueSession(user, env) {
       status: 200,
       headers: {
         'content-type': 'application/json',
-        'set-cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${SESSION_MAX_AGE_SECONDS}${env.SESSION_COOKIE_DOMAIN ? `; Domain=${env.SESSION_COOKIE_DOMAIN}` : ''}`
+        'set-cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${SESSION_MAX_AGE_SECONDS}${resolveSessionCookieDomain(request, env)}`
       }
     }
   );

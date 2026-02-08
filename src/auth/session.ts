@@ -3,7 +3,19 @@ import jwt from '@tsndr/cloudflare-worker-jwt';
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_COOKIE_NAME = 'maya_session';
 
-export async function issueSession(user: any, env: Env) {
+function resolveSessionCookieDomain(request: Request | undefined, env: Env) {
+  if (env.SESSION_COOKIE_DOMAIN) {
+    return `; Domain=${env.SESSION_COOKIE_DOMAIN}`;
+  }
+  const host = request?.headers.get('host') ?? '';
+  const hostname = host.split(':')[0];
+  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
+    return '; Domain=.primarydesignco.com';
+  }
+  return '';
+}
+
+export async function issueSession(user: any, env: Env, request?: Request) {
   const token = await jwt.sign(
     {
       sub: user.id,
@@ -14,10 +26,7 @@ export async function issueSession(user: any, env: Env) {
     },
     env.SESSION_SECRET
   );
-
-  const cookieDomain = env.SESSION_COOKIE_DOMAIN
-    ? `; Domain=${env.SESSION_COOKIE_DOMAIN}`
-    : '';
+  const cookieDomain = resolveSessionCookieDomain(request, env);
 
   return new Response(
     JSON.stringify({

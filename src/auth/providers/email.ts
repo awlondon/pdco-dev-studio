@@ -66,7 +66,7 @@ export async function verifyEmailToken(request: Request, env: Env) {
     provider: 'email'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
 
 async function sendMagicEmail(email: string, link: string, env: Env) {
