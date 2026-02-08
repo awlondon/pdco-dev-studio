@@ -158,6 +158,26 @@ async function refreshAuthDebug() {
   const panel = document.getElementById('auth-debug-panel');
   if (!panel) return;
 
+  const fetchDebugInfo = async (url) => {
+    const res = await fetch(url, { credentials: 'include' });
+    const contentType = res.headers.get('content-type') || '—';
+    let preview = '—';
+    let json = null;
+
+    if (contentType.includes('application/json')) {
+      try {
+        json = await res.json();
+      } catch {
+        preview = 'Invalid JSON response';
+      }
+    } else {
+      const text = await res.text();
+      preview = text ? text.slice(0, 120) : '—';
+    }
+
+    return { res, contentType, preview, json };
+  };
+
   document.getElementById('authDebugEnv').textContent = location.origin;
 
   document.getElementById('authDebugCookie').textContent =
@@ -166,25 +186,52 @@ async function refreshAuthDebug() {
       : 'not visible';
 
   try {
-    const res = await fetch(`/api/me?ts=${Date.now()}`, { credentials: 'include' });
+    const meInfo = await fetchDebugInfo(`/api/me?ts=${Date.now()}`);
     document.getElementById('authDebugMeStatus').textContent =
-      `${res.status}`;
+      `${meInfo.res.status}`;
+    document.getElementById('authDebugMeType').textContent =
+      meInfo.contentType;
     const authState = uiState === UI_STATE.APP ? 'authenticated' : 'unauthenticated';
-    if (isAuthDebugEnabled && authState === 'authenticated' && res.status !== 200) {
+    if (isAuthDebugEnabled && authState === 'authenticated' && meInfo.res.status !== 200) {
       console.error('[AUTH INVARIANT FAILED]', 'authenticated=true but /api/me != 200');
     }
 
-    if (res.ok) {
-      const data = await res.json();
+    if (meInfo.contentType.includes('application/json')) {
+      const data = meInfo.json;
       const keys = data && typeof data === 'object' ? Object.keys(data) : [];
       document.getElementById('authDebugMeKeys').textContent =
         keys.length ? keys.join(', ') : '—';
+      document.getElementById('authDebugMePreview').textContent = '—';
     } else {
-      document.getElementById('authDebugMeKeys').textContent = '—';
+      document.getElementById('authDebugMeKeys').textContent =
+        '/api/me returned HTML; domain is not wired to Pages Functions.';
+      document.getElementById('authDebugMePreview').textContent =
+        meInfo.preview;
+      console.error('/api/me returned HTML; domain is not wired to Pages Functions.');
     }
   } catch {
     document.getElementById('authDebugMeStatus').textContent = 'network error';
+    document.getElementById('authDebugMeType').textContent = '—';
     document.getElementById('authDebugMeKeys').textContent = '—';
+    document.getElementById('authDebugMePreview').textContent = '—';
+  }
+
+  try {
+    const healthInfo = await fetchDebugInfo('/api/health');
+    document.getElementById('authDebugHealthStatus').textContent =
+      `${healthInfo.res.status}`;
+    document.getElementById('authDebugHealthType').textContent =
+      healthInfo.contentType;
+    if (healthInfo.contentType.includes('application/json')) {
+      document.getElementById('authDebugHealthPreview').textContent = '—';
+    } else {
+      document.getElementById('authDebugHealthPreview').textContent =
+        healthInfo.preview;
+    }
+  } catch {
+    document.getElementById('authDebugHealthStatus').textContent = 'network error';
+    document.getElementById('authDebugHealthType').textContent = '—';
+    document.getElementById('authDebugHealthPreview').textContent = '—';
   }
 
   document.getElementById('authDebugLastProvider').textContent =

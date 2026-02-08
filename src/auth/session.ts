@@ -30,9 +30,11 @@ export async function issueSession(user: any, env: Env, request?: Request) {
             'Secure'
           ];
 
-          if (env.ENVIRONMENT === 'production') {
-            cookieParts.push('Domain=.primarydesignco.com');
+          if (env.COOKIE_DOMAIN) {
+            cookieParts.push(`Domain=${env.COOKIE_DOMAIN}`);
             cookieParts.push('SameSite=None');
+          } else {
+            cookieParts.push('SameSite=Lax');
           }
 
           return cookieParts.join('; ');
