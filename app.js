@@ -96,7 +96,7 @@ const EmailAuthSlot = (() => {
       render();
 
       try {
-        await fetch(`${BACKEND_URL}/auth/email/request`, {
+        await fetch(`/api/auth/email/request`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email })
@@ -142,7 +142,7 @@ async function refreshAuthDebug() {
       : 'not visible';
 
   try {
-    const res = await fetch(`${BACKEND_URL}/me`, { credentials: 'include' });
+    const res = await fetch(`/api/me`, { credentials: 'include' });
     document.getElementById('authDebugMeStatus').textContent =
       `${res.status}`;
     const authState = uiState === UI_STATE.APP ? 'authenticated' : 'unauthenticated';
@@ -289,9 +289,6 @@ const UI_STATE = {
 let uiState = UI_STATE.AUTH;
 let showAnalytics = false;
 let appInitialized = false;
-const BACKEND_URL =
-  window.BACKEND_URL
-    || `${window.location.origin}/api`;
 const Auth = {
   user: null,
   token: null,
@@ -612,7 +609,7 @@ function onAuthSuccess({ user, token, provider, credits }) {
 
 async function handleGoogleCredential(response) {
   markAuthAttempt('google');
-  const res = await fetch(`${BACKEND_URL}/auth/google`, {
+  const res = await fetch(`/api/auth/google`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -627,7 +624,7 @@ async function handleGoogleCredential(response) {
     return;
   }
 
-  const meRes = await fetch(`${BACKEND_URL}/me`, {
+  const meRes = await fetch(`/api/me`, {
     method: 'GET',
     credentials: 'include'
   });
@@ -1067,7 +1064,7 @@ function renderUI() {
 
 async function bootstrapSessionFromServer() {
   try {
-    const res = await fetch(`${BACKEND_URL}/me`, { credentials: 'include' });
+    const res = await fetch(`/api/me`, { credentials: 'include' });
     if (res.ok) {
       const data = await res.json();
       onAuthSuccess({
@@ -4248,7 +4245,7 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
-    const res = await fetch(`${BACKEND_URL}/chat`, {
+    const res = await fetch(`/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1,6 +1,5 @@
 import { handleAuth } from './auth';
 import { handleMe } from './auth/me';
-import { corsHeaders } from './cors';
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -9,17 +8,13 @@ export default {
       ? url.pathname.slice(4)
       : url.pathname;
 
-    if (request.method === 'OPTIONS' && (pathname.startsWith('/auth/') || pathname === '/me')) {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
-
     if (pathname.startsWith('/auth/')) {
       return handleAuth(request, env);
     }
 
     if (pathname === '/me') {
       if (request.method !== 'GET') {
-        return new Response('Method not allowed', { status: 405, headers: corsHeaders });
+        return new Response('Method not allowed', { status: 405 });
       }
       return handleMe(request, env);
     }

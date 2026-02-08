@@ -32,7 +32,6 @@ const REQUIRED_USER_HEADERS = [
 const MAGIC_LINK_TTL_SECONDS = 15 * 60;
 const MAGIC_LINK_DEFAULT_BASE = 'https://dev.primarydesignco.com';
 const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
-const corsHeaders = {};
 
 export default {
   async fetch(request, env, ctx) {
@@ -40,13 +39,6 @@ export default {
     const pathname = url.pathname.startsWith('/api/')
       ? url.pathname.slice(4)
       : url.pathname;
-
-    if (request.method === 'OPTIONS' && (pathname.startsWith('/auth/') || pathname === '/me')) {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders
-      });
-    }
 
     if (pathname === '/auth/magic/request' && request.method === 'POST') {
       return requestMagicLink(request, env);
@@ -62,7 +54,7 @@ export default {
 
     if (pathname === '/me') {
       if (request.method !== 'GET') {
-        return new Response('Method not allowed', { status: 405, headers: corsHeaders });
+        return new Response('Method not allowed', { status: 405 });
       }
       return handleMe(request, env);
     }
@@ -247,22 +239,11 @@ function jsonError(message, status = 400) {
   return json({ error: message }, status);
 }
 
-function jsonWithCors(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-  });
-}
-
-function jsonErrorWithCors(message, status = 400) {
-  return jsonWithCors({ error: message }, status);
-}
-
 async function handleMe(request, env) {
   const session = await getSession(request, env);
 
   if (!session) {
-    return new Response('Unauthorized', { status: 401, headers: corsHeaders });
+    return new Response('Unauthorized', { status: 401 });
   }
 
   const resolvedUser = {
@@ -279,7 +260,7 @@ async function handleMe(request, env) {
     user: resolvedUser
   }), {
     status: 200,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    headers: { 'Content-Type': 'application/json' }
   });
 }
 
@@ -289,16 +270,16 @@ async function handleGoogleAuth(request, env) {
     const body = await request.json();
     idToken = typeof body?.id_token === 'string' ? body.id_token.trim() : '';
   } catch (error) {
-    return jsonErrorWithCors('Invalid request payload', 400);
+    return jsonError('Invalid request payload', 400);
   }
 
   if (!idToken) {
-    return jsonErrorWithCors('Missing id_token', 400);
+    return jsonError('Missing id_token', 400);
   }
 
   const payload = await verifyGoogleIdToken(idToken, env.GOOGLE_CLIENT_ID);
   if (!payload) {
-    return jsonErrorWithCors('Invalid token', 401);
+    return jsonError('Invalid token', 401);
   }
 
   const user = {
@@ -429,7 +410,7 @@ async function requestMagicLink(request, env) {
   }
 
   if (!email) {
-    return jsonWithCors({ ok: true });
+    return json({ ok: true });
   }
 
   const token = crypto.randomUUID();
@@ -454,12 +435,12 @@ async function requestMagicLink(request, env) {
     console.warn('Magic link email send failed.', error);
   }
 
-  return jsonWithCors({ ok: true });
+  return json({ ok: true });
 }
 
 async function verifyMagicLink(request, env) {
   if (!env.AUTH_KV) {
-    return jsonErrorWithCors('Auth store unavailable', 500);
+    return jsonError('Auth store unavailable', 500);
   }
 
   let token = '';
@@ -467,17 +448,17 @@ async function verifyMagicLink(request, env) {
     const body = await request.json();
     token = typeof body?.token === 'string' ? body.token.trim() : '';
   } catch (error) {
-    return jsonErrorWithCors('Invalid request payload', 400);
+    return jsonError('Invalid request payload', 400);
   }
 
   if (!token) {
-    return jsonErrorWithCors('Invalid or expired link', 401);
+    return jsonError('Invalid or expired link', 401);
   }
 
   const hash = await hashToken(token);
   const record = await env.AUTH_KV.get(`magic:${hash}`, { type: 'json' });
   if (!record) {
-    return jsonErrorWithCors('Invalid or expired link', 401);
+    return jsonError('Invalid or expired link', 401);
   }
 
   await env.AUTH_KV.delete(`magic:${hash}`);
@@ -539,16 +520,9 @@ async function sendMagicEmail(email, token, env) {
   }
 }
 
-function resolveSessionCookieDomain(request, env) {
-  if (env.SESSION_COOKIE_DOMAIN) {
-    return `Domain=${env.SESSION_COOKIE_DOMAIN}`;
-  }
-  return null;
-}
-
 async function issueSession(user, env, request) {
   if (!env.SESSION_SECRET) {
-    return jsonErrorWithCors('Missing SESSION_SECRET', 500);
+    return jsonError('Missing SESSION_SECRET', 500);
   }
   const token = await signJwt(
     {
@@ -559,23 +533,16 @@ async function issueSession(user, env, request) {
     },
     env.SESSION_SECRET
   );
-  const cookieDomain = resolveSessionCookieDomain(request, env);
   const cookieParts = [
     `${SESSION_COOKIE_NAME}=${token}`,
     'Path=/',
     'HttpOnly',
-    'Secure',
-    'SameSite=Lax'
+    'Secure'
   ];
-
-  if (cookieDomain) {
-    cookieParts.push(cookieDomain);
-  }
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
-      ...corsHeaders,
       'Set-Cookie': cookieParts.join('; '),
       'Content-Type': 'application/json'
     }
