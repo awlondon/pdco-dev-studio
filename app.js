@@ -292,7 +292,7 @@ function renderAuthModalHTML() {
     <h2>Welcome to Maya</h2>
 
     <div class="auth-row">
-      <div id="google-signin"></div>
+      <div id="google-signin" class="google-signin"></div>
     </div>
     <button class="auth-btn apple" data-auth-provider="apple">Continue with Apple</button>
     <button class="auth-btn email" data-auth-provider="email">Sign up with Email</button>
