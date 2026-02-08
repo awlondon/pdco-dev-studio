@@ -142,24 +142,25 @@ async function refreshAuthDebug() {
       : 'not visible';
 
   try {
-    const res = await fetch(`/api/me`, { credentials: 'include' });
+    const res = await fetch(`/api/me?ts=${Date.now()}`, { credentials: 'include' });
     document.getElementById('authDebugMeStatus').textContent =
       `${res.status}`;
     const authState = uiState === UI_STATE.APP ? 'authenticated' : 'unauthenticated';
     if (isAuthDebugEnabled && authState === 'authenticated' && res.status !== 200) {
-      console.error('[AUTH INVARIANT FAILED]', 'authenticated=true but /me != 200');
+      console.error('[AUTH INVARIANT FAILED]', 'authenticated=true but /api/me != 200');
     }
 
     if (res.ok) {
       const data = await res.json();
-      document.getElementById('authDebugUser').textContent =
-        JSON.stringify(data.user, null, 2);
+      const keys = data && typeof data === 'object' ? Object.keys(data) : [];
+      document.getElementById('authDebugMeKeys').textContent =
+        keys.length ? keys.join(', ') : '—';
     } else {
-      document.getElementById('authDebugUser').textContent = '—';
+      document.getElementById('authDebugMeKeys').textContent = '—';
     }
   } catch {
     document.getElementById('authDebugMeStatus').textContent = 'network error';
-    document.getElementById('authDebugUser').textContent = '—';
+    document.getElementById('authDebugMeKeys').textContent = '—';
   }
 
   document.getElementById('authDebugLastProvider').textContent =
@@ -300,9 +301,6 @@ const APPLE_CLIENT_ID = window.APPLE_CLIENT_ID || '';
 const APPLE_REDIRECT_URI = window.APPLE_REDIRECT_URI || '';
 
 const AUTH_STORAGE_KEYS = [
-  'maya_auth_token',
-  'maya_user',
-  'maya_provider',
   'maya_credits'
 ];
 const GENERATION_PHASES = [
@@ -408,51 +406,6 @@ const analyticsModalState = {
   watchdogId: null
 };
 
-function persistAuthState() {
-  if (!window.localStorage) {
-    return;
-  }
-  if (Auth.token) {
-    window.localStorage.setItem('maya_auth_token', Auth.token);
-  } else {
-    window.localStorage.removeItem('maya_auth_token');
-  }
-
-  if (Auth.user) {
-    window.localStorage.setItem('maya_user', JSON.stringify(Auth.user));
-  } else {
-    window.localStorage.removeItem('maya_user');
-  }
-
-  if (Auth.provider) {
-    window.localStorage.setItem('maya_provider', Auth.provider);
-  } else {
-    window.localStorage.removeItem('maya_provider');
-  }
-}
-
-function hydrateAuthState() {
-  if (!window.localStorage) {
-    return;
-  }
-  const token = window.localStorage.getItem('maya_auth_token');
-  const provider = window.localStorage.getItem('maya_provider');
-  const storedUser = window.localStorage.getItem('maya_user');
-  let user = null;
-
-  if (storedUser) {
-    try {
-      user = JSON.parse(storedUser);
-    } catch (error) {
-      console.warn('Failed to parse stored auth user.', error);
-    }
-  }
-
-  Auth.token = token || null;
-  Auth.provider = provider || null;
-  Auth.user = user;
-}
-
 function applyAuthToRoot() {
   if (!root) {
     return;
@@ -528,32 +481,40 @@ function bootstrapAuthenticatedUI(user) {
 function renderUserHeader() {
   if (!currentUser) return;
 
-  const trigger = document.getElementById('userMenuTrigger');
-  if (!trigger) return;
+  const avatar = document.getElementById('userAvatar');
+  const name = document.getElementById('userName');
+  if (!avatar || !name) return;
 
-  const initial = currentUser.name?.[0]?.toUpperCase() ?? '?';
+  const displayName = currentUser.name || currentUser.email || 'User';
+  const initial = displayName[0]?.toUpperCase() ?? '?';
 
-  trigger.innerHTML = `
-    ${initial} <span class="chevron">▾</span>
-  `;
+  avatar.textContent = initial;
+  name.textContent = displayName;
 }
 
 function renderCredits() {
   if (!currentUser) return;
 
   const badge = document.querySelector('#creditBadge .count');
-  if (!badge) return;
+  const planCredits = document.getElementById('userPlanCredits');
+  if (!badge || !planCredits) return;
 
   badge.textContent = currentUser.creditsRemaining;
+  const planLabel = currentUser.plan || currentUser.planTier || 'Free';
+  planCredits.textContent = `Credits: ${currentUser.creditsRemaining} · Plan: ${planLabel}`;
 }
 
 function updateCreditsUI(credits) {
   const resolvedCredits = Number.isFinite(credits) ? credits : 500;
+  if (currentUser) {
+    currentUser.creditsRemaining = resolvedCredits;
+  }
   if (root) {
     root.dataset.remainingCredits = `${resolvedCredits}`;
     root.dataset.creditsTotal = `${resolvedCredits}`;
   }
   updateCreditUI();
+  renderCredits();
 }
 
 function hydrateCreditState() {
@@ -579,17 +540,16 @@ function resolveCredits(credits) {
 
 function onAuthSuccess({ user, token, provider, credits }) {
   const resolvedCredits = resolveCredits(credits);
+  const planLabel = user?.plan || user?.plan_tier || user?.planTier || 'Free';
   Auth.user = user;
   Auth.token = token;
   Auth.provider = provider;
   currentUser = {
     ...user,
+    plan: planLabel,
     creditsRemaining: resolvedCredits
   };
 
-  window.localStorage?.setItem('maya_auth_token', token);
-  window.localStorage?.setItem('maya_user', JSON.stringify(user));
-  window.localStorage?.setItem('maya_provider', provider);
   window.localStorage?.setItem('maya_credits', `${resolvedCredits}`);
 
   document.body.classList.remove('unauthenticated');
@@ -639,7 +599,6 @@ async function handleGoogleCredential(response) {
   Auth.user = user ?? null;
   Auth.token = token ?? null;
   Auth.provider = user?.provider ?? 'google';
-  persistAuthState();
   applyAuthToRoot();
   updateCreditsUI(user?.creditsRemaining ?? 500);
   bootstrapAuthenticatedUI({
@@ -942,7 +901,6 @@ function setAuthenticatedUser(user, provider) {
   Auth.provider = provider;
   Auth.token = Auth.token
     || (window.crypto?.randomUUID ? window.crypto.randomUUID() : `token-${Date.now()}`);
-  persistAuthState();
   applyAuthToRoot();
 }
 
@@ -1079,7 +1037,6 @@ async function bootstrapSessionFromServer() {
       Auth.user = null;
       Auth.token = null;
       Auth.provider = null;
-      persistAuthState();
     }
   } catch (error) {
     console.warn('Failed to bootstrap session from server.', error);
@@ -1089,16 +1046,14 @@ async function bootstrapSessionFromServer() {
 
 async function bootstrapApp() {
   initAuthDebugPanel();
-  hydrateAuthState();
   hydrateCreditState();
   applyAuthToRoot();
   const sessionLoaded = await bootstrapSessionFromServer();
   if (sessionLoaded) {
     return;
   }
-  const token = window.localStorage?.getItem('maya_auth_token');
   const user = getAuthenticatedUser();
-  if (!token || !user) {
+  if (!user) {
     uiState = UI_STATE.AUTH;
     showAnalytics = false;
     resetAppToUnauthed();
@@ -4684,12 +4639,6 @@ codeEditor.addEventListener('scroll', () => {
 
 document.addEventListener('DOMContentLoaded', () => {
   bootstrapApp();
-});
-
-window.addEventListener('storage', (event) => {
-  if (event.key === 'maya_auth_token' && !event.newValue) {
-    signOut();
-  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {

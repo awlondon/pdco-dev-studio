@@ -22,7 +22,7 @@ export async function issueSession(user: any, env: Env, request?: Request) {
     {
       headers: {
         'Content-Type': 'application/json',
-        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure`
+        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None`
       }
     }
   );

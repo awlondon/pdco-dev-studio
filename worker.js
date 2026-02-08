@@ -30,7 +30,6 @@ const REQUIRED_USER_HEADERS = [
   'billing_status'
 ];
 const MAGIC_LINK_TTL_SECONDS = 15 * 60;
-const MAGIC_LINK_DEFAULT_BASE = 'https://dev.primarydesignco.com';
 const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
 
 export default {
@@ -430,7 +429,8 @@ async function requestMagicLink(request, env) {
   }
 
   try {
-    await sendMagicEmail(email, token, env);
+    const requestOrigin = new URL(request.url).origin;
+    await sendMagicEmail(email, token, env, requestOrigin);
   } catch (error) {
     console.warn('Magic link email send failed.', error);
   }
@@ -478,13 +478,13 @@ async function hashToken(token) {
   return bufToHex(digest);
 }
 
-async function sendMagicEmail(email, token, env) {
+async function sendMagicEmail(email, token, env, requestOrigin) {
   if (!env.MAGIC_EMAIL_FROM) {
     console.warn('MAGIC_EMAIL_FROM is not configured; skipping email send.');
     return;
   }
 
-  const base = env.MAGIC_LINK_BASE || MAGIC_LINK_DEFAULT_BASE;
+  const base = env.MAGIC_LINK_BASE || requestOrigin;
   const link = `${base.replace(/\/$/, '')}/auth/magic?token=${encodeURIComponent(token)}`;
   const subject = 'Sign in to Maya Dev UI';
   const bodyText = `Click the link below to sign in:\n\n${link}\n\nThis link expires in 15 minutes.\nIf you didn’t request this, you can ignore this email.`;
@@ -537,7 +537,8 @@ async function issueSession(user, env, request) {
     `${SESSION_COOKIE_NAME}=${token}`,
     'Path=/',
     'HttpOnly',
-    'Secure'
+    'Secure',
+    'SameSite=None'
   ];
 
   return new Response(JSON.stringify({ ok: true }), {

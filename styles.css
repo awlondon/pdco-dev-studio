@@ -473,10 +473,45 @@ html, body {
   font-weight: 500;
   cursor: pointer;
   padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .user-trigger:hover {
   color: #ffffff;
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: #e6e8ff;
+}
+
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+}
+
+.user-plan {
+  font-size: 11px;
+  color: rgba(214, 219, 255, 0.8);
 }
 
 .chevron {

@@ -34,21 +34,22 @@
           <span class="credit-badge-tooltip">Credits power generations. Resets monthly.</span>
         </div>
         <div class="user-menu">
-          <button class="user-trigger" id="userMenuTrigger">
-            JD <span class="chevron">▾</span>
+          <button class="user-trigger" id="userMenuTrigger" type="button">
+            <span class="user-avatar" id="userAvatar">JD</span>
+            <span class="user-meta">
+              <span class="user-name" id="userName">Jane Doe</span>
+              <span class="user-plan" id="userPlanCredits">Credits: 0 · Plan: Free</span>
+            </span>
+            <span class="chevron">▾</span>
           </button>
 
           <div class="user-dropdown" id="userMenu">
-            <button class="menu-item" id="downloadChat">
-              Download chat history
+            <button class="menu-item" id="accountLink">
+              Account
             </button>
 
             <button class="menu-item" id="upgradePlan">
-              Upgrade subscription
-            </button>
-
-            <button class="menu-item" id="referrals">
-              Referral discounts
+              Billing
             </button>
 
             <div class="menu-divider"></div>
@@ -587,13 +588,13 @@
     </div>
 
     <div class="auth-debug-row">
-      <span>/me status</span>
+      <span>/api/me?ts status</span>
       <code id="authDebugMeStatus"></code>
     </div>
 
     <div class="auth-debug-row">
-      <span>User</span>
-      <pre id="authDebugUser"></pre>
+      <span>/api/me?ts keys</span>
+      <code id="authDebugMeKeys"></code>
     </div>
 
     <div class="auth-debug-row">

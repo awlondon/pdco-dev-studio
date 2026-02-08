@@ -26,7 +26,8 @@ export async function requestEmailLink(request: Request, env: Env) {
     env.EMAIL_TOKEN_SECRET
   );
 
-  const magicLink = `${env.FRONTEND_URL}/auth/email?token=${encodeURIComponent(token)}`;
+  const origin = env.FRONTEND_URL || new URL(request.url).origin;
+  const magicLink = `${origin}/auth/email?token=${encodeURIComponent(token)}`;
 
   await sendMagicEmail(email, magicLink, env);
 

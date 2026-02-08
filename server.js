@@ -256,7 +256,7 @@ function getRequestId() {
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static('.'));
 
-app.get('/me', (req, res) => {
+function handleMe(req, res) {
   const token = getCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
   if (!token) {
     res.status(401).json({ error: 'Unauthorized' });
@@ -278,7 +278,10 @@ app.get('/me', (req, res) => {
       provider: payload.provider
     }
   });
-});
+}
+
+app.get('/api/me', handleMe);
+app.get('/me', handleMe);
 
 app.post('/api/chat', async (req, res) => {
   const { messages, prompt, user, sessionId, intentType } = req.body || {};
