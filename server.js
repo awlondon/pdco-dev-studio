@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import express from 'express';
+import cors from 'cors';
 import { calculateCreditsUsed } from './api/credits.js';
 import { appendUsageLog, readUsageLog } from './api/usageLog.js';
 
@@ -27,6 +28,11 @@ const DAILY_LIMITS = {
   power: 10000
 };
 const SESSION_COOKIE_NAME = 'maya_session';
+
+app.use(cors({
+  origin: ['https://maya-dev-ui.pages.dev'],
+  credentials: true
+}));
 
 function normalizeNumber(value) {
   const numeric = Number(value);
