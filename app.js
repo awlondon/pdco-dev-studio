@@ -289,13 +289,23 @@ function clearAuthFromRoot() {
 
 function renderAuthModalHTML() {
   return `
-    <h2>Welcome to Maya</h2>
+    <h2 class="auth-title">Welcome to Maya</h2>
 
-    <div class="auth-row">
-      <div id="google-signin" class="google-signin"></div>
+    <div class="auth-stack">
+
+      <div class="auth-slot" data-provider="google">
+        <div id="google-signin"></div>
+      </div>
+
+      <div class="auth-slot" data-provider="apple">
+        <button class="auth-btn">Continue with Apple</button>
+      </div>
+
+      <div class="auth-slot" data-provider="email">
+        <button class="auth-btn">Sign up with Email</button>
+      </div>
+
     </div>
-    <button class="auth-btn apple" data-auth-provider="apple">Continue with Apple</button>
-    <button class="auth-btn email" data-auth-provider="email">Sign up with Email</button>
 
     <label class="newsletter">
       <input type="checkbox" checked />
@@ -415,7 +425,7 @@ function initGoogleAuth() {
 
 let appleAuthInitAttempts = 0;
 function initAppleAuth() {
-  const button = document.querySelector('.auth-btn.apple');
+  const button = document.querySelector('.auth-slot[data-provider="apple"] .auth-btn');
   if (!button) {
     return;
   }
@@ -698,7 +708,7 @@ function resetAppToUnauthed() {
     }
   });
   const modalRoot = document.getElementById('modal-root');
-  const emailButton = modalRoot?.querySelector('.auth-btn.email');
+  const emailButton = modalRoot?.querySelector('.auth-slot[data-provider="email"] .auth-btn');
   if (emailButton) {
     emailButton.onclick = () => {
       ModalManager.open(renderEmailModal());
