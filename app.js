@@ -346,57 +346,71 @@ function onAuthSuccess({ user, token, provider, credits }) {
 }
 
 function initGoogleAuth() {
-  if (!window.google?.accounts?.id) {
-    console.error('Google SDK not loaded');
-    return;
-  }
-  if (!GOOGLE_CLIENT_ID) {
-    console.warn('Google auth client ID missing.');
-    return;
-  }
-
-  const container = document.getElementById('google-signin');
-  if (!container) {
-    console.error('Google signin container missing');
-    return;
-  }
-  if (container.dataset.authInitialized === 'true') {
-    return;
-  }
-
-  container.textContent = '';
-  window.google.accounts.id.initialize({
-    client_id: GOOGLE_CLIENT_ID,
-    ux_mode: 'popup',
-    callback: async (response) => {
-      const res = await fetch('/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Google Identity Services returns a JWT ID token via response.credential.
-        // Send as id_token to align with backend expectations.
-        body: JSON.stringify({ id_token: response.credential })
-      });
-
-      const data = await res.json();
-      onAuthSuccess({
-        user: data.user,
-        token: data.token,
-        provider: 'google',
-        credits: data.credits
-      });
+  const tryInit = () => {
+    if (!window.google?.accounts?.id) {
+      return false;
     }
-  });
+    if (!GOOGLE_CLIENT_ID) {
+      console.warn('Google auth client ID missing.');
+      return true;
+    }
 
-  // Render Google sign-in button with visible text using Google Identity Services option.
-  // The 'text' property accepts values like 'signin_with', 'signup_with', 'continue_with', or 'signin'.
-  // We specify 'continue_with' so the button reads 'Continue with Google'.
-  window.google.accounts.id.renderButton(container, {
-    theme: 'outline',
-    size: 'large',
-    text: 'continue_with',
-    width: 360
-  });
-  container.dataset.authInitialized = 'true';
+    const container = document.getElementById('google-signin');
+    if (!container) {
+      console.error('Google signin container missing');
+      return true;
+    }
+    if (container.dataset.authInitialized === 'true') {
+      return true;
+    }
+
+    container.textContent = '';
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      ux_mode: 'popup',
+      callback: async (response) => {
+        const res = await fetch('/auth/google', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Google Identity Services returns a JWT ID token via response.credential.
+          // Send as id_token to align with backend expectations.
+          body: JSON.stringify({ id_token: response.credential })
+        });
+
+        const data = await res.json();
+        onAuthSuccess({
+          user: data.user,
+          token: data.token,
+          provider: 'google',
+          credits: data.credits
+        });
+      }
+    });
+
+    // Render Google sign-in button with visible text using Google Identity Services option.
+    // The 'text' property accepts values like 'signin_with', 'signup_with', 'continue_with', or 'signin'.
+    // We specify 'continue_with' so the button reads 'Continue with Google'.
+    window.google.accounts.id.renderButton(container, {
+      theme: 'outline',
+      size: 'large',
+      text: 'continue_with',
+      width: 360
+    });
+    container.dataset.authInitialized = 'true';
+    return true;
+  };
+
+  if (tryInit()) {
+    return;
+  }
+
+  const interval = setInterval(() => {
+    if (tryInit()) {
+      clearInterval(interval);
+    }
+  }, 50);
+
+  setTimeout(() => clearInterval(interval), 3000);
 }
 
 let appleAuthInitAttempts = 0;
