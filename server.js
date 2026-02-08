@@ -6,6 +6,11 @@ import { appendUsageLog, readUsageLog } from './api/usageLog.js';
 
 const app = express();
 
+app.use((req, res, next) => {
+  res.setHeader('X-MAYA-CORS-TEST', 'alive');
+  next();
+});
+
 /**
  * CORS — MUST BE FIRST MIDDLEWARE
  */
@@ -15,20 +20,8 @@ const ALLOWED_ORIGINS = [
 ];
 
 app.use(cors({
-  origin(origin, callback) {
-    // Allow server-to-server, curl, health checks
-    if (!origin) return callback(null, true);
-
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true);
-    }
-
-    console.error('❌ Blocked CORS origin:', origin);
-    return callback(null, false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: ALLOWED_ORIGINS,
+  credentials: true
 }));
 
 /**
