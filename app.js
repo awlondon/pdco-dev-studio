@@ -1,5 +1,30 @@
 import { createSandboxController } from './sandboxController.js';
 
+const AuthController = (() => {
+  const providers = new Map();
+
+  function register(name, initFn) {
+    providers.set(name, initFn);
+  }
+
+  function initAll() {
+    for (const [name, init] of providers.entries()) {
+      try {
+        init();
+      } catch (err) {
+        console.error(`Auth provider failed: ${name}`, err);
+      }
+    }
+  }
+
+  return {
+    register,
+    initAll
+  };
+})();
+
+window.AuthController = AuthController;
+
 const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
@@ -316,8 +341,7 @@ function renderAuthModalHTML() {
 
 function showAuthModal({ onClose } = {}) {
   ModalManager.open(renderAuthModalHTML(), { onClose });
-  initGoogleAuth();
-  initAppleAuth();
+  AuthController.initAll();
 }
 
 function updateCreditsUI(credits) {
@@ -361,7 +385,31 @@ function onAuthSuccess({ user, token, provider, credits }) {
   ModalManager.close();
 }
 
-function initGoogleAuth() {
+async function handleGoogleCredential(response) {
+  const res = await fetch('/auth/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Google Identity Services returns a JWT ID token via response.credential.
+    // Send as id_token to align with backend expectations.
+    body: JSON.stringify({ id_token: response.credential })
+  });
+
+  const data = await res.json();
+  onAuthSuccess({
+    user: data.user,
+    token: data.token,
+    provider: 'google',
+    credits: data.credits
+  });
+}
+
+AuthController.register('google', () => {
+  const container = document.getElementById('google-signin');
+  if (!container) {
+    console.warn('Google auth skipped: container missing');
+    return;
+  }
+
   const tryInit = () => {
     if (!window.google?.accounts?.id) {
       return false;
@@ -371,48 +419,20 @@ function initGoogleAuth() {
       return true;
     }
 
-    const container = document.getElementById('google-signin');
-    if (!container) {
-      console.warn('Google auth skipped: container not found');
-      return true;
-    }
-    if (container.dataset.authInitialized === 'true') {
-      return true;
-    }
-
     container.textContent = '';
     window.google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
-      ux_mode: 'popup',
-      callback: async (response) => {
-        const res = await fetch('/auth/google', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // Google Identity Services returns a JWT ID token via response.credential.
-          // Send as id_token to align with backend expectations.
-          body: JSON.stringify({ id_token: response.credential })
-        });
-
-        const data = await res.json();
-        onAuthSuccess({
-          user: data.user,
-          token: data.token,
-          provider: 'google',
-          credits: data.credits
-        });
-      }
+      callback: handleGoogleCredential,
+      ux_mode: 'popup'
     });
 
-    // Render Google sign-in button with visible text using Google Identity Services option.
-    // The 'text' property accepts values like 'signin_with', 'signup_with', 'continue_with', or 'signin'.
-    // We specify 'continue_with' so the button reads 'Continue with Google'.
     window.google.accounts.id.renderButton(container, {
       theme: 'outline',
       size: 'large',
-      text: 'continue_with',
-      width: 360
+      width: 360,
+      text: 'continue_with'
     });
-    container.dataset.authInitialized = 'true';
+
     return true;
   };
 
@@ -427,7 +447,11 @@ function initGoogleAuth() {
   }, 50);
 
   setTimeout(() => clearInterval(interval), 3000);
-}
+});
+
+AuthController.register('email', () => {
+  // no-op for now
+});
 
 let appleAuthInitAttempts = 0;
 function initAppleAuth() {
@@ -477,6 +501,8 @@ function initAppleAuth() {
   };
   button.dataset.authInitialized = 'true';
 }
+
+AuthController.register('apple', initAppleAuth);
 
 function renderEmailModal() {
   return `
