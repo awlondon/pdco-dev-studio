@@ -6,28 +6,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <section id="auth-gate" class="auth-gate" aria-label="Sign in to Maya Dev UI">
-    <div class="auth-card">
-      <div class="auth-logo">Maya Dev UI</div>
-      <p class="auth-tagline">Build interactive code visually.</p>
-      <p class="auth-subtitle">Powered by Primary Design Co.</p>
-      <div class="auth-actions">
-        <button class="auth-button" type="button" data-auth-provider="google" data-user-id="user_google" data-user-email="google@maya.dev">
-          Continue with Google
-        </button>
-        <button class="auth-button" type="button" data-auth-provider="apple" data-user-id="user_apple" data-user-email="apple@maya.dev">
-          Continue with Apple
-        </button>
-        <button class="auth-button" type="button" data-auth-provider="email" data-user-id="user_email" data-user-email="email@maya.dev">
-          Sign up with Email
-        </button>
-      </div>
-      <label class="auth-newsletter">
-        <input id="auth-newsletter" type="checkbox" checked required />
-        Receive product updates and announcements
-      </label>
-    </div>
-  </section>
+  <div id="modal-root" class="modal-root hidden" role="dialog" aria-modal="true" aria-hidden="true"></div>
   <div
     id="root"
     class="hidden"
@@ -42,32 +21,6 @@
     data-plan-label="Free"
     data-free-tier-remaining="10"
   >
-    <div id="auth-screen" class="auth-screen hidden" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-      <div class="auth-card">
-        <h2 id="auth-title">Sign in to Maya Dev UI</h2>
-        <p class="auth-subtitle">Choose a provider to start a session.</p>
-        <div class="auth-providers">
-          <button class="auth-provider" type="button" data-auth-provider="google" data-user-id="user_google" data-user-email="google@maya.dev">Continue with Google</button>
-          <button class="auth-provider" type="button" data-auth-provider="apple" data-user-id="user_apple" data-user-email="apple@maya.dev">Continue with Apple</button>
-        </div>
-        <div class="auth-divider">or</div>
-        <form id="magic-form" class="auth-form">
-          <label class="sr-only" for="magic-email">Email address</label>
-          <input
-            type="email"
-            id="magic-email"
-            placeholder="you@example.com"
-            autocomplete="email"
-            required
-          />
-          <button id="magic-submit" type="submit">
-            Continue with email
-          </button>
-        </form>
-        <p class="auth-hint">We’ll email you a secure sign-in link.</p>
-        <p id="auth-notice" class="auth-notice hidden" role="status"></p>
-      </div>
-    </div>
     <header id="top-bar">
       <div>
         <h1>Maya Dev UI</h1>
@@ -100,7 +53,7 @@
 
             <div class="menu-divider"></div>
 
-            <button class="menu-item danger" id="signOut">
+            <button class="menu-item danger" id="signOutBtn">
               Sign out
             </button>
           </div>

@@ -4,11 +4,6 @@ const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
-const authScreen = document.getElementById('auth-screen');
-const authNotice = document.getElementById('auth-notice');
-const magicForm = document.getElementById('magic-form');
-const magicEmailInput = document.getElementById('magic-email');
-const magicSubmitButton = document.getElementById('magic-submit');
 const creditPreviewEl = document.getElementById('credit-preview');
 const micButton = document.getElementById('btn-mic');
 const creditBadge = document.getElementById('creditBadge');
@@ -78,8 +73,6 @@ const lineCountEl = document.getElementById('line-count');
 const consoleLog = document.getElementById('console-output-log');
 const consolePane = document.getElementById('consoleOutput');
 const root = document.getElementById('root');
-const authGate = document.getElementById('auth-gate');
-const authButtons = document.querySelectorAll('[data-auth-provider]');
 let sandboxFrame = document.getElementById('sandbox');
 const previewFrameHost = document.getElementById('previewFrameContainer');
 const statusLabel = document.getElementById('status-label');
@@ -115,7 +108,18 @@ let showAnalytics = false;
 let appInitialized = false;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
-const AUTH_STORAGE_KEY = 'maya_session';
+const Auth = {
+  user: null,
+  token: null,
+  provider: null
+};
+
+const AUTH_STORAGE_KEYS = [
+  'maya_auth_token',
+  'maya_user',
+  'maya_provider',
+  'maya_credits'
+];
 const GENERATION_PHASES = [
   {
     afterMs: 2500,
@@ -219,125 +223,80 @@ const analyticsModalState = {
   watchdogId: null
 };
 
-function persistSession(session) {
-  if (!session || !window.localStorage) {
-    return;
-  }
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-}
-
-function getStoredSession() {
+function persistAuthState() {
   if (!window.localStorage) {
-    return null;
-  }
-  const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    console.warn('Failed to parse stored session.', error);
-    return null;
-  }
-}
-
-function applySessionToRoot(session) {
-  const root = document.getElementById('root');
-  if (!root || !session?.user) {
     return;
   }
-  if (session.user.id) {
-    root.dataset.userId = session.user.id;
-  }
-  if (session.user.email) {
-    root.dataset.email = session.user.email;
-  }
-}
-
-function setAuthScreenVisible(visible) {
-  if (!authScreen) {
-    return;
-  }
-  authScreen.classList.toggle('hidden', !visible);
-}
-
-function showAuthNotice(message, { isError = false } = {}) {
-  if (!authNotice) {
-    return;
-  }
-  authNotice.textContent = message;
-  authNotice.classList.remove('hidden');
-  authNotice.classList.toggle('error', isError);
-}
-
-function setMagicFormDisabled(disabled) {
-  if (magicEmailInput) {
-    magicEmailInput.disabled = disabled;
-  }
-  if (magicSubmitButton) {
-    magicSubmitButton.disabled = disabled;
-  }
-}
-
-async function handleMagicLinkRequest(event) {
-  event.preventDefault();
-  const email = magicEmailInput?.value.trim();
-  if (!email) {
-    showAuthNotice('Please enter a valid email address.', { isError: true });
-    return;
-  }
-  setMagicFormDisabled(true);
-  try {
-    await fetch(`${BACKEND_URL}/auth/magic/request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
-    });
-    showAuthNotice('Check your email for a sign-in link.');
-  } catch (error) {
-    console.warn('Magic link request failed.', error);
-    showAuthNotice('Unable to send link right now. Please try again.', { isError: true });
-  } finally {
-    setMagicFormDisabled(false);
-  }
-}
-
-async function completeMagicAuth(token) {
-  if (!token) {
-    return;
-  }
-  showAuthNotice('Verifying your sign-in link…');
-  try {
-    const res = await fetch(`${BACKEND_URL}/auth/magic/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token })
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Unable to verify link.');
-    }
-
-    persistSession(data.session);
-    applySessionToRoot(data.session);
-    setAuthScreenVisible(false);
-    history.replaceState({}, '', '/');
-  } catch (error) {
-    console.warn('Magic link verification failed.', error);
-    showAuthNotice('Invalid or expired link. Request a new one.', { isError: true });
-  }
-}
-
-function bootstrapAuth() {
-  const session = getStoredSession();
-  if (session) {
-    applySessionToRoot(session);
-    setAuthScreenVisible(false);
+  if (Auth.token) {
+    window.localStorage.setItem('maya_auth_token', Auth.token);
   } else {
-    setAuthScreenVisible(true);
+    window.localStorage.removeItem('maya_auth_token');
   }
+
+  if (Auth.user) {
+    window.localStorage.setItem('maya_user', JSON.stringify(Auth.user));
+  } else {
+    window.localStorage.removeItem('maya_user');
+  }
+
+  if (Auth.provider) {
+    window.localStorage.setItem('maya_provider', Auth.provider);
+  } else {
+    window.localStorage.removeItem('maya_provider');
+  }
+}
+
+function hydrateAuthState() {
+  if (!window.localStorage) {
+    return;
+  }
+  const token = window.localStorage.getItem('maya_auth_token');
+  const provider = window.localStorage.getItem('maya_provider');
+  const storedUser = window.localStorage.getItem('maya_user');
+  let user = null;
+
+  if (storedUser) {
+    try {
+      user = JSON.parse(storedUser);
+    } catch (error) {
+      console.warn('Failed to parse stored auth user.', error);
+    }
+  }
+
+  Auth.token = token || null;
+  Auth.provider = provider || null;
+  Auth.user = user;
+}
+
+function applyAuthToRoot() {
+  if (!root) {
+    return;
+  }
+  root.dataset.userId = Auth.user?.id || '';
+  root.dataset.email = Auth.user?.email || '';
+}
+
+function clearAuthFromRoot() {
+  if (!root) {
+    return;
+  }
+  root.dataset.userId = '';
+  root.dataset.email = '';
+}
+
+function renderAuthModalHTML() {
+  return `
+    <h2>Welcome to Maya</h2>
+
+    <button class="auth-btn google" data-auth-provider="google">Continue with Google</button>
+    <button class="auth-btn apple" data-auth-provider="apple">Continue with Apple</button>
+    <button class="auth-btn email" data-auth-provider="email">Sign up with Email</button>
+
+    <label class="newsletter">
+      <input type="checkbox" checked />
+      Receive product updates and announcements
+    </label>
+  `;
 }
 
 const NUDGE_COPY = {
@@ -452,43 +411,170 @@ function clearAnalyticsModalWatchdog() {
   }
 }
 
-function getAuthenticatedUser() {
-  if (!root) {
-    return null;
-  }
-  const stored = window.localStorage?.getItem(AUTH_STORAGE_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch (error) {
-      console.warn('Failed to parse stored auth user.', error);
+const ModalManager = (() => {
+  const modalRoot = document.getElementById('modal-root');
+  let closeHandler = null;
+  let dismissible = false;
+
+  const close = () => {
+    if (!modalRoot) {
+      return;
     }
+    modalRoot.classList.add('hidden');
+    modalRoot.innerHTML = '';
+    modalRoot.setAttribute('aria-hidden', 'true');
+    if (closeHandler) {
+      closeHandler();
+      closeHandler = null;
+    }
+    dismissible = false;
+  };
+
+  if (modalRoot) {
+    modalRoot.addEventListener('click', (event) => {
+      if (!dismissible) {
+        return;
+      }
+      if (event.target === modalRoot) {
+        close();
+      }
+    });
   }
-  const userId = root.dataset.userId;
-  if (!userId) {
+
+  return {
+    open(html, { onClose = null, dismissible: allowDismiss = false } = {}) {
+      if (!modalRoot) {
+        return;
+      }
+      closeHandler = onClose;
+      dismissible = allowDismiss;
+      modalRoot.innerHTML = `<div class="modal-panel">${html}</div>`;
+      modalRoot.classList.remove('hidden');
+      modalRoot.setAttribute('aria-hidden', 'false');
+    },
+    close
+  };
+})();
+
+window.ModalManager = ModalManager;
+
+function getAuthenticatedUser() {
+  if (!Auth.token || !Auth.user) {
     return null;
   }
-  return {
-    id: userId,
-    email: root.dataset.email || ''
-  };
+  return Auth.user;
 }
 
-function setAuthenticatedUser(user) {
-  if (!root) {
+function setAuthenticatedUser(user, provider) {
+  Auth.user = user;
+  Auth.provider = provider;
+  Auth.token = Auth.token
+    || (window.crypto?.randomUUID ? window.crypto.randomUUID() : `token-${Date.now()}`);
+  persistAuthState();
+  applyAuthToRoot();
+}
+
+function clearChatState() {
+  if (chatMessages) {
+    chatMessages.innerHTML = '';
+  }
+  if (chatInput) {
+    chatInput.value = '';
+  }
+  chatFinalized = false;
+  currentTurnMessageId = null;
+  pendingAssistantProposal = null;
+  intentAnchor = null;
+  chatState.locked = false;
+  if (chatState.unlockTimerId) {
+    clearTimeout(chatState.unlockTimerId);
+    chatState.unlockTimerId = null;
+  }
+}
+
+function clearEditorState() {
+  if (!codeEditor) {
     return;
   }
-  root.dataset.userId = user.id;
-  root.dataset.email = user.email || '';
-  if (window.localStorage) {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+  codeEditor.value = defaultInterfaceCode;
+  baselineCode = defaultInterfaceCode;
+  currentCode = defaultInterfaceCode;
+  previousCode = null;
+  lastLLMCode = null;
+  lastRunCode = null;
+  lastRunSource = null;
+  lastCodeSource = null;
+  userHasEditedCode = false;
+  updateLineNumbers();
+}
+
+function clearPreviewState() {
+  if (sandboxFrame) {
+    sandboxFrame.src = 'about:blank';
   }
+}
+
+function resetAppToUnauthed() {
+  document.body.classList.add('unauthenticated');
+  uiState = UI_STATE.AUTH;
+  closeAllModals();
+  root?.classList.add('hidden');
+  ModalManager.open(renderAuthModalHTML(), {
+    onClose: () => {
+      if (!Auth.token) {
+        resetAppToUnauthed();
+      }
+    }
+  });
+  const modalRoot = document.getElementById('modal-root');
+  const authButtons = modalRoot?.querySelectorAll('[data-auth-provider]') || [];
+  authButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const provider = button.dataset.authProvider || 'email';
+      const userId = `user_${provider}`;
+      const email = `${provider}@maya.dev`;
+      setAuthenticatedUser({ id: userId, email }, provider);
+      uiState = UI_STATE.APP;
+      showAnalytics = false;
+      renderUI();
+    });
+  });
+}
+
+async function signOut() {
+  console.log('🔒 Signing out user');
+
+  try {
+    if (Auth.provider === 'google' && window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect();
+    }
+    if (Auth.provider === 'apple') {
+      // Apple has no JS revoke; handled server-side
+    }
+  } catch (err) {
+    console.warn('Auth provider cleanup failed', err);
+  }
+
+  Auth.user = null;
+  Auth.token = null;
+  Auth.provider = null;
+  clearAuthFromRoot();
+
+  AUTH_STORAGE_KEYS.forEach((key) => window.localStorage?.removeItem(key));
+  window.sessionStorage?.clear();
+
+  ModalManager.close();
+  clearChatState();
+  clearEditorState();
+  clearPreviewState();
+  resetExecutionPreparation();
+  resetAppToUnauthed();
+
+  console.log('✅ Signed out cleanly');
 }
 
 function renderAuth() {
-  authGate?.classList.remove('hidden');
-  root?.classList.add('hidden');
-  closeUsageModal();
+  resetAppToUnauthed();
 }
 
 function initializeAppForAuthenticatedUser() {
@@ -503,7 +589,8 @@ function initializeAppForAuthenticatedUser() {
 }
 
 function renderApp() {
-  authGate?.classList.add('hidden');
+  document.body.classList.remove('unauthenticated');
+  ModalManager.close();
   root?.classList.remove('hidden');
   initializeAppForAuthenticatedUser();
 }
@@ -523,6 +610,8 @@ function renderUI() {
 }
 
 function bootstrapApp() {
+  hydrateAuthState();
+  applyAuthToRoot();
   const user = getAuthenticatedUser();
   if (!user) {
     uiState = UI_STATE.AUTH;
@@ -3931,15 +4020,24 @@ if (pricingModal) {
   }
 }
 
-if (authButtons.length) {
-  authButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      const userId = button.dataset.userId || 'user_demo';
-      const email = button.dataset.userEmail || 'demo@maya.dev';
-      setAuthenticatedUser({ id: userId, email });
-      uiState = UI_STATE.APP;
-      showAnalytics = false;
-      renderUI();
+const signOutButton = document.getElementById('signOutBtn');
+
+if (signOutButton) {
+  signOutButton.addEventListener('click', () => {
+    ModalManager.open(`
+      <h3>Sign out?</h3>
+      <p>You’ll need to sign in again to continue.</p>
+      <div class="modal-actions">
+        <button class="secondary" onclick="ModalManager.close()">Cancel</button>
+        <button class="danger" id="confirmSignOut">Sign Out</button>
+      </div>
+    `, { dismissible: true });
+
+    requestAnimationFrame(() => {
+      const confirmButton = document.getElementById('confirmSignOut');
+      if (confirmButton) {
+        confirmButton.onclick = signOut;
+      }
     });
   });
 }
@@ -4100,15 +4198,12 @@ codeEditor.addEventListener('scroll', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (magicForm) {
-    magicForm.addEventListener('submit', handleMagicLinkRequest);
-  }
-  bootstrapAuth();
   bootstrapApp();
-  const params = new URLSearchParams(window.location.search);
-  const magicToken = params.get('token');
-  if (magicToken) {
-    completeMagicAuth(magicToken);
+});
+
+window.addEventListener('storage', (event) => {
+  if (event.key === 'maya_auth_token' && !event.newValue) {
+    signOut();
   }
 });
 
