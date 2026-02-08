@@ -4,6 +4,8 @@ if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
 }
 
+const API_BASE = window.__MAYA_API_BASE || '';
+
 const AuthController = (() => {
   const providers = new Map();
 
@@ -96,7 +98,7 @@ const EmailAuthSlot = (() => {
       render();
 
       try {
-        const res = await fetch(`/api/auth/email/request`, {
+        const res = await fetch(`${API_BASE}/api/auth/email/request`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -186,7 +188,7 @@ async function refreshAuthDebug() {
       : 'not visible';
 
   try {
-    const meInfo = await fetchDebugInfo(`/api/me?ts=${Date.now()}`);
+    const meInfo = await fetchDebugInfo(`${API_BASE}/api/me?ts=${Date.now()}`);
     document.getElementById('authDebugMeStatus').textContent =
       `${meInfo.res.status}`;
     document.getElementById('authDebugMeType').textContent =
@@ -217,7 +219,7 @@ async function refreshAuthDebug() {
   }
 
   try {
-    const healthInfo = await fetchDebugInfo('/api/health');
+    const healthInfo = await fetchDebugInfo(`${API_BASE}/api/health`);
     document.getElementById('authDebugHealthStatus').textContent =
       `${healthInfo.res.status}`;
     document.getElementById('authDebugHealthType').textContent =
@@ -662,7 +664,7 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
 
 async function handleGoogleCredential(response) {
   markAuthAttempt('google');
-  const res = await fetch(`/api/auth/google`, {
+  const res = await fetch(`${API_BASE}/api/auth/google`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -677,7 +679,7 @@ async function handleGoogleCredential(response) {
     return;
   }
 
-  const meRes = await fetch(`/api/me`, {
+  const meRes = await fetch(`${API_BASE}/api/me`, {
     method: 'GET',
     credentials: 'include'
   });
@@ -688,7 +690,8 @@ async function handleGoogleCredential(response) {
     return;
   }
 
-  const { user } = await meRes.json();
+  const meData = await meRes.json().catch(() => ({}));
+  const user = meData?.user;
   Auth.user = user ?? null;
   Auth.token = Auth.token
     || window.localStorage?.getItem('maya_token')
@@ -1117,7 +1120,7 @@ function renderUI() {
 
 async function hydrateSessionFromServer() {
   try {
-    const res = await fetch(`/api/me`, { credentials: 'include' });
+    const res = await fetch(`${API_BASE}/api/me`, { credentials: 'include' });
     if (res.ok) {
       return await res.json();
     }
@@ -1142,7 +1145,7 @@ async function checkEmailVerification() {
     return false;
   }
   try {
-    const res = await fetch('/api/auth/email/verify', {
+    const res = await fetch(`${API_BASE}/api/auth/email/verify`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -4327,7 +4330,7 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
-    const res = await fetch(`/api/chat`, {
+    const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

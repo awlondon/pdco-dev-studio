@@ -2,7 +2,7 @@ function getEnvHint(env: Env) {
   return env.ENVIRONMENT || env.ENV || env.NODE_ENV || 'unknown';
 }
 
-export async function onRequest({ env }: { env: Env }) {
+export async function onRequestGet({ env }: { env: Env }) {
   return new Response(
     JSON.stringify({
       ok: true,

@@ -2,6 +2,12 @@ import { issueSession } from '../session';
 import { jsonError } from '../errors';
 import { createSignedToken, verifySignedToken } from '../token';
 
+let lastDevMagicLink: string | null = null;
+
+export function getLastDevMagicLink() {
+  return lastDevMagicLink;
+}
+
 export async function requestEmailLink(request: Request, env: Env) {
   let body;
   try {
@@ -30,6 +36,8 @@ export async function requestEmailLink(request: Request, env: Env) {
   const magicLink = `${origin}/auth/email?token=${encodeURIComponent(token)}`;
 
   if (env.ENVIRONMENT === 'dev') {
+    lastDevMagicLink = magicLink;
+    console.info('[DEV] Magic link generated:', magicLink);
     return Response.json({
       debug_magic_link: magicLink
     });
