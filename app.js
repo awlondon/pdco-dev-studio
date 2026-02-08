@@ -577,16 +577,9 @@ async function handleGoogleCredential(response) {
     console.warn('Google auth failed.', data);
     return;
   }
+  await fetch(`${BACKEND_URL}/me`, { credentials: 'include' });
+  await bootstrapApp();
   refreshAuthDebug();
-  const sessionLoaded = await bootstrapSessionFromServer();
-  if (!sessionLoaded) {
-    onAuthSuccess({
-      user: data.user,
-      token: data.token,
-      provider: 'google',
-      credits: data.credits
-    });
-  }
 }
 
 AuthController.register('google', () => {

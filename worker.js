@@ -32,10 +32,22 @@ const REQUIRED_USER_HEADERS = [
 const MAGIC_LINK_TTL_SECONDS = 15 * 60;
 const MAGIC_LINK_DEFAULT_BASE = 'https://dev.primarydesignco.com';
 const MAILCHANNELS_ENDPOINT = 'https://api.mailchannels.net/tx/v1/send';
+const corsHeaders = {
+  'Access-Control-Allow-Origin': 'https://dev.primarydesignco.com',
+  'Access-Control-Allow-Credentials': 'true',
+  'Access-Control-Allow-Headers': 'Content-Type'
+};
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (request.method === 'OPTIONS' && (url.pathname.startsWith('/auth/') || url.pathname === '/me')) {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders
+      });
+    }
 
     if (url.pathname === '/auth/magic/request' && request.method === 'POST') {
       return requestMagicLink(request, env);
@@ -51,13 +63,9 @@ export default {
 
     if (url.pathname === '/me') {
       if (request.method !== 'GET') {
-        return new Response('Method not allowed', { status: 405 });
+        return new Response('Method not allowed', { status: 405, headers: corsHeaders });
       }
-      const session = await getSession(request, env);
-      if (!session) {
-        return json({ error: 'Unauthorized' }, 401);
-      }
-      return json(session, 200);
+      return handleMe(request, env);
     }
 
     if (url.pathname === '/usage/analytics' && request.method === 'GET') {
@@ -240,22 +248,46 @@ function jsonError(message, status = 400) {
   return json({ error: message }, status);
 }
 
+function jsonWithCors(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+function jsonErrorWithCors(message, status = 400) {
+  return jsonWithCors({ error: message }, status);
+}
+
+async function handleMe(request, env) {
+  const session = await getSessionFromRequest(request, env);
+
+  if (!session) {
+    return new Response('Unauthorized', { status: 401, headers: corsHeaders });
+  }
+
+  return new Response(JSON.stringify({ user: session }), {
+    status: 200,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
 async function handleGoogleAuth(request, env) {
   let idToken = '';
   try {
     const body = await request.json();
     idToken = typeof body?.id_token === 'string' ? body.id_token.trim() : '';
   } catch (error) {
-    return jsonError('Invalid request payload', 400);
+    return jsonErrorWithCors('Invalid request payload', 400);
   }
 
   if (!idToken) {
-    return jsonError('Missing id_token', 400);
+    return jsonErrorWithCors('Missing id_token', 400);
   }
 
   const payload = await verifyGoogleIdToken(idToken, env.GOOGLE_CLIENT_ID);
   if (!payload) {
-    return jsonError('Invalid token', 401);
+    return jsonErrorWithCors('Invalid token', 401);
   }
 
   const user = {
@@ -265,7 +297,7 @@ async function handleGoogleAuth(request, env) {
     provider: 'google'
   };
 
-  return issueSession(user, env, request);
+  return issueSession(user, env);
 }
 
 let googleJwksCache = { keys: null, expiresAt: 0 };
@@ -386,7 +418,7 @@ async function requestMagicLink(request, env) {
   }
 
   if (!email) {
-    return json({ ok: true });
+    return jsonWithCors({ ok: true });
   }
 
   const token = crypto.randomUUID();
@@ -411,12 +443,12 @@ async function requestMagicLink(request, env) {
     console.warn('Magic link email send failed.', error);
   }
 
-  return json({ ok: true });
+  return jsonWithCors({ ok: true });
 }
 
 async function verifyMagicLink(request, env) {
   if (!env.AUTH_KV) {
-    return jsonError('Auth store unavailable', 500);
+    return jsonErrorWithCors('Auth store unavailable', 500);
   }
 
   let token = '';
@@ -424,17 +456,17 @@ async function verifyMagicLink(request, env) {
     const body = await request.json();
     token = typeof body?.token === 'string' ? body.token.trim() : '';
   } catch (error) {
-    return jsonError('Invalid request payload', 400);
+    return jsonErrorWithCors('Invalid request payload', 400);
   }
 
   if (!token) {
-    return jsonError('Invalid or expired link', 401);
+    return jsonErrorWithCors('Invalid or expired link', 401);
   }
 
   const hash = await hashToken(token);
   const record = await env.AUTH_KV.get(`magic:${hash}`, { type: 'json' });
   if (!record) {
-    return jsonError('Invalid or expired link', 401);
+    return jsonErrorWithCors('Invalid or expired link', 401);
   }
 
   await env.AUTH_KV.delete(`magic:${hash}`);
@@ -445,7 +477,7 @@ async function verifyMagicLink(request, env) {
     provider: 'email'
   };
 
-  return issueSession(user, env, request);
+  return issueSession(user, env);
 }
 
 async function hashToken(token) {
@@ -496,21 +528,9 @@ async function sendMagicEmail(email, token, env) {
   }
 }
 
-function resolveSessionCookieDomain(request, env) {
-  if (env.SESSION_COOKIE_DOMAIN) {
-    return `; Domain=${env.SESSION_COOKIE_DOMAIN}`;
-  }
-  const host = request?.headers?.get('host') || '';
-  const hostname = host.split(':')[0];
-  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
-    return '; Domain=.primarydesignco.com';
-  }
-  return '';
-}
-
-async function issueSession(user, env, request) {
+async function issueSession(user, env) {
   if (!env.SESSION_SECRET) {
-    return jsonError('Missing SESSION_SECRET', 500);
+    return jsonErrorWithCors('Missing SESSION_SECRET', 500);
   }
   const token = await signJwt(
     {
@@ -521,20 +541,21 @@ async function issueSession(user, env, request) {
     },
     env.SESSION_SECRET
   );
-  return new Response(
-    JSON.stringify({
-      token,
-      user,
-      session: { token, user }
-    }),
-    {
-      status: 200,
-      headers: {
-        'content-type': 'application/json',
-        'set-cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${SESSION_MAX_AGE_SECONDS}${resolveSessionCookieDomain(request, env)}`
-      }
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Set-Cookie': [
+        `${SESSION_COOKIE_NAME}=${token}`,
+        'Path=/',
+        'Domain=.primarydesignco.com',
+        'HttpOnly',
+        'Secure',
+        'SameSite=None'
+      ].join('; '),
+      'Content-Type': 'application/json'
     }
-  );
+  });
 }
 
 function getCookieValue(cookieHeader, name) {
@@ -568,6 +589,11 @@ async function verifySessionToken(token, secret) {
     return null;
   }
   return decoded.payload;
+}
+
+async function getSessionFromRequest(request, env) {
+  const session = await getSession(request, env);
+  return session?.user || null;
 }
 
 async function getSession(request, env) {
