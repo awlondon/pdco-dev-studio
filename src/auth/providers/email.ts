@@ -1,6 +1,6 @@
-import jwt from '@tsndr/cloudflare-worker-jwt';
 import { issueSession } from '../session';
 import { jsonError } from '../errors';
+import { createSignedToken, verifySignedToken } from '../token';
 
 export async function requestEmailLink(request: Request, env: Env) {
   let body;
@@ -17,7 +17,7 @@ export async function requestEmailLink(request: Request, env: Env) {
   }
 
   // Short-lived, single-purpose token
-  const token = await jwt.sign(
+  const token = await createSignedToken(
     {
       sub: email,
       type: 'email_magic',
@@ -56,20 +56,27 @@ export async function verifyEmailToken(request: Request, env: Env) {
     return jsonError('Missing token', 400);
   }
 
-  const valid = await jwt.verify(token, env.EMAIL_TOKEN_SECRET);
-  if (!valid) {
+  const payload = await verifySignedToken(token, env.EMAIL_TOKEN_SECRET);
+  if (!payload) {
     return jsonError('Invalid or expired token', 401);
   }
 
-  const payload: any = jwt.decode(token).payload;
+  const { sub, type, exp } = payload as {
+    sub?: string;
+    type?: string;
+    exp?: number;
+  };
 
-  if (payload.type !== 'email_magic') {
+  if (type !== 'email_magic' || !sub) {
     return jsonError('Invalid token type', 401);
+  }
+  if (typeof exp === 'number' && exp < Math.floor(Date.now() / 1000)) {
+    return jsonError('Invalid or expired token', 401);
   }
 
   const user = {
-    id: `email:${payload.sub}`,
-    email: payload.sub,
+    id: `email:${sub}`,
+    email: sub,
     provider: 'email'
   };
 

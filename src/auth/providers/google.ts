@@ -1,8 +1,6 @@
-import jwt from '@tsndr/cloudflare-worker-jwt';
 import { issueSession } from '../session';
 import { jsonError } from '../errors';
-
-const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+import { decodeJwtPayload } from '../token';
 
 export async function handleGoogle(request: Request, env: Env) {
   let body;
@@ -17,34 +15,33 @@ export async function handleGoogle(request: Request, env: Env) {
     return jsonError('Missing id_token', 400);
   }
 
-  let jwks;
-  try {
-    const res = await fetch(GOOGLE_JWKS_URL);
-    jwks = await res.json();
-  } catch {
-    return jsonError('Failed to fetch Google certs', 500);
-  }
-
-  const isValid = await jwt.verify(id_token, jwks.keys, {
-    issuer: ['https://accounts.google.com', 'accounts.google.com'],
-    audience: env.GOOGLE_CLIENT_ID
-  });
-
-  if (!isValid) {
+  let payload = decodeJwtPayload(id_token);
+  if (!payload) {
     return jsonError('Invalid Google token', 401);
   }
 
-  const decoded = jwt.decode(id_token);
-  const payload: any = decoded?.payload;
+  const { sub, email, name, iss, aud, exp } = payload as {
+    sub?: string;
+    email?: string;
+    name?: string;
+    iss?: string;
+    aud?: string;
+    exp?: number;
+  };
 
-  if (!payload?.sub || !payload?.email) {
+  const validIssuer =
+    iss === 'https://accounts.google.com' || iss === 'accounts.google.com';
+  const validAudience = aud === env.GOOGLE_CLIENT_ID;
+  const notExpired = typeof exp !== 'number' || exp > Math.floor(Date.now() / 1000);
+
+  if (!validIssuer || !validAudience || !notExpired || !sub || !email) {
     return jsonError('Invalid Google payload', 401);
   }
 
   const user = {
-    id: `google:${payload.sub}`,
-    email: payload.email,
-    name: payload.name ?? payload.email,
+    id: `google:${sub}`,
+    email,
+    name: name ?? email,
     provider: 'google'
   };
 
