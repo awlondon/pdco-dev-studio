@@ -19,6 +19,32 @@
     data-plan-label="Free"
     data-free-tier-remaining="10"
   >
+    <div id="auth-screen" class="auth-screen hidden" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div class="auth-card">
+        <h2 id="auth-title">Sign in to Maya Dev UI</h2>
+        <p class="auth-subtitle">Choose a provider to start a session.</p>
+        <div class="auth-providers">
+          <button class="auth-provider" type="button">Continue with Google</button>
+          <button class="auth-provider" type="button">Continue with Apple</button>
+        </div>
+        <div class="auth-divider">or</div>
+        <form id="magic-form" class="auth-form">
+          <label class="sr-only" for="magic-email">Email address</label>
+          <input
+            type="email"
+            id="magic-email"
+            placeholder="you@example.com"
+            autocomplete="email"
+            required
+          />
+          <button id="magic-submit" type="submit">
+            Continue with email
+          </button>
+        </form>
+        <p class="auth-hint">We’ll email you a secure sign-in link.</p>
+        <p id="auth-notice" class="auth-notice hidden" role="status"></p>
+      </div>
+    </div>
     <header id="top-bar">
       <div>
         <h1>Maya Dev UI</h1>

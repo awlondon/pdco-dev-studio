@@ -4,6 +4,11 @@ const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
+const authScreen = document.getElementById('auth-screen');
+const authNotice = document.getElementById('auth-notice');
+const magicForm = document.getElementById('magic-form');
+const magicEmailInput = document.getElementById('magic-email');
+const magicSubmitButton = document.getElementById('magic-submit');
 const creditPreviewEl = document.getElementById('credit-preview');
 const micButton = document.getElementById('btn-mic');
 const creditBadge = document.getElementById('creditBadge');
@@ -92,6 +97,7 @@ const copyCodeBtn = document.getElementById('copyCodeBtn');
 const SANDBOX_TIMEOUT_MS = 4500;
 const BACKEND_URL =
   "https://text-code.primarydesigncompany.workers.dev";
+const AUTH_STORAGE_KEY = 'maya_session';
 const GENERATION_PHASES = [
   {
     afterMs: 2500,
@@ -195,6 +201,127 @@ const analyticsModalState = {
   data: null,
   watchdogId: null
 };
+
+function persistSession(session) {
+  if (!session || !window.localStorage) {
+    return;
+  }
+  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+}
+
+function getStoredSession() {
+  if (!window.localStorage) {
+    return null;
+  }
+  const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn('Failed to parse stored session.', error);
+    return null;
+  }
+}
+
+function applySessionToRoot(session) {
+  const root = document.getElementById('root');
+  if (!root || !session?.user) {
+    return;
+  }
+  if (session.user.id) {
+    root.dataset.userId = session.user.id;
+  }
+  if (session.user.email) {
+    root.dataset.email = session.user.email;
+  }
+}
+
+function setAuthScreenVisible(visible) {
+  if (!authScreen) {
+    return;
+  }
+  authScreen.classList.toggle('hidden', !visible);
+}
+
+function showAuthNotice(message, { isError = false } = {}) {
+  if (!authNotice) {
+    return;
+  }
+  authNotice.textContent = message;
+  authNotice.classList.remove('hidden');
+  authNotice.classList.toggle('error', isError);
+}
+
+function setMagicFormDisabled(disabled) {
+  if (magicEmailInput) {
+    magicEmailInput.disabled = disabled;
+  }
+  if (magicSubmitButton) {
+    magicSubmitButton.disabled = disabled;
+  }
+}
+
+async function handleMagicLinkRequest(event) {
+  event.preventDefault();
+  const email = magicEmailInput?.value.trim();
+  if (!email) {
+    showAuthNotice('Please enter a valid email address.', { isError: true });
+    return;
+  }
+  setMagicFormDisabled(true);
+  try {
+    await fetch(`${BACKEND_URL}/auth/magic/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    showAuthNotice('Check your email for a sign-in link.');
+  } catch (error) {
+    console.warn('Magic link request failed.', error);
+    showAuthNotice('Unable to send link right now. Please try again.', { isError: true });
+  } finally {
+    setMagicFormDisabled(false);
+  }
+}
+
+async function completeMagicAuth(token) {
+  if (!token) {
+    return;
+  }
+  showAuthNotice('Verifying your sign-in link…');
+  try {
+    const res = await fetch(`${BACKEND_URL}/auth/magic/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Unable to verify link.');
+    }
+
+    persistSession(data.session);
+    applySessionToRoot(data.session);
+    setAuthScreenVisible(false);
+    history.replaceState({}, '', '/');
+  } catch (error) {
+    console.warn('Magic link verification failed.', error);
+    showAuthNotice('Invalid or expired link. Request a new one.', { isError: true });
+  }
+}
+
+function bootstrapAuth() {
+  const session = getStoredSession();
+  if (session) {
+    applySessionToRoot(session);
+    setAuthScreenVisible(false);
+  } else {
+    setAuthScreenVisible(true);
+  }
+}
 
 const NUDGE_COPY = {
   monthly_soft: {
@@ -3757,6 +3884,18 @@ codeEditor.addEventListener('scroll', () => {
     return;
   }
   lineNumbersEl.scrollTop = codeEditor.scrollTop;
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  if (magicForm) {
+    magicForm.addEventListener('submit', handleMagicLinkRequest);
+  }
+  bootstrapAuth();
+  const params = new URLSearchParams(window.location.search);
+  const magicToken = params.get('token');
+  if (magicToken) {
+    completeMagicAuth(magicToken);
+  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
