@@ -22,6 +22,13 @@ const creditBanner = document.getElementById('credit-banner');
 const creditZero = document.getElementById('credit-zero');
 const creditDailyMessage = document.getElementById('credit-daily-message');
 const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
+const userMenuButton = document.getElementById('user-menu-button');
+const userMenu = document.getElementById('user-menu');
+const pricingModal = document.getElementById('pricing-modal');
+const pricingModalBody = document.getElementById('pricing-modal-body');
+const pricingCloseButton = document.getElementById('pricing-close');
+const pricingCollapseButton = document.getElementById('pricing-collapse');
+const pricingOpenButtons = document.querySelectorAll('[data-open-pricing]');
 const throttleNotice = document.getElementById('throttleNotice');
 const usageModal = document.getElementById('usage-modal');
 const usageCloseButton = document.getElementById('usage-close');
@@ -3836,6 +3843,98 @@ if (creditBadge && creditPanel) {
       closeCreditPanel();
     }
   });
+}
+
+if (userMenuButton && userMenu) {
+  const closeUserMenu = () => {
+    userMenu.classList.add('hidden');
+    userMenuButton.setAttribute('aria-expanded', 'false');
+  };
+
+  const openUserMenu = () => {
+    userMenu.classList.remove('hidden');
+    userMenuButton.setAttribute('aria-expanded', 'true');
+  };
+
+  userMenuButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (userMenu.classList.contains('hidden')) {
+      openUserMenu();
+    } else {
+      closeUserMenu();
+    }
+  });
+
+  userMenuButton.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (userMenu.classList.contains('hidden')) {
+        openUserMenu();
+      } else {
+        closeUserMenu();
+      }
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!userMenu.contains(event.target) && !userMenuButton.contains(event.target)) {
+      closeUserMenu();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeUserMenu();
+    }
+  });
+}
+
+if (pricingModal) {
+  const closePricingModal = () => {
+    pricingModal.classList.add('hidden');
+  };
+
+  const openPricingModal = () => {
+    pricingModal.classList.remove('hidden');
+  };
+
+  pricingOpenButtons.forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      userMenu?.classList.add('hidden');
+      userMenuButton?.setAttribute('aria-expanded', 'false');
+      openPricingModal();
+    });
+  });
+
+  pricingCloseButton?.addEventListener('click', () => {
+    closePricingModal();
+  });
+
+  pricingModal.addEventListener('click', (event) => {
+    if (event.target === pricingModal) {
+      closePricingModal();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closePricingModal();
+    }
+  });
+
+  if (pricingCollapseButton && pricingModalBody) {
+    const updateCollapseState = (collapsed) => {
+      pricingModalBody.classList.toggle('collapsed', collapsed);
+      pricingCollapseButton.setAttribute('aria-expanded', String(!collapsed));
+      pricingCollapseButton.textContent = collapsed ? 'Expand' : 'Collapse';
+    };
+
+    pricingCollapseButton.addEventListener('click', () => {
+      updateCollapseState(!pricingModalBody.classList.contains('collapsed'));
+    });
+  }
 }
 
 if (authButtons.length) {

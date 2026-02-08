@@ -289,6 +289,48 @@ html, body {
   font-weight: 600;
 }
 
+.user-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.user-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  background: #11111c;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 180px;
+  display: grid;
+  gap: 4px;
+  z-index: 30;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.user-menu-dropdown.hidden {
+  display: none;
+}
+
+.user-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.user-menu-item:hover,
+.user-menu-item:focus {
+  background: rgba(124, 155, 255, 0.16);
+  outline: none;
+}
+
 .credit-panel {
   position: absolute;
   right: 24px;
@@ -472,7 +514,7 @@ html, body {
   align-items: center;
 }
 
-.pricing-panel .panel-body {
+.pricing-body {
   padding: 20px 20px 24px;
 }
 
@@ -623,6 +665,69 @@ html, body {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.pricing-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 20, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  z-index: 60;
+}
+
+.pricing-modal.hidden {
+  display: none;
+}
+
+.pricing-modal-panel {
+  width: min(1100px, 92vw);
+  max-height: 90vh;
+  background: #11111c;
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(4, 10, 24, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pricing-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 14px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.pricing-modal-header h2 {
+  margin: 0 0 6px;
+  font-size: 1.2rem;
+}
+
+.pricing-modal-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.pricing-modal-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pricing-modal-body {
+  overflow-y: auto;
+  padding: 0 24px 24px;
+}
+
+.pricing-modal-body.collapsed {
+  display: none;
 }
 
 #chat-form {

@@ -80,7 +80,14 @@
           <span class="count"></span>
           <span class="credit-badge-tooltip">Credits power generations. Resets monthly.</span>
         </div>
-        <div class="avatar-chip" aria-label="User profile">JD</div>
+        <div class="user-menu">
+          <button id="user-menu-button" class="avatar-chip" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded="false">
+            JD
+          </button>
+          <div id="user-menu" class="user-menu-dropdown hidden" role="menu" aria-label="User menu">
+            <button class="user-menu-item" type="button" role="menuitem" data-open-pricing>Pricing model</button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -134,10 +141,94 @@
           </form>
         </section>
 
-        <section id="pricing-panel" class="panel pricing-panel">
-          <div class="panel-header">Pricing model</div>
-          <div class="panel-body pricing-body">
-            <p class="pricing-intro">
+      </div>
+
+      <div id="right-pane" class="right-pane">
+        <section id="code-panel" class="panel code-editor">
+          <div class="panel-header">
+            <span>Code Editor</span>
+            <button id="copyCodeBtn" class="icon-button" title="Copy code" type="button">
+              📋
+            </button>
+          </div>
+          <div id="code-editor-wrapper">
+            <div id="line-numbers" aria-hidden="true"></div>
+            <textarea id="code-editor" spellcheck="false"></textarea>
+          </div>
+          <div class="panel-footer actions">
+            <div id="code-footer">
+              <span id="line-count">Lines: 1</span>
+            </div>
+            <button id="runCode" type="button">Run Code</button>
+            <button id="rollbackButton" type="button">Roll back to last generated</button>
+            <button id="promoteButton" type="button">Promote to baseline</button>
+            <div id="generation-indicator" class="generation-indicator">
+              ✨ Creating new UI
+            </div>
+          </div>
+        </section>
+
+        <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal"></div>
+
+        <section id="output-panel" class="panel output-panel">
+          <div class="panel-header">
+            <div class="panel-header-title">
+              Console Output
+              <span class="panel-header-label">Live Preview</span>
+            </div>
+            <div class="panel-header-actions">
+              <div id="interfaceStatus" class="interface-status unchanged">
+                Interface unchanged
+              </div>
+              <div id="previewExecutionStatus" class="preview-execution-status idle">
+                Idle
+              </div>
+              <div id="executionWarnings" class="execution-warnings hidden" aria-live="polite"></div>
+              <div id="previewStatus" class="preview-status">
+                Preview updated by assistant
+              </div>
+              <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
+                View changes
+              </button>
+              <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="console-output-log" class="console-output-log"></div>
+            <div id="consoleOutput" class="console-output">
+              <div id="sandbox-status" style="font-size:12px; opacity:0.7; font-family:monospace;">idle</div>
+              <div id="sandbox-controls" class="sandbox-controls hidden" aria-label="Sandbox controls">
+                <button id="sandboxPause" class="ghost-button" type="button">Pause</button>
+                <button id="sandboxResume" class="ghost-button hidden" type="button">Resume</button>
+                <button id="sandboxReset" class="ghost-button" type="button">Reset</button>
+                <button id="sandboxStop" class="ghost-button" type="button">Stop</button>
+              </div>
+              <div id="previewFrameContainer" class="preview-frame-container">
+                <iframe id="sandbox" sandbox="allow-scripts allow-same-origin"></iframe>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </main>
+
+    <div id="pricing-modal" class="pricing-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pricing-title">
+      <div class="pricing-modal-panel">
+        <div class="pricing-modal-header">
+          <div>
+            <h2 id="pricing-title">Pricing model</h2>
+            <p class="pricing-modal-subtitle">The full pricing strategy in one place, with margins and usage guardrails.</p>
+          </div>
+          <div class="pricing-modal-actions">
+            <button id="pricing-collapse" class="ghost-button" type="button" aria-expanded="true" aria-controls="pricing-modal-body">
+              Collapse
+            </button>
+            <button id="pricing-close" class="ghost-button" type="button">Close</button>
+          </div>
+        </div>
+        <div id="pricing-modal-body" class="pricing-modal-body pricing-body">
+          <p class="pricing-intro">
               A clean, defensible pricing model that hits the 3–5× margin target, maps cleanly to credits,
               and is easy to explain to both users and finance.
             </p>
@@ -370,77 +461,9 @@ customer.subscription.deleted → plan = free + cap remaining</code></pre>
               </div>
             </div>
           </div>
-        </section>
+        </div>
       </div>
-
-      <div id="right-pane" class="right-pane">
-        <section id="code-panel" class="panel code-editor">
-          <div class="panel-header">
-            <span>Code Editor</span>
-            <button id="copyCodeBtn" class="icon-button" title="Copy code" type="button">
-              📋
-            </button>
-          </div>
-          <div id="code-editor-wrapper">
-            <div id="line-numbers" aria-hidden="true"></div>
-            <textarea id="code-editor" spellcheck="false"></textarea>
-          </div>
-          <div class="panel-footer actions">
-            <div id="code-footer">
-              <span id="line-count">Lines: 1</span>
-            </div>
-            <button id="runCode" type="button">Run Code</button>
-            <button id="rollbackButton" type="button">Roll back to last generated</button>
-            <button id="promoteButton" type="button">Promote to baseline</button>
-            <div id="generation-indicator" class="generation-indicator">
-              ✨ Creating new UI
-            </div>
-          </div>
-        </section>
-
-        <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal"></div>
-
-        <section id="output-panel" class="panel output-panel">
-          <div class="panel-header">
-            <div class="panel-header-title">
-              Console Output
-              <span class="panel-header-label">Live Preview</span>
-            </div>
-            <div class="panel-header-actions">
-              <div id="interfaceStatus" class="interface-status unchanged">
-                Interface unchanged
-              </div>
-              <div id="previewExecutionStatus" class="preview-execution-status idle">
-                Idle
-              </div>
-              <div id="executionWarnings" class="execution-warnings hidden" aria-live="polite"></div>
-              <div id="previewStatus" class="preview-status">
-                Preview updated by assistant
-              </div>
-              <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
-                View changes
-              </button>
-              <button id="fullscreenToggle" class="ghost-button" type="button">⤢ Fullscreen</button>
-            </div>
-          </div>
-          <div class="panel-body">
-            <div id="console-output-log" class="console-output-log"></div>
-            <div id="consoleOutput" class="console-output">
-              <div id="sandbox-status" style="font-size:12px; opacity:0.7; font-family:monospace;">idle</div>
-              <div id="sandbox-controls" class="sandbox-controls hidden" aria-label="Sandbox controls">
-                <button id="sandboxPause" class="ghost-button" type="button">Pause</button>
-                <button id="sandboxResume" class="ghost-button hidden" type="button">Resume</button>
-                <button id="sandboxReset" class="ghost-button" type="button">Reset</button>
-                <button id="sandboxStop" class="ghost-button" type="button">Stop</button>
-              </div>
-              <div id="previewFrameContainer" class="preview-frame-container">
-                <iframe id="sandbox" sandbox="allow-scripts allow-same-origin"></iframe>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    </main>
+    </div>
 
     <div id="paywall-modal" class="paywall-modal hidden" role="dialog" aria-modal="true" aria-label="Upgrade options">
       <div class="paywall-backdrop" data-paywall-backdrop></div>
