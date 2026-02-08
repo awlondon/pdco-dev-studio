@@ -1,15 +1,16 @@
-export async function onRequest({ request }: { request: Request }) {
-  if (request.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405 });
-  }
-
+export async function onRequestPost({ request, env }: any) {
   const body = await request.json();
 
   return new Response(
     JSON.stringify({
-      reply: 'LLM backend is alive',
+      ok: true,
+      reply: "LLM backend is alive",
       echo: body
     }),
-    { headers: { 'Content-Type': 'application/json' } }
+    {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    }
   );
 }
