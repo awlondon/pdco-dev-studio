@@ -1,9 +1,0 @@
-name = "maya-dev-ui"
-main = "worker.ts"
-compatibility_date = "2024-01-01"
-
-[site]
-bucket = "./dist"
-
-[vars]
-ENVIRONMENT = "dev"
