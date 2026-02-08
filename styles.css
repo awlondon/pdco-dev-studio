@@ -140,6 +140,12 @@ html, body {
   justify-content: center;
 }
 
+#google-signin:empty::after {
+  content: "Loading Google…";
+  opacity: 0.5;
+  font-size: 14px;
+}
+
 /* Ensure iframe never collapses */
 #google-signin iframe {
   width: 100%;
