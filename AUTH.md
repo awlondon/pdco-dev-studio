@@ -35,6 +35,7 @@ Create OAuth Client
 Type: Web
 
 Authorized origins:
+- http://localhost:3000
 - https://dev.primarydesignco.com
 - https://primarydesignco.com
 
@@ -309,7 +310,24 @@ Apple Developer must configure:
 
 Apple fails silently when any of these are wrong.
 
-### C. SDK never initialized
+### C. Error 401: invalid_client (OAuth client not found)
+
+This is a Google Cloud Console configuration error. It happens when the
+`client_id` does not map to a valid **Web application** OAuth client for the
+current project.
+
+Fix checklist:
+- Ensure the OAuth client type is **Web application** (not Android/iOS/Desktop).
+- Confirm the client ID belongs to the active Google Cloud project.
+- Add authorized JavaScript origins (required even for popup):
+  - http://localhost:3000
+  - https://dev.primarydesignco.com
+
+After updating the client:
+- Update `window.GOOGLE_CLIENT_ID` in `index.html`.
+- Hard refresh the page.
+
+### D. SDK never initialized
 
 Common mistake: initialization runs before the script loads or before the
 auth UI is mounted.
