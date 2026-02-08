@@ -316,6 +316,37 @@ This is a Google Cloud Console configuration error. It happens when the
 `client_id` does not map to a valid **Web application** OAuth client for the
 current project.
 
+The most common causes (ranked):
+
+1. **Using a Google Sign-In client instead of an OAuth Web client (~70%)**
+   - Google Sign-In (legacy) and OAuth 2.0 Web Application clients look similar.
+   - Only OAuth **Web application** clients work with
+     `google.accounts.id.initialize(...)`.
+   - Fix: create a **new** OAuth client in Google Cloud Console:
+     - APIs & Services → Credentials → Create Credentials → OAuth client ID
+     - Application type: **Web application**
+     - Name: e.g. “Maya Web (new)”
+     - Do **not** reuse legacy/migrated clients.
+
+2. **OAuth consent screen not configured/published (~20%)**
+   - Minimum required:
+     - User type: External
+     - App name + support email set
+     - Test users include your email
+   - If the screen is unconfigured or missing test users, Google can return
+     `invalid_client` or fail silently.
+
+3. **Wrong field copied (~10%)**
+   - You must copy the **Client ID**:
+     `xxxxxxxxxxxx-abcdef.apps.googleusercontent.com`
+   - Do **not** use client secret, API key, or project number.
+
+Quick validation:
+- In DevTools → Network, inspect the failing Google request.
+- Confirm the request includes:
+  `client_id=xxxxxxxx.apps.googleusercontent.com`
+- If you see quotes/whitespace/undefined, your injection is corrupt.
+
 Fix checklist:
 - Ensure the OAuth client type is **Web application** (not Android/iOS/Desktop).
 - Confirm the client ID belongs to the active Google Cloud project.
