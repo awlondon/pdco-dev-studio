@@ -131,6 +131,7 @@ html, body {
 
 /* Google container rules */
 .auth-slot[data-provider="google"] {
+  position: relative;
   min-height: 48px;
 }
 
@@ -140,10 +141,32 @@ html, body {
   justify-content: center;
 }
 
-#google-signin:empty::after {
-  content: "Loading Google…";
-  opacity: 0.5;
-  font-size: 14px;
+/* --- Google auth skeleton --- */
+.auth-slot[data-provider="google"]:has(#google-signin:empty)::before {
+  content: "";
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06) 25%,
+    rgba(255, 255, 255, 0.12) 37%,
+    rgba(255, 255, 255, 0.06) 63%
+  );
+  background-size: 400% 100%;
+  animation: auth-skeleton 1.2s ease-in-out infinite;
+  margin: 0 auto;
+}
+
+@keyframes auth-skeleton {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 /* Ensure iframe never collapses */
