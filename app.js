@@ -22,9 +22,9 @@ const creditBanner = document.getElementById('credit-banner');
 const creditZero = document.getElementById('credit-zero');
 const creditDailyMessage = document.getElementById('credit-daily-message');
 const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
-const userMenuButton = document.getElementById('user-menu-button');
-const userMenuDropdown = document.getElementById('user-menu');
-const userMenu = document.querySelector('.user-menu');
+const userMenuTrigger = document.getElementById('userMenuTrigger');
+const userMenu = document.getElementById('userMenu');
+const upgradePlanButton = document.getElementById('upgradePlan');
 const pricingModal = document.getElementById('pricing-modal');
 const pricingModalBody = document.getElementById('pricing-modal-body');
 const pricingCloseButton = document.getElementById('pricing-close');
@@ -3839,41 +3839,28 @@ if (creditBadge && creditPanel) {
   });
 }
 
-if (userMenuButton && userMenu && userMenuDropdown) {
-  const closeUserMenu = () => {
-    userMenu.classList.remove('open');
-    userMenuButton.setAttribute('aria-expanded', 'false');
+let closeUserMenu = null;
+
+if (userMenuTrigger && userMenu) {
+  closeUserMenu = () => {
+    userMenu.style.display = 'none';
   };
 
   const openUserMenu = () => {
-    userMenu.classList.add('open');
-    userMenuButton.setAttribute('aria-expanded', 'true');
+    userMenu.style.display = 'block';
   };
 
-  userMenuButton.addEventListener('click', (event) => {
+  userMenuTrigger.addEventListener('click', (event) => {
     event.stopPropagation();
-    if (!userMenu.classList.contains('open')) {
+    if (userMenu.style.display !== 'block') {
       openUserMenu();
     } else {
       closeUserMenu();
     }
   });
 
-  userMenuButton.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      if (!userMenu.classList.contains('open')) {
-        openUserMenu();
-      } else {
-        closeUserMenu();
-      }
-    }
-  });
-
-  document.addEventListener('click', (event) => {
-    if (!userMenu.contains(event.target) && !userMenuButton.contains(event.target)) {
-      closeUserMenu();
-    }
+  document.addEventListener('click', () => {
+    closeUserMenu();
   });
 
   document.addEventListener('keydown', (event) => {
@@ -3896,10 +3883,16 @@ if (pricingModal) {
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      userMenu?.classList.remove('open');
-      userMenuButton?.setAttribute('aria-expanded', 'false');
+      closeUserMenu?.();
       openPricingModal();
     });
+  });
+
+  upgradePlanButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeUserMenu?.();
+    openPricingModal();
   });
 
   pricingCloseButton?.addEventListener('click', () => {

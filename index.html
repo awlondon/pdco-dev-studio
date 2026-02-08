@@ -81,31 +81,27 @@
           <span class="credit-badge-tooltip">Credits power generations. Resets monthly.</span>
         </div>
         <div class="user-menu">
-          <button
-            id="user-menu-button"
-            class="user-menu-trigger"
-            type="button"
-            aria-haspopup="true"
-            aria-expanded="false"
-          >
-            <span class="user-initials">JD</span>
-            <svg class="chevron" viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M5 7l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2"/>
-            </svg>
+          <button class="user-trigger" id="userMenuTrigger">
+            JD <span class="chevron">▾</span>
           </button>
-          <div id="user-menu" class="user-menu-dropdown" role="menu" aria-label="User menu">
-            <button class="menu-item" type="button" role="menuitem" data-action="download-history">
-              📄 Download Chat History
+
+          <div class="user-dropdown" id="userMenu">
+            <button class="menu-item" id="downloadChat">
+              Download chat history
             </button>
-            <button class="menu-item" type="button" role="menuitem" data-action="upgrade" data-open-pricing>
-              ⭐ Upgrade Subscription
+
+            <button class="menu-item" id="upgradePlan">
+              Upgrade subscription
             </button>
-            <button class="menu-item" type="button" role="menuitem" data-action="referrals">
-              🎁 Referral Discounts
+
+            <button class="menu-item" id="referrals">
+              Referral discounts
             </button>
+
             <div class="menu-divider"></div>
-            <button class="menu-item danger" type="button" role="menuitem" data-action="sign-out">
-              ⏻ Sign Out
+
+            <button class="menu-item danger" id="signOut">
+              Sign out
             </button>
           </div>
         </div>
