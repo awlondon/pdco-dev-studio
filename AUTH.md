@@ -77,8 +77,9 @@ function initGoogleAuth() {
 ```js
 async function handleGoogleCredential(response) {
   // response.credential is a JWT
-  const res = await fetch(`${BACKEND_URL}/auth/google`, {
+  const res = await fetch('/api/auth/google', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id_token: response.credential })
   });
@@ -466,7 +467,7 @@ TEST_SESSION_COOKIE=... npm run test:ui
 ### C. CI guardrail (pre-deploy)
 
 ```bash
-curl -I https://api.dev.primarydesignco.com/me \\
+curl -I https://dev.primarydesignco.com/api/me \\
   -H \"Origin: https://dev.primarydesignco.com\" \\
   | grep -q \"Access-Control-Allow-Credentials: true\"
 ```

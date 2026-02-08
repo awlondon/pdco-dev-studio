@@ -301,7 +301,9 @@ const APPLE_CLIENT_ID = window.APPLE_CLIENT_ID || '';
 const APPLE_REDIRECT_URI = window.APPLE_REDIRECT_URI || '';
 
 const AUTH_STORAGE_KEYS = [
-  'maya_credits'
+  'maya_credits',
+  'maya_user',
+  'maya_token'
 ];
 const GENERATION_PHASES = [
   {
@@ -538,12 +540,25 @@ function resolveCredits(credits) {
   return 500;
 }
 
+function persistSessionStorage({ user, token }) {
+  if (!window.localStorage) {
+    return;
+  }
+  if (user) {
+    window.localStorage.setItem('maya_user', JSON.stringify(user));
+  }
+  if (token) {
+    window.localStorage.setItem('maya_token', token);
+  }
+}
+
 function onAuthSuccess({ user, token, provider, credits }) {
   const resolvedCredits = resolveCredits(credits);
   const planLabel = user?.plan || user?.plan_tier || user?.planTier || 'Free';
   Auth.user = user;
   Auth.token = token;
   Auth.provider = provider;
+  persistSessionStorage({ user, token });
   currentUser = {
     ...user,
     plan: planLabel,
@@ -1044,7 +1059,40 @@ async function bootstrapSessionFromServer() {
   return false;
 }
 
+async function checkEmailVerification() {
+  const url = new URL(window.location.href);
+  if (url.pathname !== '/auth/email') {
+    return false;
+  }
+  const token = url.searchParams.get('token');
+  if (!token) {
+    return false;
+  }
+  try {
+    const res = await fetch('/api/auth/email/verify', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    if (!res.ok) {
+      return false;
+    }
+    const data = await res.json().catch(() => ({}));
+    const session = data?.session || data;
+    if (session?.user && session?.token) {
+      persistSessionStorage(session);
+    }
+    window.history.replaceState({}, '', '/');
+    return true;
+  } catch (error) {
+    console.warn('Failed to verify email token.', error);
+    return false;
+  }
+}
+
 async function bootstrapApp() {
+  await checkEmailVerification();
   initAuthDebugPanel();
   hydrateCreditState();
   applyAuthToRoot();
