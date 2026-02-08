@@ -7,7 +7,11 @@ export async function handleMe(request: Request, env: Env) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  return new Response(JSON.stringify({ user: session }), {
+  return new Response(JSON.stringify({
+    token: session.token,
+    user: session.user,
+    session
+  }), {
     status: 200,
     headers: {
       'Content-Type': 'application/json'

@@ -8,6 +8,7 @@ export async function issueSession(user: any, env: Env) {
     {
       sub: user.id,
       email: user.email,
+      name: user.name,
       provider: user.provider,
       iat: Math.floor(Date.now() / 1000)
     },
@@ -53,5 +54,9 @@ export async function getSessionFromRequest(request: Request, env: Env) {
     return null;
   }
   const decoded = jwt.decode(token);
-  return decoded?.payload ?? null;
+  const user = decoded?.payload ?? null;
+  if (!user) {
+    return null;
+  }
+  return { token, user };
 }
