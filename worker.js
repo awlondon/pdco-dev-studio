@@ -43,6 +43,10 @@ export default {
       return verifyMagicLink(request, env);
     }
 
+    if (url.pathname === '/auth/google' && request.method === 'POST') {
+      return handleGoogleAuth(request, env);
+    }
+
     if (url.pathname === '/usage/analytics' && request.method === 'GET') {
       return handleUsageAnalytics(request, env, ctx);
     }
@@ -221,6 +225,62 @@ function json(obj, status = 200) {
 
 function jsonError(message, status = 400) {
   return json({ error: message }, status);
+}
+
+async function handleGoogleAuth(request, env) {
+  let idToken = '';
+  try {
+    const body = await request.json();
+    idToken = typeof body?.id_token === 'string' ? body.id_token.trim() : '';
+  } catch (error) {
+    return jsonError('Invalid request payload', 400);
+  }
+
+  if (!idToken) {
+    return jsonError('Missing id_token', 400);
+  }
+
+  const decoded = decodeJwt(idToken);
+  if (!decoded?.payload) {
+    return jsonError('Invalid token', 401);
+  }
+
+  const payload = decoded.payload;
+
+  if (payload.aud !== env.GOOGLE_CLIENT_ID) {
+    return jsonError('Invalid audience', 401);
+  }
+
+  if (payload.iss !== 'https://accounts.google.com') {
+    return jsonError('Invalid issuer', 401);
+  }
+
+  const user = {
+    id: `google:${payload.sub}`,
+    email: payload.email,
+    name: payload.name,
+    provider: 'google'
+  };
+
+  return issueSession(user, env);
+}
+
+function decodeJwt(token) {
+  if (typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecode(parts[1]));
+    return { payload };
+  } catch (error) {
+    return null;
+  }
+}
+
+function base64UrlDecode(input) {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+  return atob(`${normalized}${padding}`);
 }
 
 async function requestMagicLink(request, env) {
