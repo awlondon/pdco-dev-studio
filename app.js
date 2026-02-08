@@ -3494,6 +3494,10 @@ Output rules:
   }
 
   const hasCode = Boolean(extractedCode && extractedCode.trim());
+  console.assert(
+    hasCode || !extractedText.includes('<'),
+    'Text-only response attempted to modify UI'
+  );
   if (hasCode && (!extractedText || !extractedText.trim())) {
     extractedText = `Okay — I generated and ran an updated interface for: “${userInput}”.`;
   }
@@ -3513,24 +3517,27 @@ Output rules:
   if (usageMetadata.warningText) {
     metadataParts.push({ text: usageMetadata.warningText, className: 'assistant-meta-warning' });
   }
+  if (!hasCode) {
+    finalizeChatOnce(() => {
+      renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
+    });
+    unlockChat();
+    stopLoading();
+    return;
+  }
+
   finalizeChatOnce(() => {
     const messageEl = renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
     maybeShowInlineNudge(messageEl, { throttle: throttleSnapshot });
   });
 
   try {
-    const trimmedCode = extractedCode?.trim();
-    const codeChanged = Boolean(trimmedCode) && trimmedCode !== (currentCode?.trim() || '');
-    if (codeChanged) {
+    if (hasCode) {
       currentCode = extractedCode;
       setCodeFromLLM(extractedCode);
       pendingAssistantProposal = null;
-      console.log('AUTO-RUN CHECK', {
-        codeChanged,
-        chatFinalized
-      });
       runWhenPreviewReady(() => {
-        handleLLMOutput(trimmedCode, 'generated').catch((error) => {
+        handleLLMOutput(extractedCode, 'generated').catch((error) => {
           console.error('Auto-run failed after generation.', error);
           addExecutionWarning('Preview auto-run failed. Try Run Code.');
           setPreviewExecutionStatus('error', 'PREVIEW ERROR');
