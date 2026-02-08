@@ -34,7 +34,8 @@ export async function issueSession(user: any, env: Env, request?: Request) {
             `${SESSION_COOKIE_NAME}=${token}`,
             'Path=/',
             'HttpOnly',
-            'Secure'
+            'Secure',
+            'SameSite=None'
           ];
 
           const host = request ? new URL(request.url).hostname : '';
@@ -43,12 +44,8 @@ export async function issueSession(user: any, env: Env, request?: Request) {
 
           if (!isPagesDev && cookieDomain) {
             cookieParts.push(`Domain=${cookieDomain}`);
-            cookieParts.push('SameSite=None');
           } else if (!isPagesDev && host.endsWith('.primarydesignco.com')) {
             cookieParts.push('Domain=.primarydesignco.com');
-            cookieParts.push('SameSite=None');
-          } else {
-            cookieParts.push('SameSite=Lax');
           }
 
           return cookieParts.join('; ');

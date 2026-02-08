@@ -549,11 +549,9 @@ async function issueSession(user, env, request) {
     `${SESSION_COOKIE_NAME}=${token}`,
     'Path=/',
     'HttpOnly',
-    'Secure'
+    'Secure',
+    'SameSite=None'
   ];
-  if (!isDevEnv(env)) {
-    cookieParts.push('SameSite=None');
-  }
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
