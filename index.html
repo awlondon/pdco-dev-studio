@@ -6,10 +6,33 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <section id="auth-gate" class="auth-gate" aria-label="Sign in to Maya Dev UI">
+    <div class="auth-card">
+      <div class="auth-logo">Maya Dev UI</div>
+      <p class="auth-tagline">Build interactive code visually.</p>
+      <p class="auth-subtitle">Powered by Primary Design Co.</p>
+      <div class="auth-actions">
+        <button class="auth-button" type="button" data-auth-provider="google" data-user-id="user_google" data-user-email="google@maya.dev">
+          Continue with Google
+        </button>
+        <button class="auth-button" type="button" data-auth-provider="apple" data-user-id="user_apple" data-user-email="apple@maya.dev">
+          Continue with Apple
+        </button>
+        <button class="auth-button" type="button" data-auth-provider="email" data-user-id="user_email" data-user-email="email@maya.dev">
+          Sign up with Email
+        </button>
+      </div>
+      <label class="auth-newsletter">
+        <input id="auth-newsletter" type="checkbox" checked required />
+        Receive product updates and announcements
+      </label>
+    </div>
+  </section>
   <div
     id="root"
-    data-user-id="user_demo"
-    data-email="demo@maya.dev"
+    class="hidden"
+    data-user-id=""
+    data-email=""
     data-remaining-credits="500"
     data-credits-total="500"
     data-daily-limit="50"
