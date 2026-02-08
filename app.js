@@ -286,6 +286,16 @@ function initAuthDebugPanel() {
     .getElementById('authDebugRefresh')
     ?.addEventListener('click', refreshAuthDebug);
 
+  const toggleBtn = document.getElementById('authDebugToggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      panel.classList.toggle('collapsed');
+      toggleBtn.title = panel.classList.contains('collapsed')
+        ? 'Expand debug panel'
+        : 'Collapse debug panel';
+    });
+  }
+
   refreshAuthDebug();
 }
 

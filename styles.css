@@ -2373,6 +2373,10 @@ button:disabled {
   align-items: center;
 }
 
+.auth-debug-title {
+  flex: 1;
+}
+
 .auth-debug-row {
   padding: 6px 10px;
   display: grid;
@@ -2399,4 +2403,30 @@ button:disabled {
   border: none;
   color: #9aa4ff;
   cursor: pointer;
+}
+
+.auth-debug.collapsed .auth-debug-row {
+  display: none;
+}
+
+.auth-debug.collapsed {
+  height: auto;
+  width: max-content;
+}
+
+.auth-debug-toggle {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 0.8rem;
+  margin-right: 0.5rem;
+  cursor: pointer;
+}
+
+.auth-debug-toggle:focus {
+  outline: none;
+}
+
+.auth-debug.collapsed #authDebugToggle {
+  transform: rotate(-90deg);
 }
