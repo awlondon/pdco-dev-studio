@@ -4415,7 +4415,7 @@ Output rules:
 
     console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
 
-    const res = await fetch(`${API_BASE}/api/chat`, {
+    const res = await fetch(`${API_BASE}/api/llm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
