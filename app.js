@@ -314,6 +314,12 @@ function renderAuthModalHTML() {
   `;
 }
 
+function showAuthModal({ onClose } = {}) {
+  ModalManager.open(renderAuthModalHTML(), { onClose });
+  initGoogleAuth();
+  initAppleAuth();
+}
+
 function updateCreditsUI(credits) {
   const resolvedCredits = Number.isFinite(credits) ? credits : 500;
   if (root) {
@@ -367,7 +373,7 @@ function initGoogleAuth() {
 
     const container = document.getElementById('google-signin');
     if (!container) {
-      console.error('Google signin container missing');
+      console.warn('Google auth skipped: container not found');
       return true;
     }
     if (container.dataset.authInitialized === 'true') {
@@ -700,7 +706,7 @@ function resetAppToUnauthed() {
   uiState = UI_STATE.AUTH;
   closeAllModals();
   root?.classList.add('hidden');
-  ModalManager.open(renderAuthModalHTML(), {
+  showAuthModal({
     onClose: () => {
       if (!Auth.token) {
         resetAppToUnauthed();
@@ -714,8 +720,6 @@ function resetAppToUnauthed() {
       ModalManager.open(renderEmailModal());
     };
   }
-  initGoogleAuth();
-  initAppleAuth();
 }
 
 document.addEventListener('click', async (event) => {
