@@ -452,6 +452,30 @@ const defaultInterfaceCode = `<!doctype html>
 </body>
 </html>`;
 
+const SESSION_BRIDGE_MARKER = '<!-- MAYA_SESSION_BRIDGE -->';
+const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
+<script id="maya-session-bridge">
+  window.__SESSION__ = window.__SESSION__ || null;
+  window.addEventListener('message', (event) => {
+    if (event.data?.type === 'SESSION') {
+      window.__SESSION__ = event.data;
+    }
+  });
+</script>`;
+
+function injectSessionBridge(code) {
+  if (!code || code.includes('maya-session-bridge') || code.includes(SESSION_BRIDGE_MARKER)) {
+    return code;
+  }
+  if (code.includes('</body>')) {
+    return code.replace('</body>', `${SESSION_BRIDGE_SCRIPT}\n</body>`);
+  }
+  if (code.includes('</html>')) {
+    return code.replace('</html>', `${SESSION_BRIDGE_SCRIPT}\n</html>`);
+  }
+  return `${code}\n${SESSION_BRIDGE_SCRIPT}`;
+}
+
 const TOKENS_PER_CREDIT = 250;
 const CREDIT_RESERVE_MULTIPLIER = 1.25;
 const CREDIT_WARNING_THRESHOLD = 0.5;
@@ -657,6 +681,29 @@ function persistSessionStorage({ user, token }) {
   }
 }
 
+function buildSessionPayload() {
+  if (!Auth.user || !Auth.token) {
+    return null;
+  }
+  return {
+    type: 'SESSION',
+    user: Auth.user,
+    token: Auth.token
+  };
+}
+
+function postSessionToSandbox(frame = sandboxFrame) {
+  const payload = buildSessionPayload();
+  if (!payload || !frame?.contentWindow) {
+    return;
+  }
+  frame.contentWindow.postMessage(payload, '*');
+}
+
+function syncSessionToSandbox() {
+  runWhenPreviewReady(() => postSessionToSandbox(sandboxFrame));
+}
+
 function onAuthSuccess({ user, token, provider, credits, deferRender = false }) {
   const resolvedCredits = resolveCredits(credits);
   const planLabel = user?.plan || user?.plan_tier || user?.planTier || 'Free';
@@ -689,6 +736,7 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
     ModalManager.close();
   }
 
+  syncSessionToSandbox();
   refreshAuthDebug();
 }
 
@@ -4078,7 +4126,9 @@ async function handleLLMOutput(code, source = 'generated') {
     console.warn('Iframe swapped during compile; aborting run.');
     return;
   }
-  sandbox.run(code);
+  const codeWithSession = injectSessionBridge(code);
+  sandbox.run(codeWithSession);
+  syncSessionToSandbox();
   outputPanel?.classList.remove('loading');
   setStatus('RUNNING', source);
 }
