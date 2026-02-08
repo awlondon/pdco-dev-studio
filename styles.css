@@ -111,6 +111,15 @@ html, body {
   background: #1f2233;
 }
 
+.auth-provider.google {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.auth-provider + .auth-btn,
+.auth-btn + .auth-provider,
+.auth-provider + .auth-provider,
 .auth-btn + .auth-btn {
   margin-top: 10px;
 }

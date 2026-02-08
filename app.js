@@ -291,10 +291,7 @@ function renderAuthModalHTML() {
   return `
     <h2>Welcome to Maya</h2>
 
-    <div class="auth-btn google" data-auth-provider="google" role="button" aria-label="Continue with Google">
-      <!-- Provide fallback text for accessibility and clarity before the Google SDK renders the button -->
-      <span>Continue with Google</span>
-    </div>
+    <div id="google-signin" class="auth-provider google" aria-label="Continue with Google"></div>
     <button class="auth-btn apple" data-auth-provider="apple">Continue with Apple</button>
     <button class="auth-btn email" data-auth-provider="email">Sign up with Email</button>
 
@@ -348,7 +345,7 @@ function onAuthSuccess({ user, token, provider, credits }) {
 
 let googleAuthInitAttempts = 0;
 function initGoogleAuth() {
-  const button = document.querySelector('.auth-btn.google');
+  const button = document.getElementById('google-signin');
   if (!button) {
     return;
   }
@@ -367,6 +364,7 @@ function initGoogleAuth() {
     return;
   }
 
+  button.textContent = '';
   window.google.accounts.id.initialize({
     client_id: GOOGLE_CLIENT_ID,
     callback: async (response) => {
@@ -394,7 +392,8 @@ function initGoogleAuth() {
   window.google.accounts.id.renderButton(button, {
     theme: 'outline',
     size: 'large',
-    text: 'continue_with'
+    text: 'continue_with',
+    width: 320
   });
   button.dataset.authInitialized = 'true';
 }
