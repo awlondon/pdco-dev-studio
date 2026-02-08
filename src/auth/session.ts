@@ -1,9 +1,9 @@
-import jwt from '@tsndr/cloudflare-worker-jwt';
+import { createSignedToken, verifySignedToken } from './token';
 
 const SESSION_COOKIE_NAME = 'maya_session';
 
 export async function issueSession(user: any, env: Env, request?: Request) {
-  const token = await jwt.sign(
+  const token = await createSignedToken(
     {
       sub: user.id,
       email: user.email,
@@ -63,12 +63,7 @@ export async function getSessionFromRequest(request: Request, env: Env) {
   if (!token) {
     return null;
   }
-  const valid = await jwt.verify(token, env.SESSION_SECRET);
-  if (!valid) {
-    return null;
-  }
-  const decoded = jwt.decode(token);
-  const user = decoded?.payload ?? null;
+  const user = await verifySignedToken(token, env.SESSION_SECRET);
   if (!user) {
     return null;
   }
