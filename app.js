@@ -296,6 +296,7 @@ const Auth = {
   token: null,
   provider: null
 };
+let currentUser = null;
 const GOOGLE_CLIENT_ID = window.GOOGLE_CLIENT_ID || '';
 const APPLE_CLIENT_ID = window.APPLE_CLIENT_ID || '';
 const APPLE_REDIRECT_URI = window.APPLE_REDIRECT_URI || '';
@@ -511,6 +512,43 @@ function showAuthModal() {
   AuthController.initAll();
 }
 
+function bootstrapAuthenticatedUI(user) {
+  currentUser = user;
+
+  uiState = UI_STATE.APP;
+  showAnalytics = false;
+
+  document.body.classList.remove('unauthenticated');
+  document.getElementById('modal-root')?.classList.add('hidden');
+  document.getElementById('root')?.classList.remove('hidden');
+
+  renderUserHeader();
+  renderCredits();
+  renderUI();
+}
+
+function renderUserHeader() {
+  if (!currentUser) return;
+
+  const trigger = document.getElementById('userMenuTrigger');
+  if (!trigger) return;
+
+  const initial = currentUser.name?.[0]?.toUpperCase() ?? '?';
+
+  trigger.innerHTML = `
+    ${initial} <span class="chevron">▾</span>
+  `;
+}
+
+function renderCredits() {
+  if (!currentUser) return;
+
+  const badge = document.querySelector('#creditBadge .count');
+  if (!badge) return;
+
+  badge.textContent = currentUser.creditsRemaining;
+}
+
 function updateCreditsUI(credits) {
   const resolvedCredits = Number.isFinite(credits) ? credits : 500;
   if (root) {
@@ -546,6 +584,10 @@ function onAuthSuccess({ user, token, provider, credits }) {
   Auth.user = user;
   Auth.token = token;
   Auth.provider = provider;
+  currentUser = {
+    ...user,
+    creditsRemaining: resolvedCredits
+  };
 
   window.localStorage?.setItem('maya_auth_token', token);
   window.localStorage?.setItem('maya_user', JSON.stringify(user));
@@ -555,6 +597,8 @@ function onAuthSuccess({ user, token, provider, credits }) {
   document.body.classList.remove('unauthenticated');
   applyAuthToRoot();
   updateCreditsUI(resolvedCredits);
+  renderUserHeader();
+  renderCredits();
 
   uiState = UI_STATE.APP;
   showAnalytics = false;
@@ -581,8 +625,31 @@ async function handleGoogleCredential(response) {
     console.warn('Google auth failed.', data);
     return;
   }
-  await fetch(`${BACKEND_URL}/me`, { credentials: 'include' });
-  await bootstrapApp();
+  bootstrapAuthenticatedUI({
+    email: 'alexwondon@gmail.com',
+    name: 'Alexander Warren',
+    plan: 'Free',
+    creditsRemaining: 500
+  });
+
+  const meRes = await fetch(`${BACKEND_URL}/me`, {
+    method: 'GET',
+    credentials: 'include'
+  });
+
+  if (!meRes.ok) {
+    console.error('Failed to fetch /me', meRes.status);
+    refreshAuthDebug();
+    return;
+  }
+
+  const { user } = await meRes.json();
+  bootstrapAuthenticatedUI({
+    email: user.email,
+    name: user.name,
+    plan: user.plan ?? 'Free',
+    creditsRemaining: user.creditsRemaining ?? 500
+  });
   refreshAuthDebug();
 }
 
