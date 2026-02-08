@@ -291,7 +291,10 @@ function renderAuthModalHTML() {
   return `
     <h2>Welcome to Maya</h2>
 
-    <div class="auth-btn google" data-auth-provider="google" role="button" aria-label="Continue with Google"></div>
+    <div class="auth-btn google" data-auth-provider="google" role="button" aria-label="Continue with Google">
+      <!-- Provide fallback text for accessibility and clarity before the Google SDK renders the button -->
+      <span>Continue with Google</span>
+    </div>
     <button class="auth-btn apple" data-auth-provider="apple">Continue with Apple</button>
     <button class="auth-btn email" data-auth-provider="email">Sign up with Email</button>
 
@@ -370,7 +373,9 @@ function initGoogleAuth() {
       const res = await fetch('/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: response.credential })
+        // Google Identity Services returns a JWT ID token via response.credential.
+        // Send as id_token to align with backend expectations.
+        body: JSON.stringify({ id_token: response.credential })
       });
 
       const data = await res.json();
@@ -383,7 +388,14 @@ function initGoogleAuth() {
     }
   });
 
-  window.google.accounts.id.renderButton(button, { theme: 'outline', size: 'large' });
+  // Render Google sign-in button with visible text using Google Identity Services option.
+  // The 'text' property accepts values like 'signin_with', 'signup_with', 'continue_with', or 'signin'.
+  // We specify 'continue_with' so the button reads 'Continue with Google'.
+  window.google.accounts.id.renderButton(button, {
+    theme: 'outline',
+    size: 'large',
+    text: 'continue_with'
+  });
   button.dataset.authInitialized = 'true';
 }
 
