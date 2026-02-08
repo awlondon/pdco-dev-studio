@@ -15,8 +15,12 @@ export default {
       }
 
       // /api/auth/*
-      if (path.startsWith('/auth/')) {
-        return handleAuth(request, env);
+      if (url.pathname.startsWith('/api/auth/')) {
+        const rewritten = new Request(
+          new URL(url.pathname.replace('/api', ''), request.url),
+          request
+        );
+        return handleAuth(rewritten, env);
       }
 
       return new Response('Not Found', { status: 404 });
