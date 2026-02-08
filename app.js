@@ -625,12 +625,6 @@ async function handleGoogleCredential(response) {
     console.warn('Google auth failed.', data);
     return;
   }
-  bootstrapAuthenticatedUI({
-    email: 'alexwondon@gmail.com',
-    name: 'Alexander Warren',
-    plan: 'Free',
-    creditsRemaining: 500
-  });
 
   const meRes = await fetch(`${BACKEND_URL}/me`, {
     method: 'GET',
@@ -643,12 +637,17 @@ async function handleGoogleCredential(response) {
     return;
   }
 
-  const { user } = await meRes.json();
+  const { user, token } = await meRes.json();
+  Auth.user = user ?? null;
+  Auth.token = token ?? null;
+  Auth.provider = user?.provider ?? 'google';
+  persistAuthState();
+  applyAuthToRoot();
+  updateCreditsUI(user?.creditsRemaining ?? 500);
   bootstrapAuthenticatedUI({
-    email: user.email,
-    name: user.name,
-    plan: user.plan ?? 'Free',
-    creditsRemaining: user.creditsRemaining ?? 500
+    ...user,
+    plan: user?.plan ?? 'Free',
+    creditsRemaining: user?.creditsRemaining ?? 500
   });
   refreshAuthDebug();
 }

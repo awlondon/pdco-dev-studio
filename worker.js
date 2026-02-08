@@ -310,7 +310,7 @@ async function handleGoogleAuth(request, env) {
     provider: 'google'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
 
 let googleJwksCache = { keys: null, expiresAt: 0 };
@@ -490,7 +490,7 @@ async function verifyMagicLink(request, env) {
     provider: 'email'
   };
 
-  return issueSession(user, env);
+  return issueSession(user, env, request);
 }
 
 async function hashToken(token) {
@@ -541,7 +541,19 @@ async function sendMagicEmail(email, token, env) {
   }
 }
 
-async function issueSession(user, env) {
+function resolveSessionCookieDomain(request, env) {
+  if (env.SESSION_COOKIE_DOMAIN) {
+    return `Domain=${env.SESSION_COOKIE_DOMAIN}`;
+  }
+  const host = request?.headers?.get('host') ?? '';
+  const hostname = host.split(':')[0];
+  if (hostname === 'primarydesignco.com' || hostname.endsWith('.primarydesignco.com')) {
+    return 'Domain=.primarydesignco.com';
+  }
+  return null;
+}
+
+async function issueSession(user, env, request) {
   if (!env.SESSION_SECRET) {
     return jsonErrorWithCors('Missing SESSION_SECRET', 500);
   }
@@ -554,18 +566,24 @@ async function issueSession(user, env) {
     },
     env.SESSION_SECRET
   );
+  const cookieDomain = resolveSessionCookieDomain(request, env);
+  const cookieParts = [
+    `${SESSION_COOKIE_NAME}=${token}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=None'
+  ];
+
+  if (cookieDomain) {
+    cookieParts.push(cookieDomain);
+  }
+
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       ...corsHeaders,
-      'Set-Cookie': [
-        `${SESSION_COOKIE_NAME}=${token}`,
-        'Path=/',
-        'Domain=.primarydesignco.com',
-        'HttpOnly',
-        'Secure',
-        'SameSite=None'
-      ].join('; '),
+      'Set-Cookie': cookieParts.join('; '),
       'Content-Type': 'application/json'
     }
   });
