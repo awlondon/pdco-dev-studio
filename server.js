@@ -272,6 +272,9 @@ app.get('/me', (req, res) => {
     user: {
       id: payload.sub,
       email: payload.email,
+      name: payload.name || payload.email?.split('@')[0] || 'User',
+      plan: payload.plan || 'Free',
+      creditsRemaining: payload.creditsRemaining ?? 500,
       provider: payload.provider
     }
   });

@@ -261,13 +261,25 @@ function jsonErrorWithCors(message, status = 400) {
 }
 
 async function handleMe(request, env) {
-  const session = await getSessionFromRequest(request, env);
+  const session = await getSession(request, env);
 
   if (!session) {
     return new Response('Unauthorized', { status: 401, headers: corsHeaders });
   }
 
-  return new Response(JSON.stringify({ user: session }), {
+  const resolvedUser = {
+    id: session.user?.id,
+    email: session.user?.email,
+    name: session.user?.name ?? session.user?.email?.split('@')[0] ?? 'User',
+    plan: session.user?.plan ?? 'Free',
+    creditsRemaining: session.user?.creditsRemaining ?? 500,
+    provider: session.user?.provider
+  };
+
+  return new Response(JSON.stringify({
+    token: session.token,
+    user: resolvedUser
+  }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
   });
