@@ -1,15 +1,6 @@
 import jwt from '@tsndr/cloudflare-worker-jwt';
-import { corsHeaders } from '../cors';
 
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_COOKIE_NAME = 'maya_session';
-
-function resolveSessionCookieDomain(request: Request | undefined, env: Env) {
-  if (env.SESSION_COOKIE_DOMAIN) {
-    return `; Domain=${env.SESSION_COOKIE_DOMAIN}`;
-  }
-  return '';
-}
 
 export async function issueSession(user: any, env: Env, request?: Request) {
   const token = await jwt.sign(
@@ -22,8 +13,6 @@ export async function issueSession(user: any, env: Env, request?: Request) {
     },
     env.SESSION_SECRET
   );
-  const cookieDomain = resolveSessionCookieDomain(request, env);
-
   return new Response(
     JSON.stringify({
       token,
@@ -32,9 +21,8 @@ export async function issueSession(user: any, env: Env, request?: Request) {
     }),
     {
       headers: {
-        ...corsHeaders,
         'Content-Type': 'application/json',
-        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${cookieDomain}`
+        'Set-Cookie': `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure`
       }
     }
   );
