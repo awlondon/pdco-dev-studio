@@ -10,17 +10,12 @@ export async function handleGoogle(request: Request, env: Env) {
     return jsonError('Invalid JSON', 400);
   }
 
-  const { id_token } = body;
-  if (!id_token) {
-    return jsonError('Missing id_token', 400);
+  const token = body.credential || body.id_token;
+  if (!token) {
+    return jsonError('Missing Google credential', 400);
   }
 
-  let payload = decodeJwtPayload(id_token);
-  if (!payload) {
-    return jsonError('Invalid Google token', 401);
-  }
-
-  const { sub, email, name, iss, aud, exp } = payload as {
+  let payload: {
     sub?: string;
     email?: string;
     name?: string;
@@ -29,12 +24,40 @@ export async function handleGoogle(request: Request, env: Env) {
     exp?: number;
   };
 
-  const validIssuer =
-    iss === 'https://accounts.google.com' || iss === 'accounts.google.com';
-  const validAudience = aud === env.GOOGLE_CLIENT_ID;
+  try {
+    const decodedPayload = decodeJwtPayload(token);
+    const decoded = decodedPayload ? { payload: decodedPayload } : null;
+    if (!decoded?.payload) {
+      return jsonError('Invalid token payload', 401);
+    }
+
+    if (decoded.payload.aud !== env.GOOGLE_CLIENT_ID) {
+      return jsonError(`Invalid audience: ${decoded.payload.aud}`, 401);
+    }
+
+    if (
+      decoded.payload.iss !== 'https://accounts.google.com' &&
+      decoded.payload.iss !== 'accounts.google.com'
+    ) {
+      return jsonError(`Invalid issuer: ${decoded.payload.iss}`, 401);
+    }
+
+    payload = decoded.payload as {
+      sub?: string;
+      email?: string;
+      name?: string;
+      iss?: string;
+      aud?: string;
+      exp?: number;
+    };
+  } catch (err) {
+    return jsonError(`Google token error: ${String(err)}`, 401);
+  }
+
+  const { sub, email, name, exp } = payload;
   const notExpired = typeof exp !== 'number' || exp > Math.floor(Date.now() / 1000);
 
-  if (!validIssuer || !validAudience || !notExpired || !sub || !email) {
+  if (!notExpired || !sub || !email) {
     return jsonError('Invalid Google payload', 401);
   }
 
