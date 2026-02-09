@@ -422,15 +422,22 @@ async function loadMonaco() {
   if (monacoLoadPromise) {
     return monacoLoadPromise;
   }
-  monacoLoadPromise = (async () => {
+  monacoLoadPromise = new Promise((resolve, reject) => {
     configureMonacoEnvironment();
-    try {
-      return await import(`${MONACO_CDN_BASE}/esm/vs/editor/editor.api.js`);
-    } catch (error) {
-      console.warn('Monaco ESM import failed, falling back to +esm bundle.', error);
-      return await import(`${MONACO_CDN_BASE}/+esm`);
+    const amdLoader = window.require;
+    if (!amdLoader) {
+      reject(new Error('Monaco AMD loader not found.'));
+      return;
     }
-  })();
+    amdLoader.config({
+      paths: {
+        vs: `${MONACO_CDN_BASE}/min/vs`
+      }
+    });
+    amdLoader(['vs/editor/editor.main'], () => {
+      resolve(window.monaco);
+    });
+  });
   return monacoLoadPromise;
 }
 

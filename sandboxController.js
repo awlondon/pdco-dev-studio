@@ -89,14 +89,7 @@ export function createSandboxController({
 
     logStatus(`▶ executing (${mode})`);
 
-    const win = activeFrame.contentWindow;
-    if (!win) {
-      stop("sandbox iframe not ready");
-      throw new Error("Sandbox iframe not ready");
-    }
-    win.open();
-    win.document.write(code);
-    win.document.close();
+    activeFrame.srcdoc = code;
 
     if (mode === "finite") {
       timeoutId = setTimeout(() => {
