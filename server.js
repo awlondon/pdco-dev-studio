@@ -64,50 +64,26 @@ app.get('/api/me', (req, res) => {
  * CHAT (FULL IMPLEMENTATION — DO NOT STUB)
  */
 app.post('/api/chat', async (req, res) => {
-  const { messages } = req.body || {};
-
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'Missing messages.' });
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({
-      error: 'Missing OPENAI_API_KEY on the server.'
-    });
-  }
-
   try {
-    const response = await fetch(
-      'https://api.openai.com/v1/chat/completions',
+    const workerRes = await fetch(
+      'https://text-code.primarydesigncompany.workers.dev',
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          model: 'gpt-4.1-mini',
-          messages,
-          stream: false
-        })
+        body: JSON.stringify(req.body)
       }
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      return res
-        .status(response.status)
-        .send(errorText || 'Upstream OpenAI error');
-    }
+    const text = await workerRes.text();
 
-    const data = await response.json();
-    return res.status(200).json(data);
+    res.status(workerRes.status);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(text);
   } catch (err) {
-    return res.status(500).json({
-      error:
-        err instanceof Error ? err.message : 'Unexpected server error'
-    });
+    console.error('Worker proxy error:', err);
+    res.status(500).json({ error: 'LLM proxy failed' });
   }
 });
 
