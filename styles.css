@@ -1424,6 +1424,11 @@ html, body {
   opacity: 0.7;
 }
 
+.loading-label {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
 .loading.hidden {
   display: none;
 }
@@ -3004,6 +3009,26 @@ button:disabled {
   margin-top: 12px;
 }
 
+.modal-field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-field.checkbox input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.modal-helper {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .modal-field input,
 .modal-field textarea,
 .modal-field select {
@@ -3020,6 +3045,94 @@ button:disabled {
   border-radius: 12px;
   margin-top: 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.artifact-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.artifact-version-row {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 18, 24, 0.8);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-version-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.artifact-version-title {
+  font-weight: 600;
+}
+
+.artifact-version-date {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.artifact-version-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.artifact-version-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.artifact-chat-history summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.artifact-chat-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-chat-message {
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(17, 20, 27, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.artifact-chat-message.user {
+  border-color: rgba(124, 155, 255, 0.3);
+}
+
+.artifact-chat-message.assistant {
+  border-color: rgba(138, 255, 196, 0.3);
+}
+
+.artifact-chat-role {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.artifact-chat-content {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.artifact-chat-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .code-editor textarea.is-locked {
