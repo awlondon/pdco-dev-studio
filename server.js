@@ -4,6 +4,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  fetchCheapestAllowedModel,
+  fetchFirstNonPremiumModel,
+  fetchMonthlyQuota,
+  fetchPlanPolicy,
+  fetchSessionEvents,
+  fetchSessionSummary,
+  fetchUsageDailySummary,
+  fetchUsageEventsByRange,
+  fetchUsageOverview,
+  getUsageAnalyticsPool,
+  insertRouteDecision,
+  insertUsageEvent,
+  isPremiumModel
+} from './utils/usageAnalytics.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -944,6 +959,33 @@ app.get('/api/usage/overview', async (req, res) => {
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
+    const pool = getUsageAnalyticsPool();
+    const dailyLimit = PLAN_DAILY_CAPS[user.plan_tier] ?? null;
+    if (pool) {
+      const overviewRow = await fetchUsageOverview({ userId: session.sub });
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const todayRows = await fetchUsageEventsByRange({
+        userId: session.sub,
+        startDate: todayKey,
+        endDate: todayKey
+      });
+      const creditsUsedToday = (todayRows || []).reduce((sum, row) => {
+        return sum + Number(row.credits_used || 0);
+      }, 0);
+      const overview = {
+        total_requests: Number(overviewRow?.requests || 0),
+        total_credits: Number(overviewRow?.credits_used || 0),
+        avg_latency_ms: Number(overviewRow?.avg_latency_ms || 0),
+        success_rate: Number(overviewRow?.success_rate || 0) / 100
+      };
+      return res.json({
+        ok: true,
+        overview,
+        credits_used_today: creditsUsedToday,
+        daily_limit: dailyLimit
+      });
+    }
+
     const usageRows = await loadUsageLogRows();
     const userRows = usageRows.filter((row) => row.user_id === session.sub);
     const monthRows = filterUsageRowsByMonth(userRows);
@@ -952,7 +994,6 @@ app.get('/api/usage/overview', async (req, res) => {
     const creditsUsedToday = userRows
       .filter((row) => row.timestamp_utc?.startsWith(todayKey))
       .reduce((sum, row) => sum + Number(row.credits_charged || row.credits_used || 0), 0);
-    const dailyLimit = PLAN_DAILY_CAPS[user.plan_tier] ?? null;
     return res.json({
       ok: true,
       overview,
@@ -972,6 +1013,24 @@ app.get('/api/usage/daily', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const pool = getUsageAnalyticsPool();
+    if (pool) {
+      const rows = await fetchUsageDailySummary({ userId: session.sub, days });
+      const daily = (rows || []).map((row) => ({
+        date: row.day,
+        total_requests: Number(row.requests || 0),
+        total_credits: Number(row.credits_used || 0),
+        avg_latency_ms: Number(row.avg_latency_ms || 0),
+        success_rate: Number(row.success_rate || 0) / 100,
+        by_intent: {
+          code: Number(row.code_requests || 0),
+          text: Number(row.text_requests || 0)
+        },
+        entries: []
+      }));
+      return res.json({ ok: true, range_days: days, daily });
+    }
+
     const usageRows = await loadUsageLogRows();
     const filtered = filterUsageRowsByRange({
       rows: usageRows,
@@ -993,6 +1052,14 @@ app.get('/api/usage/history', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const pool = getUsageAnalyticsPool();
+    if (pool) {
+      const events = await fetchUsageEventsByRange({ userId: session.sub, days });
+      const mapped = (events || []).map(mapUsageEventRow);
+      const daily = buildDailyUsageSummaries(mapped, { includeEntries: true });
+      return res.json({ ok: true, range_days: days, daily });
+    }
+
     const usageRows = await loadUsageLogRows();
     const filtered = filterUsageRowsByRange({
       rows: usageRows,
@@ -1017,6 +1084,30 @@ app.get('/api/usage/summary', async (req, res) => {
     const days = Number(req.query.days);
     const startDate = req.query.start_date ? String(req.query.start_date) : '';
     const endDate = req.query.end_date ? String(req.query.end_date) : '';
+    const pool = getUsageAnalyticsPool();
+    if (pool) {
+      if (groupBy === 'session') {
+        const sessions = await fetchSessionSummary({ userId: session.sub });
+        return res.json({
+          ok: true,
+          sessions: (sessions || []).map((row) => ({
+            session_id: row.session_id,
+            started_at: row.session_start,
+            ended_at: row.session_end || row.session_start,
+            turns: Number(row.turns || 0),
+            credits_used: Number(row.credits_used || 0)
+          }))
+        });
+      }
+      const events = await fetchUsageEventsByRange({
+        userId: session.sub,
+        startDate,
+        endDate,
+        days: Number.isFinite(days) ? days : null
+      });
+      return res.json({ ok: true, rows: (events || []).map(mapUsageEventRow) });
+    }
+
     const usageRows = await loadUsageLogRows();
     const filtered = filterUsageRowsByRange({
       rows: usageRows,
@@ -1045,6 +1136,31 @@ app.get('/api/session/export/:sessionId', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const sessionId = req.params.sessionId;
+    const pool = getUsageAnalyticsPool();
+    if (pool) {
+      const events = await fetchSessionEvents({ userId: session.sub, sessionId });
+      if (!events?.length) {
+        return res.status(404).json({ ok: false, error: 'Session not found' });
+      }
+      const mapped = events.map((row) => ({
+        timestamp_utc: row.created_at,
+        session_id: sessionId,
+        intent_type: row.intent,
+        model: row.model,
+        input_tokens: row.tokens_in,
+        output_tokens: row.tokens_out,
+        credits_charged: row.credits_used,
+        latency_ms: row.latency_ms,
+        status: row.success ? 'success' : 'failure'
+      }));
+      const [summary] = buildSessionSummariesFromUsage(mapped);
+      return res.json({
+        ok: true,
+        session: summary,
+        events: mapped
+      });
+    }
+
     const usageRows = await loadUsageLogRows();
     const filtered = usageRows.filter((row) => {
       return row.session_id === sessionId && row.user_id === session.sub;
@@ -1099,6 +1215,8 @@ app.post('/api/chat', async (req, res) => {
   const requestId = crypto.randomUUID();
   const intentType = req.body?.intentType || 'chat';
   let user = null;
+  let routeDecision = null;
+  let requestedModel = req.body?.model || OPENAI_MODEL;
   try {
     const session = await getSessionFromRequest(req);
     if (!session) {
@@ -1156,7 +1274,7 @@ app.post('/api/chat', async (req, res) => {
         sessionId: req.body?.sessionId || '',
         eventType: 'chat_rejected',
         intentType,
-        model: req.body?.model || OPENAI_MODEL,
+        model: requestedModel,
         inputTokens: inputTokensEstimate,
         outputTokens: 0,
         inputChars,
@@ -1176,6 +1294,16 @@ app.post('/api/chat', async (req, res) => {
       });
     }
 
+    routeDecision = await routeModelForUser({
+      user,
+      intentType,
+      requestedModel,
+      sessionId: req.body?.sessionId || ''
+    });
+    if (routeDecision?.model && routeDecision.model !== requestedModel) {
+      req.body.model = routeDecision.model;
+    }
+
     const workerRes = await fetch(LLM_PROXY_URL, {
       method: 'POST',
       headers: {
@@ -1192,7 +1320,7 @@ app.post('/api/chat', async (req, res) => {
         sessionId: req.body?.sessionId || '',
         eventType: 'chat_error',
         intentType,
-        model: req.body?.model || OPENAI_MODEL,
+        model: requestedModel,
         inputTokens: inputTokensEstimate,
         outputTokens: 0,
         inputChars,
@@ -1224,7 +1352,7 @@ app.post('/api/chat', async (req, res) => {
         sessionId: req.body?.sessionId || '',
         eventType: 'chat_error',
         intentType,
-        model: req.body?.model || OPENAI_MODEL,
+        model: requestedModel,
         inputTokens: inputTokensEstimate,
         outputTokens: 0,
         inputChars,
@@ -1276,7 +1404,7 @@ app.post('/api/chat', async (req, res) => {
       sessionId: req.body?.sessionId || '',
       eventType: intentType === 'code' ? 'code_gen' : 'chat_turn',
       intentType,
-      model: data?.model || req.body?.model || OPENAI_MODEL,
+      model: data?.model || req.body?.model || requestedModel,
       inputTokens: resolvedInputTokens,
       outputTokens: resolvedOutputTokens,
       inputChars,
@@ -1297,6 +1425,14 @@ app.post('/api/chat', async (req, res) => {
       remainingCredits: nextRemaining,
       credits_remaining: nextRemaining
     };
+
+    if (routeDecision?.reason && routeDecision.reason !== 'policy_default') {
+      data.routing = {
+        requested_model: requestedModel,
+        routed_model: data?.model || req.body?.model || requestedModel,
+        reason: routeDecision.reason
+      };
+    }
 
     res.status(200);
     res.setHeader('Content-Type', 'application/json');
@@ -1321,7 +1457,7 @@ app.post('/api/chat', async (req, res) => {
           sessionId: req.body?.sessionId || '',
           eventType: 'chat_error',
           intentType,
-          model: req.body?.model || OPENAI_MODEL,
+          model: requestedModel,
           inputTokens,
           outputTokens: 0,
           inputChars,
@@ -2281,6 +2417,22 @@ function normalizeUsageRow(row) {
   };
 }
 
+function mapUsageEventRow(row) {
+  return {
+    timestamp_utc: row.created_at,
+    session_id: row.session_id,
+    request_id: row.id || '',
+    intent_type: row.intent,
+    model: row.model,
+    input_tokens: Number(row.tokens_in || 0) || 0,
+    output_tokens: Number(row.tokens_out || 0) || 0,
+    credits_charged: Number(row.credits_used || 0) || 0,
+    credits_used: Number(row.credits_used || 0) || 0,
+    latency_ms: Number(row.latency_ms || 0) || 0,
+    status: row.success ? 'success' : 'failure'
+  };
+}
+
 function buildUsageOverview(rows) {
   const totals = rows.reduce((acc, row) => {
     acc.totalRequests += 1;
@@ -2464,6 +2616,71 @@ async function updateUser(userId, patch) {
   return user;
 }
 
+async function routeModelForUser({ user, intentType, requestedModel, sessionId }) {
+  const pool = getUsageAnalyticsPool();
+  if (!pool) {
+    return { model: requestedModel, reason: 'policy_default' };
+  }
+
+  const plan = user.plan_tier || 'free';
+  const policy = await fetchPlanPolicy({ plan, intentType });
+  if (!policy) {
+    return { model: requestedModel, reason: 'policy_default' };
+  }
+
+  let reason = 'policy_default';
+  let candidate = requestedModel && policy.allowed_models?.includes(requestedModel)
+    ? requestedModel
+    : policy.preferred_models?.[0];
+
+  if (candidate && !(policy.allowed_models || []).includes(candidate)) {
+    candidate = policy.allowed_models?.[0];
+  }
+
+  if (candidate && await isPremiumModel(candidate) && !policy.premium_allowed) {
+    const nonPremium = await fetchFirstNonPremiumModel([
+      ...(policy.preferred_models || []),
+      ...(policy.allowed_models || [])
+    ]);
+    if (nonPremium) {
+      candidate = nonPremium;
+      reason = 'premium_blocked';
+    }
+  }
+
+  const quota = await fetchMonthlyQuota({ userId: user.user_id, plan });
+  const usageRatio = quota?.monthly_credits
+    ? Number(quota.normalized_credits_used || 0) / Number(quota.monthly_credits)
+    : 0;
+
+  if (policy.allow_fallback && usageRatio >= 0.9) {
+    const cheapest = await fetchCheapestAllowedModel(policy.allowed_models || []);
+    if (cheapest) {
+      candidate = cheapest;
+      reason = 'quota_fallback';
+    }
+  }
+
+  if (candidate && !(policy.allowed_models || []).includes(candidate)) {
+    candidate = policy.allowed_models?.[policy.allowed_models.length - 1];
+    reason = 'policy_default';
+  }
+
+  if (candidate) {
+    await insertRouteDecision({
+      userId: user.user_id,
+      sessionId,
+      intentType,
+      requestedModel,
+      routedModel: candidate,
+      reason,
+      plan
+    });
+  }
+
+  return { model: candidate || requestedModel, reason };
+}
+
 async function appendUsageEntry({
   user,
   requestId,
@@ -2513,6 +2730,20 @@ async function appendUsageEntry({
     latency_ms: latencyMs ?? '',
     status
   };
+
+  if (eventType !== 'session_close') {
+    await insertUsageEvent({
+      userId: user.user_id,
+      sessionId: sessionId || crypto.randomUUID(),
+      intentType,
+      model,
+      tokensIn: inputTokens,
+      tokensOut: outputTokens,
+      creditsUsed: creditsCharged,
+      latencyMs: latencyMs ?? 0,
+      success: status === 'success'
+    });
+  }
 
   const { appendUsageLog } = await import('./api/usageLog.js');
   await appendUsageLog(process.env, entry);
