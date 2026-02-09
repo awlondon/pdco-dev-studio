@@ -11,12 +11,14 @@ import {
   fetchMonthlyQuota,
   fetchPlanNormalizationFactor,
   fetchPlanPolicy,
+  fetchNextTurnIndex,
   fetchSessionEvents,
   fetchSessionSummary,
   fetchUsageDailySummary,
   fetchUsageEventsByRange,
   fetchUsageOverview,
   getUsageAnalyticsPool,
+  insertLlmTurnLog,
   insertRouteDecision,
   insertUsageEvent,
   isPremiumModel
@@ -84,6 +86,7 @@ const ARTIFACT_UPLOADS_DIR = path.join(DATA_DIR, 'artifact_uploads');
 const PROFILE_UPLOADS_DIR = path.join(DATA_DIR, 'profile_uploads');
 const PROFILES_FILE = path.join(DATA_DIR, 'profiles.json');
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
+const MAX_PROMPT_CHARS = 8000;
 
 const CHAT_SYSTEM_PROMPT = `You are a serious, capable engineering assistant.
 Be concise, direct, and practical.
@@ -1211,6 +1214,11 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const promptText = capPromptText(
+      typeof req.body?.promptText === 'string'
+        ? req.body.promptText
+        : buildPromptText(messages)
+    );
     const inputChars = messages
       .map((entry) => (entry?.content ? String(entry.content) : ''))
       .join('').length;
@@ -1376,6 +1384,31 @@ app.post('/api/chat', async (req, res) => {
     });
     const nextRemaining = clampCredits(creditsRemaining - actualCredits, creditsTotal);
 
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+    if (sessionId) {
+      try {
+        const turnIndex = await fetchNextTurnIndex({ sessionId });
+        if (turnIndex) {
+          await insertLlmTurnLog({
+            userId: user.user_id,
+            sessionId,
+            turnIndex,
+            intent: normalizeTurnIntent(intentType),
+            model: data?.model || req.body?.model || requestedModel,
+            glyphSurface: req.body?.glyphSurface ?? req.body?.glyph_surface ?? null,
+            glyphJson: req.body?.glyphJson ?? req.body?.glyph_json ?? null,
+            promptText,
+            promptTokens: resolvedInputTokens,
+            completionTokens: resolvedOutputTokens,
+            creditsCharged: actualCredits,
+            latencyMs: Date.now() - requestStartedAt
+          });
+        }
+      } catch (logError) {
+        console.warn('Failed to log LLM turn.', logError);
+      }
+    }
+
     await updateUser(user.user_id, {
       credits_remaining: String(nextRemaining)
     });
@@ -1383,7 +1416,7 @@ app.post('/api/chat', async (req, res) => {
     await appendUsageEntry({
       user,
       requestId,
-      sessionId: req.body?.sessionId || '',
+      sessionId,
       eventType: intentType === 'code' ? 'code_gen' : 'chat_turn',
       intentType,
       model: data?.model || req.body?.model || requestedModel,
@@ -1942,6 +1975,45 @@ function clampCredits(remaining, total) {
     return Math.max(0, Math.min(remaining, total));
   }
   return Math.max(0, remaining);
+}
+
+function buildPromptText(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return '';
+  }
+  return messages
+    .map((entry) => {
+      const role = entry?.role ? String(entry.role) : 'user';
+      const content = entry?.content;
+      if (typeof content === 'string') {
+        return `${role}:\n${content}`;
+      }
+      if (content === null || content === undefined) {
+        return `${role}:`;
+      }
+      return `${role}:\n${JSON.stringify(content)}`;
+    })
+    .join('\n\n');
+}
+
+function capPromptText(promptText) {
+  if (!promptText) {
+    return promptText;
+  }
+  if (promptText.length > MAX_PROMPT_CHARS) {
+    return `${promptText.slice(0, MAX_PROMPT_CHARS)}\n…[truncated]`;
+  }
+  return promptText;
+}
+
+function normalizeTurnIntent(intentType) {
+  if (intentType === 'code') {
+    return 'code';
+  }
+  if (intentType === 'mixed') {
+    return 'mixed';
+  }
+  return 'text';
 }
 
 function estimateTokensFromChars(chars) {

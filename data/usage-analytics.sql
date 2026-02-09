@@ -26,6 +26,38 @@ CREATE INDEX idx_usage_events_user_time
 CREATE INDEX idx_usage_events_session
   ON usage_events (session_id);
 
+CREATE TABLE llm_turn_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL,
+  session_id UUID NOT NULL,
+  turn_index INTEGER NOT NULL,
+
+  intent TEXT CHECK (intent IN ('code','text','mixed')) NOT NULL,
+  model TEXT NOT NULL,
+
+  glyph_surface TEXT,
+  glyph_json JSONB,
+
+  prompt_text TEXT,
+  prompt_tokens INTEGER NOT NULL,
+  completion_tokens INTEGER NOT NULL,
+
+  total_tokens INTEGER GENERATED ALWAYS AS
+    (prompt_tokens + completion_tokens) STORED,
+
+  credits_charged INTEGER,
+  latency_ms INTEGER,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_llm_turn_logs_session
+  ON llm_turn_logs (session_id, turn_index);
+
+CREATE INDEX idx_llm_turn_logs_user_time
+  ON llm_turn_logs (user_id, created_at);
+
 CREATE VIEW usage_daily_summary AS
 SELECT
   user_id,

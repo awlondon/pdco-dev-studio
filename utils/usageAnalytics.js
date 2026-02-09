@@ -62,6 +62,67 @@ export async function insertUsageEvent({
   return result;
 }
 
+function normalizeTurnIntent(intentType) {
+  if (intentType === 'code') {
+    return 'code';
+  }
+  if (intentType === 'mixed') {
+    return 'mixed';
+  }
+  return 'text';
+}
+
+export async function fetchNextTurnIndex({ sessionId }) {
+  if (!sessionId) {
+    return null;
+  }
+  const result = await queryUsageAnalytics(
+    `SELECT COALESCE(MAX(turn_index), 0) + 1 AS next_index
+     FROM llm_turn_logs
+     WHERE session_id = $1`,
+    [sessionId]
+  );
+  return result?.rows?.[0]?.next_index ?? null;
+}
+
+export async function insertLlmTurnLog({
+  userId,
+  sessionId,
+  turnIndex,
+  intent,
+  model,
+  glyphSurface,
+  glyphJson,
+  promptText,
+  promptTokens,
+  completionTokens,
+  creditsCharged,
+  latencyMs
+}) {
+  const result = await queryUsageAnalytics(
+    `INSERT INTO llm_turn_logs
+      (user_id, session_id, turn_index, intent, model, glyph_surface, glyph_json, prompt_text,
+       prompt_tokens, completion_tokens, credits_charged, latency_ms)
+     VALUES
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      userId,
+      sessionId,
+      turnIndex,
+      normalizeTurnIntent(intent),
+      model,
+      glyphSurface ?? null,
+      glyphJson ?? null,
+      promptText ?? null,
+      promptTokens,
+      completionTokens,
+      creditsCharged ?? null,
+      latencyMs ?? null
+    ]
+  );
+  return result;
+}
+
 export async function fetchPlanPolicy({ plan, intentType }) {
   const result = await queryUsageAnalytics(
     `SELECT
