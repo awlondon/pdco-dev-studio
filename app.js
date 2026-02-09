@@ -7005,7 +7005,8 @@ function updateRevertButtonState() {
   if (!revertButton) {
     return;
   }
-  const hasHistory = codeVersionStack.length > 1;
+  const activeIndex = getActiveVersionIndex();
+  const hasHistory = codeVersionStack.length > 1 && activeIndex > 0;
   revertButton.disabled = !hasHistory;
   revertButton.setAttribute('aria-disabled', hasHistory ? 'false' : 'true');
 }
@@ -7017,6 +7018,57 @@ function updatePromoteVisibility() {
   const isRunning = previewExecutionStatus?.classList.contains('running');
   promoteButton.style.display =
     userHasEditedCode && isRunning ? 'inline-flex' : 'none';
+}
+
+function getActiveVersionIndex() {
+  if (!codeVersionStack.length) {
+    return -1;
+  }
+  const activeId = sessionState?.current_editor?.version_id;
+  if (activeId) {
+    const index = codeVersionStack.findIndex((entry) => entry.id === activeId);
+    if (index >= 0) {
+      return index;
+    }
+  }
+  if (Number.isFinite(sessionState?.active_version_index)) {
+    return sessionState.active_version_index;
+  }
+  return codeVersionStack.length - 1;
+}
+
+function getActiveCodeVersion() {
+  const index = getActiveVersionIndex();
+  if (index < 0) {
+    return null;
+  }
+  return codeVersionStack[index] || null;
+}
+
+function emitCodeStateChanged(codeVersion) {
+  sandbox.stop('code-change');
+  resetSandboxFrame();
+  markPreviewStale();
+  if (codeVersion?.id) {
+    console.debug('Code version changed:', codeVersion.id);
+  }
+}
+
+function runActiveCodeVersion(source = 'user', statusMessage = 'Applying your edits…') {
+  const activeVersion = getActiveCodeVersion();
+  if (!activeVersion) {
+    return;
+  }
+  currentCode = activeVersion.content;
+  baselineCode = activeVersion.content;
+  userHasEditedCode = false;
+  updateRunButtonVisibility();
+  updateRollbackVisibility();
+  updatePromoteVisibility();
+  updateSaveCodeButtonState();
+  setPreviewStatus(statusMessage);
+  handleLLMOutput(activeVersion.content, source);
+  console.debug('Executing code_version:', activeVersion.id);
 }
 
 function applyLLMEdit(newCode, { messageId = null } = {}) {
@@ -7052,15 +7104,7 @@ function handleUserRun(code, source = 'user', statusMessage = 'Applying your edi
     content: code,
     source: source === 'user' ? 'user' : 'system'
   });
-  currentCode = code;
-  baselineCode = code;
-  userHasEditedCode = false;
-  updateRunButtonVisibility();
-  updateRollbackVisibility();
-  updatePromoteVisibility();
-  updateSaveCodeButtonState();
-  setPreviewStatus(statusMessage);
-  handleLLMOutput(code, source);
+  runActiveCodeVersion(source, statusMessage);
 }
 
 function simpleLineDiff(oldCode, newCode) {
@@ -8221,27 +8265,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
-    if (!userHasEditedCode || lastCodeSource !== 'user') {
+    if (userHasEditedCode) {
+      handleUserRun(codeEditor.value);
       return;
     }
-    handleUserRun(codeEditor.value);
+    runActiveCodeVersion('user', 'Re-running active version…');
   });
   if (!revertButton) {
     console.warn('⚠️ Revert button not found');
   } else {
     revertButton.addEventListener('click', () => {
-      if (codeVersionStack.length < 2) {
+      const currentIndex = getActiveVersionIndex();
+      if (currentIndex <= 0) {
         return;
       }
-      codeVersionStack.pop();
-      persistVersionStack();
-      const previousVersion = codeVersionStack.at(-1);
-      updateRevertButtonState();
+      const previousIndex = currentIndex - 1;
+      const previousVersion = codeVersionStack[previousIndex];
       if (!previousVersion || typeof previousVersion.content !== 'string') {
         return;
       }
       codeEditor.value = previousVersion.content;
-      setActiveVersionByIndex(codeVersionStack.length - 1);
+      setActiveVersionByIndex(previousIndex);
+      updateRevertButtonState();
       userHasEditedCode = codeEditor.value !== baselineCode;
       lastCodeSource = previousVersion.source === 'llm' ? 'llm' : 'user';
       updateRunButtonVisibility();
@@ -8249,9 +8294,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       updatePromoteVisibility();
       updateLineNumbers();
       updateSaveCodeButtonState();
-      if (userHasEditedCode) {
-        markPreviewStale();
-      }
+      emitCodeStateChanged(previousVersion);
       resetExecutionPreparation();
       requestCreditPreviewUpdate();
       showToast('Reverted to previous version', { variant: 'success', duration: 2500 });
@@ -8311,10 +8354,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 codeEditor.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
     event.preventDefault();
-    if (!userHasEditedCode || lastCodeSource !== 'user') {
+    if (userHasEditedCode) {
+      handleUserRun(codeEditor.value);
       return;
     }
-    handleUserRun(codeEditor.value);
+    runActiveCodeVersion('user', 'Re-running active version…');
   }
 });
 
