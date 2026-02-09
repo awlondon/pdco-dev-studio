@@ -498,7 +498,6 @@ const THROTTLE_HIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const LARGE_GENERATION_TOKEN_THRESHOLD = 2400;
 const LARGE_GENERATION_COUNT_THRESHOLD = 3;
 const LARGE_GENERATION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-const USAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const ANALYTICS_CACHE_TTL_MS = 45 * 1000;
 const ANALYTICS_TIMEOUT_MS = 3000;
 const USAGE_FETCH_TIMEOUT_MS = 5000;
@@ -519,12 +518,6 @@ const usageState = {
     requests: null,
     latency: null
   }
-};
-
-const usageCache = {
-  fetchedAt: 0,
-  usageRows: null,
-  userRows: null
 };
 
 const analyticsCache = {
@@ -651,14 +644,26 @@ function renderCredits() {
   planCredits.textContent = `Credits: ${currentUser.creditsRemaining} · Plan: ${planLabel}`;
 }
 
-function updateCreditsUI(credits) {
-  const resolvedCredits = Number.isFinite(credits) ? credits : 500;
+function updateCreditsUI(remaining, total) {
+  const resolvedTotal = Number.isFinite(total)
+    ? total
+    : Number.isFinite(remaining)
+      ? remaining
+      : 500;
+  const resolvedRemaining = Number.isFinite(remaining)
+    ? clamp(remaining, 0, resolvedTotal)
+    : resolvedTotal;
   if (currentUser) {
-    currentUser.creditsRemaining = resolvedCredits;
+    currentUser.creditsRemaining = resolvedRemaining;
+    currentUser.creditsTotal = resolvedTotal;
   }
   if (root) {
-    root.dataset.remainingCredits = `${resolvedCredits}`;
-    root.dataset.creditsTotal = `${resolvedCredits}`;
+    root.dataset.remainingCredits = `${resolvedRemaining}`;
+    root.dataset.creditsTotal = `${resolvedTotal}`;
+  }
+  if (window.localStorage) {
+    window.localStorage.setItem('maya_credits_remaining', `${resolvedRemaining}`);
+    window.localStorage.setItem('maya_credits_total', `${resolvedTotal}`);
   }
   updateCreditUI();
   renderCredits();
@@ -669,9 +674,13 @@ function hydrateCreditState() {
   if (!window.localStorage) {
     return;
   }
-  const storedCredits = Number(window.localStorage.getItem('maya_credits'));
-  if (Number.isFinite(storedCredits)) {
-    updateCreditsUI(storedCredits);
+  const storedRemaining = Number(
+    window.localStorage.getItem('maya_credits_remaining')
+    ?? window.localStorage.getItem('maya_credits')
+  );
+  const storedTotal = Number(window.localStorage.getItem('maya_credits_total'));
+  if (Number.isFinite(storedRemaining)) {
+    updateCreditsUI(storedRemaining, Number.isFinite(storedTotal) ? storedTotal : storedRemaining);
   }
 }
 
@@ -679,7 +688,10 @@ function resolveCredits(credits) {
   if (Number.isFinite(credits)) {
     return credits;
   }
-  const storedCredits = Number(window.localStorage?.getItem('maya_credits'));
+  const storedCredits = Number(
+    window.localStorage?.getItem('maya_credits_remaining')
+    ?? window.localStorage?.getItem('maya_credits')
+  );
   if (Number.isFinite(storedCredits)) {
     return storedCredits;
   }
@@ -722,7 +734,21 @@ function syncSessionToSandbox() {
 }
 
 function onAuthSuccess({ user, token, provider, credits, deferRender = false }) {
-  const resolvedCredits = resolveCredits(credits);
+  const resolvedRemaining = resolveCredits(
+    credits
+    ?? user?.credits_remaining
+    ?? user?.creditsRemaining
+  );
+  const resolvedTotal = Number(
+    user?.credits_total
+    ?? user?.creditsTotal
+    ?? resolvedRemaining
+  );
+  const clampedRemaining = clamp(
+    resolvedRemaining,
+    0,
+    Number.isFinite(resolvedTotal) ? resolvedTotal : resolvedRemaining
+  );
   const planLabel = user?.plan || user?.plan_tier || user?.planTier || 'Free';
   const storedToken = window.localStorage?.getItem('maya_token');
   const resolvedToken = token
@@ -735,15 +761,23 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
   currentUser = {
     ...user,
     plan: planLabel,
-    creditsRemaining: resolvedCredits
+    creditsRemaining: clampedRemaining,
+    creditsTotal: Number.isFinite(resolvedTotal) ? resolvedTotal : clampedRemaining
   };
   accountState.user = user;
 
-  window.localStorage?.setItem('maya_credits', `${resolvedCredits}`);
+  if (window.localStorage) {
+    window.localStorage.setItem('maya_credits_remaining', `${clampedRemaining}`);
+    window.localStorage.setItem(
+      'maya_credits_total',
+      `${Number.isFinite(resolvedTotal) ? resolvedTotal : clampedRemaining}`
+    );
+    window.localStorage.setItem('maya_credits', `${clampedRemaining}`);
+  }
 
   document.body.classList.remove('unauthenticated');
   applyAuthToRoot();
-  updateCreditsUI(resolvedCredits);
+  updateCreditsUI(clampedRemaining, resolvedTotal);
   renderUserHeader();
   renderCredits();
   updateAccountOverview();
@@ -793,11 +827,13 @@ async function handleGoogleCredential(response) {
     || (window.crypto?.randomUUID ? window.crypto.randomUUID() : `token-${Date.now()}`);
   Auth.provider = user?.provider ?? 'google';
   applyAuthToRoot();
-  updateCreditsUI(user?.creditsRemaining ?? 500);
+  const totalCredits = Number(user?.creditsTotal ?? user?.credits_total ?? user?.creditsRemaining ?? 500);
+  updateCreditsUI(user?.creditsRemaining ?? 500, totalCredits);
   bootstrapAuthenticatedUI({
     ...user,
     plan: user?.plan ?? 'Free',
-    creditsRemaining: user?.creditsRemaining ?? 500
+    creditsRemaining: user?.creditsRemaining ?? 500,
+    creditsTotal: totalCredits
   });
 }
 
@@ -1144,8 +1180,77 @@ function clearChatState() {
   updateClearChatButtonState();
 }
 
+function getVersionStorageKey(id = sessionId) {
+  return `maya_code_versions:${id || 'default'}`;
+}
+
+function generateVersionId() {
+  return window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `version-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function persistVersionStack() {
+  if (!window.localStorage) {
+    return;
+  }
+  const key = getVersionStorageKey();
+  window.localStorage.setItem(key, JSON.stringify(codeVersionStack));
+}
+
+function loadVersionStack() {
+  if (!window.localStorage) {
+    return [];
+  }
+  const key = getVersionStorageKey();
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(key) || '[]');
+    if (!Array.isArray(stored)) {
+      return [];
+    }
+    return stored.filter((entry) => entry && typeof entry.code === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function seedVersionStack({ code, source = 'user' }) {
+  const normalizedCode = typeof code === 'string' ? code : '';
+  if (codeVersionStack.length && codeVersionStack.at(-1)?.code === normalizedCode) {
+    return;
+  }
+  const version = {
+    id: generateVersionId(),
+    sessionId,
+    code: normalizedCode,
+    createdAt: new Date().toISOString(),
+    source
+  };
+  codeVersionStack.push(version);
+  if (codeVersionStack.length > MAX_CODE_HISTORY) {
+    codeVersionStack.splice(0, codeVersionStack.length - MAX_CODE_HISTORY);
+  }
+  persistVersionStack();
+}
+
+function initializeVersionStack() {
+  codeVersionStack.length = 0;
+  const stored = loadVersionStack();
+  if (stored.length) {
+    codeVersionStack.push(...stored.slice(-MAX_CODE_HISTORY));
+  }
+  if (codeEditor) {
+    seedVersionStack({
+      code: codeEditor.value,
+      source: lastCodeSource === 'llm' ? 'llm' : 'user'
+    });
+  }
+  updateRevertButtonState();
+}
+
 function resetCodeHistory() {
-  codeHistory.length = 0;
+  codeVersionStack.length = 0;
+  persistVersionStack();
   updateRevertButtonState();
 }
 
@@ -1163,6 +1268,10 @@ function clearEditorState() {
   lastCodeSource = null;
   userHasEditedCode = false;
   resetCodeHistory();
+  seedVersionStack({
+    code: codeEditor.value,
+    source: 'user'
+  });
   updateLineNumbers();
   updateRunButtonVisibility();
   updateRollbackVisibility();
@@ -3826,10 +3935,11 @@ function getUserContext() {
 }
 
 function parseAnalyticsSummary(payload) {
-  const summary = payload?.summary ?? payload?.analytics ?? payload?.data ?? payload ?? {};
-  const dailyLimit = Number(summary.daily_limit ?? summary.dailyLimit);
+  const summary = payload?.overview ?? payload?.summary ?? payload?.analytics ?? payload?.data ?? payload ?? {};
+  const dailyLimit = Number(payload?.daily_limit ?? summary.daily_limit ?? summary.dailyLimit);
   const creditsUsedToday = Number(
-    summary.credits_used_today
+    payload?.credits_used_today
+    ?? summary.credits_used_today
     ?? summary.creditsUsedToday
     ?? summary.credits_used
     ?? summary.creditsUsed
@@ -3859,15 +3969,11 @@ async function fetchUsageAnalytics({ force = false } = {}) {
     return analyticsCache.data;
   }
 
-  const context = getUserContext();
-  if (!context.id) {
-    return null;
-  }
-
   try {
     const res = await withTimeout(
-      fetch(`/usage/analytics?user_id=${encodeURIComponent(context.id)}&days=1`, {
-        cache: 'no-store'
+      fetch(`${API_BASE}/api/usage/overview`, {
+        cache: 'no-store',
+        credentials: 'include'
       }),
       ANALYTICS_TIMEOUT_MS,
       'Analytics request timed out'
@@ -3889,46 +3995,6 @@ async function fetchUsageAnalytics({ force = false } = {}) {
     console.warn('Usage analytics fetch failed.', error);
     return null;
   }
-}
-
-function parseCsvRow(row) {
-  const out = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < row.length; i += 1) {
-    const char = row[i];
-    if (char === '"') {
-      if (inQuotes && row[i + 1] === '"') {
-        current += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      out.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  out.push(current);
-  return out;
-}
-
-function parseCsv(text) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const lines = trimmed.split(/\r?\n/);
-  const headers = parseCsvRow(lines[0]);
-  return lines.slice(1).filter(Boolean).map((line) => {
-    const values = parseCsvRow(line);
-    return headers.reduce((acc, header, index) => {
-      acc[header] = values[index] ?? '';
-      return acc;
-    }, {});
-  });
 }
 
 function toNumber(value) {
@@ -3962,116 +4028,56 @@ function formatRequestId(id, isAdmin) {
   return `req_••••${suffix}`;
 }
 
-function getFallbackUsageRows(userId, email) {
-  const today = new Date();
-  const intents = ['code', 'text'];
-  return Array.from({ length: 28 }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (27 - index));
-    const daySeed = index + 1;
-    const entries = Math.max(4, Math.round(6 + Math.sin(daySeed) * 4));
-    return Array.from({ length: entries }, (__, entryIndex) => {
-      const intent = intents[(entryIndex + index) % intents.length];
-      const credits = intent === 'code' ? 60 + entryIndex * 6 : 24 + entryIndex * 2;
-      return {
-        timestamp_utc: new Date(date.getFullYear(), date.getMonth(), date.getDate(), 9 + entryIndex).toISOString(),
-        user_id: userId,
-        email,
-        session_id: `session_${daySeed}`,
-        request_id: `req_${daySeed}_${entryIndex}`,
-        intent_type: intent,
-        model: 'gpt-4.1-mini',
-        input_chars: 1800,
-        input_est_tokens: 450,
-        output_chars: 820,
-        output_est_tokens: 270,
-        total_est_tokens: 720,
-        credits_charged: credits,
-        latency_ms: 1800 + entryIndex * 120,
-        status: entryIndex % 6 === 0 ? 'error' : 'success'
-      };
-    });
-  }).flat();
+async function fetchUsageOverview({ force = false } = {}) {
+  return fetchUsageAnalytics({ force });
 }
 
-function getFallbackUserRows(userId, email) {
-  return [
-    {
-      user_id: userId,
-      email,
-      display_name: 'Demo User',
-      plan_tier: 'starter',
-      credits_total: 5000,
-      credits_remaining: 4182
-    },
-    {
-      user_id: 'user_studio',
-      email: 'studio@maya.dev',
-      display_name: 'Studio',
-      plan_tier: 'power',
-      credits_total: 100000,
-      credits_remaining: 86000
-    }
-  ];
-}
-
-async function loadUsageCsv() {
-  const now = Date.now();
-  if (usageCache.usageRows && now - usageCache.fetchedAt < USAGE_CACHE_TTL_MS) {
-    return { usageRows: usageCache.usageRows, userRows: usageCache.userRows };
+async function fetchUsageDaily({ days = 14, force = false } = {}) {
+  const params = new URLSearchParams();
+  if (Number.isFinite(days)) {
+    params.set('range', `${days}d`);
   }
-
-  const [usageRes, usersRes] = await Promise.all([
-    withTimeout(
-      fetch('data/usage_log.csv', { cache: 'no-store' }),
+  try {
+    const res = await withTimeout(
+      fetch(`${API_BASE}/api/usage/daily?${params.toString()}`, {
+        cache: force ? 'no-store' : 'default',
+        credentials: 'include'
+      }),
       USAGE_FETCH_TIMEOUT_MS,
-      'Usage log request timed out'
-    ),
-    withTimeout(
-      fetch('data/users.csv', { cache: 'no-store' }),
-      USAGE_FETCH_TIMEOUT_MS,
-      'Usage users request timed out'
-    )
-  ]);
-
-  const [usageText, usersText] = await Promise.all([
-    usageRes.ok
-      ? withTimeout(usageRes.text(), USAGE_FETCH_TIMEOUT_MS, 'Usage log response timed out')
-      : '',
-    usersRes.ok
-      ? withTimeout(usersRes.text(), USAGE_FETCH_TIMEOUT_MS, 'Usage users response timed out')
-      : ''
-  ]);
-
-  let usageRows = parseCsv(usageText);
-  let userRows = parseCsv(usersText);
-
-  const context = getUserContext();
-  if (!usageRows.length) {
-    usageRows = getFallbackUsageRows(context.id || 'user_demo', context.email || 'demo@maya.dev');
+      'Usage daily request timed out'
+    );
+    if (!res.ok) {
+      throw new Error('Usage daily unavailable');
+    }
+    return await res.json();
+  } catch (error) {
+    console.warn('Usage daily fetch failed.', error);
+    return { daily: [] };
   }
-  if (!userRows.length) {
-    userRows = getFallbackUserRows(context.id || 'user_demo', context.email || 'demo@maya.dev');
-  }
-
-  usageCache.usageRows = usageRows;
-  usageCache.userRows = userRows;
-  usageCache.fetchedAt = now;
-  return { usageRows, userRows };
 }
 
-function filterUsageRowsByDays(rows, days) {
-  if (!Number.isFinite(days)) {
-    return rows;
+async function fetchUsageHistory({ days = 14, force = false } = {}) {
+  const params = new URLSearchParams();
+  if (Number.isFinite(days)) {
+    params.set('range', `${days}d`);
   }
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return rows.filter((row) => {
-    const timestamp = new Date(row.timestamp_utc).getTime();
-    if (!Number.isFinite(timestamp)) {
-      return false;
+  try {
+    const res = await withTimeout(
+      fetch(`${API_BASE}/api/usage/history?${params.toString()}`, {
+        cache: force ? 'no-store' : 'default',
+        credentials: 'include'
+      }),
+      USAGE_FETCH_TIMEOUT_MS,
+      'Usage history request timed out'
+    );
+    if (!res.ok) {
+      throw new Error('Usage history unavailable');
     }
-    return timestamp >= cutoff;
-  });
+    return await res.json();
+  } catch (error) {
+    console.warn('Usage history fetch failed.', error);
+    return { daily: [] };
+  }
 }
 
 function buildSessionSummaries(rows) {
@@ -4138,18 +4144,19 @@ function renderAccountSessionHistory(summaries) {
   });
 }
 
-function renderAccountMonthlySummary(rows, summaries) {
+function renderAccountMonthlySummary(rows, summaries, overviewTotals = null) {
   if (!accountMonthCreditsEl || !accountMonthSessionsEl || !accountMonthAvgCreditsEl) {
     return;
   }
-  const monthTotals = rows.length
-    ? getMonthTotals(rows)
-    : {
-      totalCredits: summaries.reduce((sum, entry) => sum + toNumber(entry.credits_used), 0),
-      totalRequests: 0,
-      avgLatency: 0,
-      successRate: 0
-    };
+  const monthTotals = overviewTotals
+    || (rows.length
+      ? getMonthTotals(rows)
+      : {
+        totalCredits: summaries.reduce((sum, entry) => sum + toNumber(entry.credits_used), 0),
+        totalRequests: 0,
+        avgLatency: 0,
+        successRate: 0
+      });
   const sessionCount = summaries.length;
   const avgCredits = sessionCount
     ? Math.round(monthTotals.totalCredits / sessionCount)
@@ -4159,21 +4166,6 @@ function renderAccountMonthlySummary(rows, summaries) {
   accountMonthAvgCreditsEl.textContent = formatNumber(avgCredits);
 }
 
-async function fetchUsageSummaryFromApi(days) {
-  const params = new URLSearchParams();
-  params.set('group_by', 'session');
-  if (Number.isFinite(days)) {
-    params.set('days', `${days}`);
-  }
-  const res = await fetch(`${API_BASE}/api/usage/summary?${params.toString()}`, {
-    credentials: 'include'
-  });
-  if (!res.ok) {
-    throw new Error('Usage summary unavailable');
-  }
-  return res.json().catch(() => ({}));
-}
-
 async function loadAccountUsageHistory() {
   if (!accountPage || accountState.loading) {
     return;
@@ -4181,52 +4173,30 @@ async function loadAccountUsageHistory() {
   accountState.loading = true;
   const rangeDays = ACCOUNT_RANGE_STEPS[accountState.rangeIndex] || ACCOUNT_RANGE_STEPS[0];
   let usageRows = [];
-  let usageRowsForMonth = [];
+  let monthTotals = null;
   let sessionSummaries = [];
   try {
-    const apiData = await fetchUsageSummaryFromApi(rangeDays);
-    const sessions = apiData?.sessions || apiData?.data || [];
-    if (Array.isArray(sessions)) {
-      sessionSummaries = sessions.map((session) => ({
-        session_id: session.session_id || session.id || session.sessionId,
-        started_at: session.started_at || session.startedAt,
-        ended_at: session.ended_at || session.endedAt,
-        turns: toNumber(session.turns),
-        credits_used: toNumber(session.credits_used || session.credits_used_estimate || session.credits),
-        tokens_in: toNumber(session.tokens_in),
-        tokens_out: toNumber(session.tokens_out)
-      }));
+    const [overview, history] = await Promise.all([
+      fetchUsageOverview({ force: true }),
+      fetchUsageHistory({ days: rangeDays, force: true })
+    ]);
+    const daily = Array.isArray(history?.daily) ? history.daily : [];
+    usageRows = daily.flatMap((entry) => entry.entries || []);
+    sessionSummaries = buildSessionSummaries(usageRows);
+    if (overview?.overview) {
+      monthTotals = {
+        totalCredits: toNumber(overview.overview.total_credits),
+        totalRequests: toNumber(overview.overview.total_requests),
+        avgLatency: toNumber(overview.overview.avg_latency_ms),
+        successRate: Number.isFinite(overview.overview.success_rate)
+          ? overview.overview.success_rate
+          : 0
+      };
     }
   } catch (error) {
-    try {
-      const { usageRows: csvRows } = await loadUsageCsv();
-      const context = getUserContext();
-      const filtered = filterUsageRows(
-        csvRows,
-        { userId: context.id, planTier: 'all', startDate: '', endDate: '' },
-        {},
-        false
-      );
-      usageRowsForMonth = filtered;
-      usageRows = filterUsageRowsByDays(filtered, rangeDays);
-      sessionSummaries = buildSessionSummaries(usageRows);
-    } catch (fallbackError) {
-      console.warn('Account usage fallback failed.', fallbackError);
-      sessionSummaries = [];
-    }
-  }
-
-  if (!usageRows.length) {
-    const { usageRows: csvRows } = await loadUsageCsv();
-    const context = getUserContext();
-    const filtered = filterUsageRows(
-      csvRows,
-      { userId: context.id, planTier: 'all', startDate: '', endDate: '' },
-      {},
-      false
-    );
-    usageRowsForMonth = filtered;
-    usageRows = filterUsageRowsByDays(filtered, rangeDays);
+    console.warn('Account usage load failed.', error);
+    usageRows = [];
+    sessionSummaries = [];
   }
 
   accountState.sessionHistory = sessionSummaries;
@@ -4239,81 +4209,8 @@ async function loadAccountUsageHistory() {
     accountHistoryLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
   }
   renderAccountSessionHistory(sessionSummaries);
-  renderAccountMonthlySummary(usageRowsForMonth.length ? usageRowsForMonth : usageRows, sessionSummaries);
+  renderAccountMonthlySummary(usageRows, sessionSummaries, monthTotals);
   accountState.loading = false;
-}
-
-function buildUsersById(userRows) {
-  return userRows.reduce((acc, row) => {
-    acc[row.user_id] = row;
-    return acc;
-  }, {});
-}
-
-function filterUsageRows(rows, filters, usersById, isAdmin) {
-  return rows.filter((row) => {
-    if (!isAdmin && filters.userId && row.user_id !== filters.userId) {
-      return false;
-    }
-    if (filters.userId && filters.userId !== 'all' && row.user_id !== filters.userId) {
-      return false;
-    }
-    if (filters.planTier && filters.planTier !== 'all') {
-      const plan = usersById[row.user_id]?.plan_tier || 'free';
-      if (plan !== filters.planTier) {
-        return false;
-      }
-    }
-    if (filters.startDate) {
-      const day = row.timestamp_utc.slice(0, 10);
-      if (day < filters.startDate) {
-        return false;
-      }
-    }
-    if (filters.endDate) {
-      const day = row.timestamp_utc.slice(0, 10);
-      if (day > filters.endDate) {
-        return false;
-      }
-    }
-    return true;
-  });
-}
-
-function buildDailyAggregates(rows) {
-  const map = new Map();
-  rows.forEach((row) => {
-    const date = row.timestamp_utc.slice(0, 10);
-    if (!map.has(date)) {
-      map.set(date, {
-        date,
-        total_requests: 0,
-        total_credits: 0,
-        avg_latency_ms: 0,
-        success_rate: 0,
-        by_intent: { code: 0, text: 0 },
-        entries: []
-      });
-    }
-    const daily = map.get(date);
-    const intent = row.intent_type || 'text';
-    daily.total_requests += 1;
-    daily.total_credits += toNumber(row.credits_charged);
-    daily.avg_latency_ms += toNumber(row.latency_ms);
-    daily.by_intent[intent] = (daily.by_intent[intent] || 0) + 1;
-    daily.entries.push(row);
-    if (row.status === 'success') {
-      daily.success_rate += 1;
-    }
-  });
-
-  return Array.from(map.values())
-    .map((daily) => ({
-      ...daily,
-      avg_latency_ms: daily.total_requests ? daily.avg_latency_ms / daily.total_requests : 0,
-      success_rate: daily.total_requests ? daily.success_rate / daily.total_requests : 0
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function getMonthTotals(rows) {
@@ -4334,17 +4231,6 @@ function getMonthTotals(rows) {
 
 function getRangeLabel(days) {
   return `Last ${days} days`;
-}
-
-function clampDailyRange(dailyAggregates, rangeDays, startDate, endDate) {
-  if (startDate || endDate) {
-    return dailyAggregates;
-  }
-  const total = dailyAggregates.length;
-  if (total <= rangeDays) {
-    return dailyAggregates;
-  }
-  return dailyAggregates.slice(total - rangeDays);
 }
 
 function buildCreditsSplit(daily, freeRemaining) {
@@ -4597,45 +4483,39 @@ async function refreshUsageView() {
     analyticsModalState.error = null;
   }
   try {
-    const { usageRows, userRows } = await loadUsageCsv();
-    if (analyticsModalState.open) {
-      analyticsModalState.data = { usageRows, userRows };
-    }
-    const isAdmin = window.location.pathname.startsWith('/admin/usage');
-    const usersById = buildUsersById(userRows);
-    const baseUserId = getUserContext().id;
-
-    const filters = {
-      userId: isAdmin ? (usageUserFilter?.value || 'all') : baseUserId,
-      planTier: isAdmin ? (usagePlanFilter?.value || 'all') : 'all',
-      startDate: isAdmin ? usageStartDate?.value : '',
-      endDate: isAdmin ? usageEndDate?.value : ''
-    };
-
-    const filteredRows = filterUsageRows(usageRows, filters, usersById, isAdmin);
-    const dailyAggregates = buildDailyAggregates(filteredRows);
     const rangeDays = USAGE_RANGE_STEPS[usageState.rangeIndex] || USAGE_RANGE_STEPS[0];
-    const dailyRange = clampDailyRange(dailyAggregates, rangeDays, filters.startDate, filters.endDate);
-    const monthTotals = getMonthTotals(filteredRows);
+    const [overview, dailyData, historyData] = await Promise.all([
+      fetchUsageOverview({ force: true }),
+      fetchUsageDaily({ days: rangeDays, force: true }),
+      fetchUsageHistory({ days: rangeDays, force: true })
+    ]);
+    const dailyRange = Array.isArray(dailyData?.daily) ? dailyData.daily : [];
+    const historyDaily = Array.isArray(historyData?.daily) ? historyData.daily : [];
+    const monthTotals = overview?.overview
+      ? {
+        totalCredits: toNumber(overview.overview.total_credits),
+        totalRequests: toNumber(overview.overview.total_requests),
+        avgLatency: toNumber(overview.overview.avg_latency_ms),
+        successRate: Number.isFinite(overview.overview.success_rate)
+          ? overview.overview.success_rate
+          : 0
+      }
+      : { totalCredits: 0, totalRequests: 0, avgLatency: 0, successRate: 0 };
 
-    updateUsageScopeLabel(isAdmin, filters);
+    updateUsageScopeLabel(false, { userId: getUserContext().id });
     updateUsageCards(monthTotals, getCreditState());
     if (usageRangeLabel) {
-      usageRangeLabel.textContent = filters.startDate || filters.endDate
-        ? 'Custom range'
-        : getRangeLabel(rangeDays);
+      usageRangeLabel.textContent = getRangeLabel(rangeDays);
     }
 
-    renderCreditsChart(dailyRange, getCreditState(), isAdmin, filters.planTier);
+    renderCreditsChart(dailyRange, getCreditState(), false, '');
     renderRequestsChart(dailyRange);
     renderLatencyChart(dailyRange);
-    buildUsageHistory(dailyRange, isAdmin);
+    buildUsageHistory(historyDaily, false);
 
     if (usageLoadMore) {
       const canLoadMore = usageState.rangeIndex < USAGE_RANGE_STEPS.length - 1
-        && !filters.startDate
-        && !filters.endDate
-        && dailyAggregates.length > dailyRange.length;
+        && dailyRange.length >= rangeDays;
       usageLoadMore.disabled = !canLoadMore;
       usageLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
     }
@@ -4655,24 +4535,16 @@ async function initializeUsageFilters() {
   if (!usageUserFilter) {
     return;
   }
-  const { userRows } = await loadUsageCsv();
   const isAdmin = window.location.pathname.startsWith('/admin/usage');
   if (!isAdmin) {
     return;
   }
   usageUserFilter.innerHTML = '';
-  const allOption = document.createElement('option');
-  allOption.value = 'all';
-  allOption.textContent = 'All users';
-  usageUserFilter.appendChild(allOption);
-  userRows.forEach((row) => {
-    const option = document.createElement('option');
-    option.value = row.user_id;
-    option.textContent = row.display_name
-      ? `${row.display_name} (${row.email || row.user_id})`
-      : row.email || row.user_id;
-    usageUserFilter.appendChild(option);
-  });
+  const currentUser = getUserContext();
+  const option = document.createElement('option');
+  option.value = currentUser.id || 'me';
+  option.textContent = currentUser.email || 'Current user';
+  usageUserFilter.appendChild(option);
 }
 
 function openUsageModal() {
@@ -4699,6 +4571,14 @@ function closeUsageModal() {
   analyticsModalState.open = false;
   analyticsModalState.loading = false;
   analyticsModalState.error = null;
+  analyticsModalState.data = null;
+  usageState.rangeIndex = 0;
+  destroyChart(usageState.charts.credits);
+  destroyChart(usageState.charts.requests);
+  destroyChart(usageState.charts.latency);
+  usageState.charts.credits = null;
+  usageState.charts.requests = null;
+  usageState.charts.latency = null;
   clearAnalyticsModalWatchdog();
   usageModal.classList.add('hidden');
   document.body.style.overflow = '';
@@ -5359,8 +5239,8 @@ let loadingInterval = null;
 let isGenerating = false;
 let isPaywallVisible = false;
 let lastLLMCode = null;
-const MAX_CODE_HISTORY = 10;
-const codeHistory = [];
+const MAX_CODE_HISTORY = 20;
+const codeVersionStack = [];
 let userHasEditedCode = false;
 let baseExecutionWarnings = [];
 let sandboxMode = 'finite';
@@ -6271,7 +6151,11 @@ function applyUsageToCredits(usage) {
   }
   const root = document.getElementById('root');
   if (root) {
-    root.dataset.remainingCredits = `${remainingCredits}`;
+    const total = Number(root.dataset.creditsTotal ?? '');
+    const clampedRemaining = Number.isFinite(total)
+      ? clamp(remainingCredits, 0, total)
+      : Math.max(0, remainingCredits);
+    root.dataset.remainingCredits = `${clampedRemaining}`;
     if (Number.isFinite(creditsCharged)) {
       const currentUsed = Number.parseInt(root.dataset.todayCreditsUsed ?? '0', 10);
       const updatedUsed = Number.isFinite(currentUsed) ? currentUsed + creditsCharged : creditsCharged;
@@ -6535,7 +6419,7 @@ function updateRevertButtonState() {
   if (!revertButton) {
     return;
   }
-  const hasHistory = codeHistory.length > 0;
+  const hasHistory = codeVersionStack.length > 1;
   revertButton.disabled = !hasHistory;
   revertButton.setAttribute('aria-disabled', hasHistory ? 'false' : 'true');
 }
@@ -6555,11 +6439,15 @@ function applyLLMEdit(newCode) {
   }
   const previousCode = codeEditor.value;
   if (typeof previousCode === 'string') {
-    codeHistory.push(previousCode);
-    if (codeHistory.length > MAX_CODE_HISTORY) {
-      codeHistory.splice(0, codeHistory.length - MAX_CODE_HISTORY);
-    }
+    seedVersionStack({
+      code: previousCode,
+      source: lastCodeSource === 'llm' ? 'llm' : 'user'
+    });
   }
+  seedVersionStack({
+    code: newCode,
+    source: 'llm'
+  });
   codeEditor.value = newCode;
   updateRevertButtonState();
 }
@@ -7735,7 +7623,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
-  updateRevertButtonState();
+  initializeVersionStack();
   updateSaveCodeButtonState();
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
@@ -7749,14 +7637,19 @@ document.addEventListener('DOMContentLoaded', () => {
     console.warn('⚠️ Revert button not found');
   } else {
     revertButton.addEventListener('click', () => {
-      const lastVersion = codeHistory.pop();
-      updateRevertButtonState();
-      if (typeof lastVersion !== 'string') {
+      if (codeVersionStack.length < 2) {
         return;
       }
-      codeEditor.value = lastVersion;
+      codeVersionStack.pop();
+      persistVersionStack();
+      const previousVersion = codeVersionStack.at(-1);
+      updateRevertButtonState();
+      if (!previousVersion || typeof previousVersion.code !== 'string') {
+        return;
+      }
+      codeEditor.value = previousVersion.code;
       userHasEditedCode = codeEditor.value !== baselineCode;
-      lastCodeSource = 'user';
+      lastCodeSource = previousVersion.source === 'llm' ? 'llm' : 'user';
       updateRunButtonVisibility();
       updateRollbackVisibility();
       updatePromoteVisibility();
