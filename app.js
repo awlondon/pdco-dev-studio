@@ -198,6 +198,8 @@ const paywallSecondaryButton = document.getElementById('paywall-secondary');
 const paywallTertiaryButton = document.getElementById('paywall-tertiary');
 const paywallCloseButton = document.getElementById('paywall-close');
 const codeEditor = document.getElementById('code-editor');
+const clearChatButton = document.getElementById('clearChatButton');
+const toast = document.getElementById('toast');
 const lineNumbersEl = document.getElementById('line-numbers');
 const lineCountEl = document.getElementById('line-count');
 const consoleLog = document.getElementById('console-output-log');
@@ -292,6 +294,17 @@ const defaultInterfaceCode = `<!doctype html>
 <div id="app"></div>
 </body>
 </html>`;
+
+const DEFAULT_MODEL = 'gpt-4.1-mini';
+const DEFAULT_SYSTEM_PROMPT = `You are a coding assistant.
+
+Output rules:
+- Never output JSON, YAML, or code fences.
+- If you return HTML, the FIRST line must be:
+  <!--CHAT: <a short conversational message for the user> -->
+  Then output a complete HTML document.
+- If no HTML is needed, output plain conversational text only.
+- If a visual is requested as part of a technical discussion, prioritize correctness and demonstration over expressiveness or celebration.`;
 
 const SESSION_BRIDGE_MARKER = '<!-- MAYA_SESSION_BRIDGE -->';
 const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
@@ -904,6 +917,24 @@ const ModalManager = (() => {
 
 window.ModalManager = ModalManager;
 
+let toastTimerId = null;
+
+function showToast(message, { variant = 'error', duration = 4000 } = {}) {
+  if (!toast) {
+    return;
+  }
+  toast.textContent = message;
+  toast.classList.toggle('error', variant === 'error');
+  toast.classList.remove('hidden');
+  if (toastTimerId) {
+    clearTimeout(toastTimerId);
+  }
+  toastTimerId = setTimeout(() => {
+    toast.classList.add('hidden');
+    toast.classList.remove('error');
+  }, duration);
+}
+
 function getAuthenticatedUser() {
   if (!Auth.token || !Auth.user) {
     return null;
@@ -919,9 +950,18 @@ function setAuthenticatedUser(user, provider) {
   applyAuthToRoot();
 }
 
+function updateClearChatButtonState() {
+  if (!clearChatButton) {
+    return;
+  }
+  const hasMessages = Boolean(chatMessages?.querySelector('.message'));
+  clearChatButton.disabled = !hasMessages;
+}
+
 function clearChatState() {
   if (chatMessages) {
     chatMessages.innerHTML = '';
+    chatMessages.scrollTop = 0;
   }
   if (chatInput) {
     chatInput.value = '';
@@ -935,6 +975,7 @@ function clearChatState() {
     clearTimeout(chatState.unlockTimerId);
     chatState.unlockTimerId = null;
   }
+  updateClearChatButtonState();
 }
 
 function clearEditorState() {
@@ -951,12 +992,101 @@ function clearEditorState() {
   lastCodeSource = null;
   userHasEditedCode = false;
   updateLineNumbers();
+  updateRunButtonVisibility();
+  updateRollbackVisibility();
+  updatePromoteVisibility();
 }
 
 function clearPreviewState() {
   if (sandboxFrame) {
     sandboxFrame.src = 'about:blank';
   }
+}
+
+function abortActiveChat({ silent = false } = {}) {
+  if (!chatAbortController || !isGenerating) {
+    return;
+  }
+  chatAbortSilent = silent;
+  chatAbortController.abort();
+}
+
+function startNewSession() {
+  systemPrompt = DEFAULT_SYSTEM_PROMPT;
+  sessionId = startNewSessionId();
+  chatAbortController = null;
+  chatAbortSilent = false;
+  clearChatState();
+  clearEditorState();
+  clearPreviewState();
+  resetExecutionPreparation();
+  updateGenerationIndicator();
+  chatInput?.focus();
+}
+
+function setClearChatModalButtonsDisabled(disabled) {
+  ['clearChatSave', 'clearChatDiscard', 'clearChatCancel'].forEach((id) => {
+    const button = document.getElementById(id);
+    if (button) {
+      button.disabled = disabled;
+    }
+  });
+}
+
+async function handleClearChat(mode) {
+  if (clearChatInProgress) {
+    return;
+  }
+  clearChatInProgress = true;
+  setClearChatModalButtonsDisabled(true);
+  try {
+    if (mode === 'save') {
+      await saveChatToJSON();
+    }
+    startNewSession();
+    ModalManager.close();
+  } catch (error) {
+    console.error('Failed to save chat export.', error);
+    showToast('Unable to save this chat. Please try again.');
+    setClearChatModalButtonsDisabled(false);
+    clearChatInProgress = false;
+    return;
+  }
+  clearChatInProgress = false;
+}
+
+function openClearChatModal() {
+  if (!chatMessages?.querySelector('.message')) {
+    return;
+  }
+  if (isGenerating) {
+    abortActiveChat({ silent: true });
+  }
+  const html = `
+    <h2>Start a new chat?</h2>
+    <p>This will clear the current chat and editor. You can save it first.</p>
+    <div class="modal-actions">
+      <button id="clearChatSave" type="button">Save &amp; Clear</button>
+      <button id="clearChatDiscard" class="danger" type="button">Clear Without Saving</button>
+      <button id="clearChatCancel" class="secondary" type="button">Cancel</button>
+    </div>
+  `;
+  ModalManager.open(html, { dismissible: true, onClose: () => {
+    clearChatInProgress = false;
+  } });
+
+  document.getElementById('clearChatSave')?.addEventListener('click', () => {
+    handleClearChat('save');
+  });
+  document.getElementById('clearChatDiscard')?.addEventListener('click', () => {
+    handleClearChat('discard');
+  });
+  document.getElementById('clearChatCancel')?.addEventListener('click', () => {
+    if (clearChatInProgress) {
+      return;
+    }
+    ModalManager.close();
+  });
 }
 
 function resetAppToUnauthed() {
@@ -1129,7 +1259,13 @@ function unlockUI() {
   document.body.style.overflow = '';
 }
 
-const sessionId = (() => {
+function generateSessionId() {
+  return window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getOrCreateSessionId() {
   if (typeof window === 'undefined') {
     return '';
   }
@@ -1137,12 +1273,22 @@ const sessionId = (() => {
   if (stored) {
     return stored;
   }
-  const created = window.crypto?.randomUUID
-    ? window.crypto.randomUUID()
-    : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const created = generateSessionId();
   window.sessionStorage?.setItem('mayaSessionId', created);
   return created;
-})();
+}
+
+function startNewSessionId() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  const created = generateSessionId();
+  window.sessionStorage?.setItem('mayaSessionId', created);
+  return created;
+}
+
+let sessionId = getOrCreateSessionId();
+let systemPrompt = DEFAULT_SYSTEM_PROMPT;
 
 const isDev = window.location.hostname === 'localhost'
   || window.location.hostname === '127.0.0.1';
@@ -2418,6 +2564,13 @@ function estimateTokensForRequest({ userInput, currentCode }) {
   return Math.ceil(chars / 4);
 }
 
+function estimateTokensForContent(content) {
+  if (!content) {
+    return 0;
+  }
+  return Math.ceil(content.length / 4);
+}
+
 function tokensToCredits(tokenCount) {
   if (!Number.isFinite(tokenCount) || tokenCount <= 0) {
     return 0;
@@ -2436,6 +2589,94 @@ function estimateCreditsPreview({ userInput, currentCode }) {
     estimated: estimatedCredits,
     reserved: reservedCredits
   };
+}
+
+function formatTimestampForFilename(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(
+    date.getHours()
+  )}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function getMessageRole(messageEl) {
+  if (!messageEl) {
+    return 'assistant';
+  }
+  const role = messageEl.dataset.role;
+  if (role) {
+    return role;
+  }
+  if (messageEl.classList.contains('user')) {
+    return 'user';
+  }
+  if (messageEl.classList.contains('system')) {
+    return 'system';
+  }
+  return 'assistant';
+}
+
+function getChatExportMessages() {
+  if (!chatMessages) {
+    return [];
+  }
+  const messageEls = Array.from(chatMessages.querySelectorAll('.message'));
+  return messageEls
+    .filter((messageEl) => {
+      if (messageEl.dataset.ephemeral === 'true') {
+        return false;
+      }
+      if (messageEl.dataset.pending === 'true') {
+        return false;
+      }
+      return !messageEl.classList.contains('thinking');
+    })
+    .map((messageEl) => {
+      const content = getMessageCopyText(messageEl);
+      const timestamp = messageEl.dataset.timestamp || new Date().toISOString();
+      return {
+        role: getMessageRole(messageEl),
+        timestamp,
+        content,
+        tokens_estimated: estimateTokensForContent(content)
+      };
+    });
+}
+
+function buildChatExportPayload() {
+  const now = new Date();
+  const creditState = getCreditState();
+  return {
+    schema_version: '1.0',
+    app: 'maya-dev-ui',
+    saved_at: now.toISOString(),
+    user_id: getUserContext().id || '',
+    session_id: generateSessionId(),
+    messages: getChatExportMessages(),
+    editor: {
+      language: 'html',
+      content: codeEditor?.value ?? ''
+    },
+    metadata: {
+      model: DEFAULT_MODEL,
+      credits_used_estimate: creditState.todayCreditsUsed ?? 0
+    }
+  };
+}
+
+async function saveChatToJSON() {
+  const payload = buildChatExportPayload();
+  const filename = `maya-chat-${formatTimestampForFilename(new Date())}.json`;
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json'
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function getEstimatedNextCost() {
@@ -2902,6 +3143,9 @@ let chatFinalized = false;
 let currentTurnMessageId = null;
 let pendingAssistantProposal = null;
 let intentAnchor = null;
+let chatAbortController = null;
+let chatAbortSilent = false;
+let clearChatInProgress = false;
 const DEBUG_INTENT = false;
 const chatState = {
   locked: false,
@@ -3172,10 +3416,21 @@ function setStatus(status, source) {
   interfaceStatus.classList.toggle('unchanged', !isUpdated);
 }
 
+function stampMessage(message, role) {
+  if (!message) {
+    return;
+  }
+  message.dataset.role = role;
+  if (!message.dataset.timestamp) {
+    message.dataset.timestamp = new Date().toISOString();
+  }
+}
+
 function addMessage(role, html, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}${options.className ? ` ${options.className}` : ''}`;
   message.innerHTML = html;
+  stampMessage(message, role);
 
   if (options.pending) {
     message.dataset.pending = 'true';
@@ -3186,6 +3441,7 @@ function addMessage(role, html, options = {}) {
 
   chatMessages.appendChild(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  updateClearChatButtonState();
   return id;
 }
 
@@ -3196,12 +3452,13 @@ function renderSystemMessage(messageId, text) {
     const messageEl = document.querySelector(`[data-id="${messageId}"]`);
     if (messageEl) {
       messageEl.classList.add('system');
+      stampMessage(messageEl, 'system');
       delete messageEl.dataset.pending;
     }
     return messageEl;
   }
 
-  const id = addMessage('assistant', `<em>${safeText}</em>`, { className: 'system' });
+  const id = addMessage('system', `<em>${safeText}</em>`);
   return document.querySelector(`[data-id="${id}"]`);
 }
 
@@ -3246,8 +3503,10 @@ function appendMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}${options.className ? ` ${options.className}` : ''}`;
   message.textContent = content;
+  stampMessage(message, role);
   chatMessages.appendChild(message);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  updateClearChatButtonState();
   if (role === 'user') {
     attachCopyButton(message, () => content);
   }
@@ -4241,15 +4500,9 @@ async function sendChat() {
   let throttleSnapshot = throttle;
   try {
     const llmStartTime = performance.now();
-    const systemPrompt = `You are a coding assistant.
-
-Output rules:
-- Never output JSON, YAML, or code fences.
-- If you return HTML, the FIRST line must be:
-  <!--CHAT: <a short conversational message for the user> -->
-  Then output a complete HTML document.
-- If no HTML is needed, output plain conversational text only.
-- If a visual is requested as part of a technical discussion, prioritize correctness and demonstration over expressiveness or celebration.`;
+    chatAbortController?.abort();
+    chatAbortController = new AbortController();
+    chatAbortSilent = false;
 
     const messages = [
       {
@@ -4262,7 +4515,7 @@ Output rules:
       }
     ];
 
-    console.log('LLM REQUEST:', { model: 'gpt-4.1-mini', messages });
+    console.log('LLM REQUEST:', { model: DEFAULT_MODEL, messages });
 
     if (!API_BASE) {
       throw new Error('API_BASE is not configured');
@@ -4271,6 +4524,7 @@ Output rules:
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: chatAbortController.signal,
       body: JSON.stringify({
         messages,
         sessionId,
@@ -4312,6 +4566,18 @@ Output rules:
     generationFeedback.stop();
   } catch (error) {
     generationFeedback.stop();
+    if (error?.name === 'AbortError') {
+      if (chatAbortSilent) {
+        const pendingMessage = document.querySelector(`[data-id="${pendingMessageId}"]`);
+        pendingMessage?.remove();
+        updateClearChatButtonState();
+        unlockChat();
+        stopLoading();
+        chatAbortController = null;
+        chatAbortSilent = false;
+        return;
+      }
+    }
     console.error(error);
     const message = error instanceof Error ? error.message : String(error);
     finalizeChatOnce(() => {
@@ -4322,8 +4588,12 @@ Output rules:
     });
     unlockChat();
     stopLoading();
+    chatAbortController = null;
+    chatAbortSilent = false;
     return;
   }
+  chatAbortController = null;
+  chatAbortSilent = false;
 
   let extractedText = '';
   let extractedCode = '';
@@ -4401,6 +4671,13 @@ chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   sendChat();
 });
+
+if (clearChatButton) {
+  clearChatButton.addEventListener('click', () => {
+    openClearChatModal();
+  });
+  updateClearChatButtonState();
+}
 
 if (chatInput) {
   chatInput.addEventListener('input', () => {

@@ -76,6 +76,26 @@ html, body {
   z-index: 1;
 }
 
+.toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  background: #12121c;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 12px 16px;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  max-width: 320px;
+  font-size: 13px;
+  z-index: 120;
+}
+
+.toast.error {
+  border-color: rgba(255, 107, 107, 0.4);
+  color: var(--error);
+}
+
 .auth-card h2,
 .modal-panel h2 {
   margin: 0 0 8px;
@@ -725,6 +745,11 @@ html, body {
 
 .icon-button:hover {
   color: rgba(255, 255, 255, 0.9);
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .icon-button.copied {
