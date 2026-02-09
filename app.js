@@ -692,7 +692,37 @@ function getSystemPromptForIntent(resolvedIntent) {
 
 const SESSION_BRIDGE_MARKER = '<!-- MAYA_SESSION_BRIDGE -->';
 const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
-<script id="maya-session-bridge">
+<script>
+  function mountEditor(containerId, value, language = "javascript") {
+    if (!window.__monacoReady) {
+      console.warn("Monaco not ready yet");
+      return;
+    }
+
+    const el = document.getElementById(containerId);
+    if (!el) {
+      console.warn("Editor container not found:", containerId);
+      return;
+    }
+
+    if (el.__editorInstance) {
+      el.__editorInstance.dispose();
+    }
+
+    el.__editorInstance = monaco.editor.create(el, {
+      value,
+      language,
+      theme: "vs-dark",
+      automaticLayout: true
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    mountEditor("editor", "// hello");
+  });
+</script>
+
+<script id="dev-session-bridge">
   window.__SESSION__ = window.__SESSION__ || null;
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'SESSION') {
