@@ -989,7 +989,7 @@ app.get('/api/usage/daily', async (req, res) => {
     if (!session) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
-    const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const days = parseRangeDays(req.query.range) ?? (Number(req.query.days) || 14);
     const pool = getUsageAnalyticsPool();
     if (pool) {
       const rows = await fetchUsageDailySummary({ userId: session.sub, days });
@@ -1028,7 +1028,7 @@ app.get('/api/usage/history', async (req, res) => {
     if (!session) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
-    const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const days = parseRangeDays(req.query.range) ?? (Number(req.query.days) || 14);
     const pool = getUsageAnalyticsPool();
     if (pool) {
       const events = await fetchUsageEventsByRange({ userId: session.sub, days });
