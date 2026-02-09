@@ -144,10 +144,6 @@ app.get('/api/me', async (req, res) => {
 
 app.post('/api/artifacts/metadata', async (req, res) => {
   try {
-    const session = await getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ ok: false, error: 'Unauthorized' });
-    }
     const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : transcript;
     const code = req.body?.code || {};
@@ -187,7 +183,6 @@ Return JSON only:
 
     if (!LLM_PROXY_URL) {
       return res.json({
-        ok: true,
         title: 'Untitled artifact',
         description: ''
       });
@@ -207,7 +202,6 @@ Return JSON only:
 
     if (!workerRes.ok) {
       return res.json({
-        ok: true,
         title: 'Untitled artifact',
         description: ''
       });
@@ -233,14 +227,12 @@ Return JSON only:
     }
 
     res.json({
-      ok: true,
       title: parsed?.title || 'Untitled artifact',
       description: parsed?.description || ''
     });
   } catch (error) {
     console.error('Failed to infer artifact metadata.', error);
     res.json({
-      ok: true,
       title: 'Untitled artifact',
       description: ''
     });
@@ -259,11 +251,12 @@ app.post('/api/artifacts', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
+    const screenshotDataUrl = resolveScreenshotDataUrl(req.body);
     const validation = validateArtifactPayload({
       title: req.body?.title,
       description: req.body?.description,
       code: req.body?.code,
-      screenshotDataUrl: req.body?.screenshot_data_url
+      screenshotDataUrl
     });
     if (!validation.ok) {
       console.error('Artifact payload rejected.', {
@@ -277,7 +270,7 @@ app.post('/api/artifacts', async (req, res) => {
     const artifactId = crypto.randomUUID();
     const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
     const code = req.body?.code || { language: 'html', content: '' };
-    const screenshotUrl = await persistArtifactScreenshot(req.body?.screenshot_data_url, artifactId);
+    const screenshotUrl = await persistArtifactScreenshot(screenshotDataUrl, artifactId);
     const derivedFrom = req.body?.derived_from || { artifact_id: null, owner_user_id: null };
     const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
@@ -355,7 +348,10 @@ app.post('/api/artifacts', async (req, res) => {
       });
     }
 
-    return res.json({ ok: true, artifact });
+    return res.json({
+      artifact_id: artifact.artifact_id,
+      screenshot_url: artifact.screenshot_url || ''
+    });
   } catch (error) {
     console.error('Failed to create artifact.', error);
     return res.status(500).json({ ok: false, error: 'Failed to create artifact' });
@@ -507,7 +503,7 @@ app.get('/api/profile/:handle', async (req, res) => {
     }
     const user = await getUserById(profile.user_id);
     const stats = await buildProfileStats(profile.user_id);
-    return res.json({ ok: true, profile: mapProfileForClient(profile, user, stats) });
+    return res.json(mapPublicProfile(profile, user, stats));
   } catch (error) {
     console.error('Failed to load public profile.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load profile' });
@@ -525,37 +521,47 @@ app.patch('/api/profile', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
     const { fields, files } = await parseMultipartRequest(req);
-    const handle = String(fields.handle || '').toLowerCase();
-    if (!handle) {
+    const profiles = await loadProfiles();
+    const now = new Date().toISOString();
+    const current = profiles.find((entry) => entry.user_id === user.user_id);
+    const nextHandle = String(fields.handle || current?.handle || '').toLowerCase();
+    if (!nextHandle) {
       console.error('Profile update rejected: missing handle.', { userId: user.user_id });
       return res.status(400).json({ ok: false, error: 'Handle is required' });
     }
-    const profiles = await loadProfiles();
-    const existing = profiles.find((entry) => entry.handle === handle);
+    const existing = profiles.find((entry) => entry.handle === nextHandle);
     if (existing && existing.user_id !== user.user_id) {
       console.error('Profile update rejected: handle taken.', {
         userId: user.user_id,
-        handle
+        handle: nextHandle
       });
       return res.status(409).json({ ok: false, error: 'Handle is already taken' });
     }
-    const now = new Date().toISOString();
-    const current = profiles.find((entry) => entry.user_id === user.user_id);
     let avatarUrl = current?.avatar_url || '';
     if (files.avatar) {
       avatarUrl = await persistProfileAvatar(files.avatar, user.user_id);
+    } else if (fields.avatar_url !== undefined) {
+      avatarUrl = String(fields.avatar_url || '');
     }
     const demographics = {
-      age: fields.age ? Number(fields.age) : null,
-      gender: String(fields.gender || '').trim(),
-      city: String(fields.city || '').trim(),
-      country: String(fields.country || '').trim()
+      age: fields.age !== undefined ? Number(fields.age) || null : current?.demographics?.age ?? null,
+      gender: fields.gender !== undefined
+        ? String(fields.gender || '').trim()
+        : current?.demographics?.gender || '',
+      city: fields.city !== undefined
+        ? String(fields.city || '').trim()
+        : current?.demographics?.city || '',
+      country: fields.country !== undefined
+        ? String(fields.country || '').trim()
+        : current?.demographics?.country || ''
     };
     const nextProfile = {
       user_id: user.user_id,
-      handle,
-      display_name: String(fields.display_name || ''),
-      bio: String(fields.bio || ''),
+      handle: nextHandle,
+      display_name: fields.display_name !== undefined
+        ? String(fields.display_name || '')
+        : current?.display_name || '',
+      bio: fields.bio !== undefined ? String(fields.bio || '') : current?.bio || '',
       avatar_url: avatarUrl,
       demographics,
       created_at: current?.created_at || user.created_at || now,
@@ -1800,27 +1806,39 @@ function buildArtifactVersion({ artifactId, code, chat, sourceSession, label }) 
 }
 
 function mapProfileForClient(profile, user, stats) {
+  const demographics = profile.demographics || {};
   return {
     user_id: profile.user_id,
     handle: profile.handle,
     display_name: profile.display_name || user?.display_name || '',
     bio: profile.bio || '',
     avatar_url: profile.avatar_url || '',
-    demographics: profile.demographics || {},
+    demographics,
+    age: demographics.age ?? null,
+    gender: demographics.gender || '',
+    city: demographics.city || '',
+    country: demographics.country || '',
     created_at: profile.created_at || user?.created_at || '',
     updated_at: profile.updated_at || profile.created_at || '',
     stats
   };
 }
 
+function mapPublicProfile(profile, user, stats) {
+  const demographics = profile.demographics || {};
+  return {
+    handle: profile.handle,
+    display_name: profile.display_name || user?.display_name || '',
+    bio: profile.bio || '',
+    avatar_url: profile.avatar_url || '',
+    city: demographics.city || '',
+    country: demographics.country || '',
+    stats
+  };
+}
+
 function validateArtifactPayload({ title, description, code, screenshotDataUrl }) {
   const errors = [];
-  if (!String(title || '').trim()) {
-    errors.push('Title is required.');
-  }
-  if (!String(description || '').trim()) {
-    errors.push('Description is required.');
-  }
   if (!code || !String(code.content || '').trim()) {
     errors.push('Code content is required.');
   }
@@ -1833,6 +1851,20 @@ function validateArtifactPayload({ title, description, code, screenshotDataUrl }
     errors.push('Screenshot must be a PNG data URL.');
   }
   return { ok: errors.length === 0, errors };
+}
+
+function resolveScreenshotDataUrl(body) {
+  if (body?.screenshot_data_url && typeof body.screenshot_data_url === 'string') {
+    return body.screenshot_data_url;
+  }
+  const screenshot = body?.screenshot;
+  if (!screenshot || typeof screenshot !== 'object') {
+    return '';
+  }
+  if (screenshot.content_type !== 'image/png' || typeof screenshot.base64 !== 'string') {
+    return '';
+  }
+  return `data:image/png;base64,${screenshot.base64}`;
 }
 
 async function persistArtifactScreenshot(dataUrl, artifactId) {
