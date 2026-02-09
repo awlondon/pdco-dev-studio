@@ -10,14 +10,8 @@ WITH stats AS (
     SELECT
       user_id,
       DATE(created_at) AS day,
-      SUM(
-        (
-          (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-          (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-        ) * mp.credit_multiplier
-      ) AS cost_usd
+      SUM(model_cost_usd) AS cost_usd
     FROM usage_events e
-    JOIN model_pricing mp ON mp.model = e.model
     WHERE created_at >= NOW() - INTERVAL '14 days'
     GROUP BY user_id, DATE(created_at)
   ) d
@@ -26,14 +20,8 @@ WITH stats AS (
 today AS (
   SELECT
     e.user_id,
-    SUM(
-      (
-        (e.tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-        (e.tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-      ) * mp.credit_multiplier
-    ) AS cost_usd
+    SUM(e.model_cost_usd) AS cost_usd
   FROM usage_events e
-  JOIN model_pricing mp ON mp.model = e.model
   WHERE DATE(e.created_at) = CURRENT_DATE
   GROUP BY e.user_id
 )
@@ -66,14 +54,8 @@ WITH daily AS (
   SELECT
     user_id,
     DATE(created_at) AS day,
-    SUM(
-      (
-        (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-        (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-      ) * mp.credit_multiplier
-    ) AS cost_usd
+    SUM(model_cost_usd) AS cost_usd
   FROM usage_events e
-  JOIN model_pricing mp ON mp.model = e.model
   WHERE created_at >= NOW() - INTERVAL '7 days'
   GROUP BY user_id, DATE(created_at)
 ),
@@ -119,25 +101,14 @@ SELECT
   e.user_id,
   'runaway_session',
   'critical',
-  SUM(
-    (
-      (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-      (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-    ) * mp.credit_multiplier
-  ) AS cost_usd,
+  SUM(e.model_cost_usd) AS cost_usd,
   MIN(e.created_at),
   MAX(e.created_at),
   jsonb_build_object('session_id', e.session_id)
 FROM usage_events e
-JOIN model_pricing mp ON mp.model = e.model
 GROUP BY e.user_id, e.session_id
 HAVING
-  SUM(
-    (
-      (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-      (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-    ) * mp.credit_multiplier
-  ) > 5.00;
+  SUM(e.model_cost_usd) > 5.00;
 `;
 
 async function run() {

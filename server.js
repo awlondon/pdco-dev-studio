@@ -6,8 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   fetchCheapestAllowedModel,
+  fetchModelPricing,
   fetchFirstNonPremiumModel,
   fetchMonthlyQuota,
+  fetchPlanNormalizationFactor,
   fetchPlanPolicy,
   fetchSessionEvents,
   fetchSessionSummary,
@@ -2792,14 +2794,32 @@ async function appendUsageEntry({
   };
 
   if (eventType !== 'session_close') {
+    const planTier = user.plan_tier || 'free';
+    const [pricing, creditNormFactorRaw] = await Promise.all([
+      fetchModelPricing({ model }),
+      fetchPlanNormalizationFactor({ plan: planTier })
+    ]);
+    const creditNormFactor = Number.isFinite(Number(creditNormFactorRaw))
+      ? Number(creditNormFactorRaw)
+      : 1;
+    const inputTokenValue = Number(inputTokens) || 0;
+    const outputTokenValue = Number(outputTokens) || 0;
+    const modelCostUsd = pricing
+      ? (
+        (inputTokenValue / 1000) * Number(pricing.cost_per_1k_input_tokens)
+        + (outputTokenValue / 1000) * Number(pricing.cost_per_1k_output_tokens)
+      ) * Number(pricing.credit_multiplier)
+      : 0;
     await insertUsageEvent({
       userId: user.user_id,
       sessionId: sessionId || crypto.randomUUID(),
       intentType,
       model,
-      tokensIn: inputTokens,
-      tokensOut: outputTokens,
+      inputTokens: inputTokenValue,
+      outputTokens: outputTokenValue,
       creditsUsed: creditsCharged,
+      creditNormFactor,
+      modelCostUsd,
       latencyMs: latencyMs ?? 0,
       success: status === 'success'
     });

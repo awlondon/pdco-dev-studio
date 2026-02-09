@@ -13,9 +13,11 @@ CREATE TABLE usage_events (
   intent TEXT CHECK (intent IN ('code', 'text')) NOT NULL,
   model TEXT NOT NULL,
 
-  tokens_in INTEGER NOT NULL,
-  tokens_out INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
   credits_used INTEGER NOT NULL,
+  credit_norm_factor NUMERIC(6,3) NOT NULL,
+  model_cost_usd NUMERIC(10,6) NOT NULL,
 
   latency_ms INTEGER NOT NULL,
   success BOOLEAN NOT NULL,
@@ -124,8 +126,8 @@ SELECT
   created_at,
   intent,
   model,
-  tokens_in,
-  tokens_out,
+  input_tokens,
+  output_tokens,
   credits_used,
   latency_ms,
   success
@@ -188,20 +190,14 @@ SELECT
   e.session_id,
   e.model,
 
-  e.tokens_in,
-  e.tokens_out,
-
-  (
-    (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-    (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-  ) * p.credit_multiplier AS cost_usd,
+  e.input_tokens,
+  e.output_tokens,
+  e.model_cost_usd AS cost_usd,
 
   e.credits_used,
   e.created_at
 
-FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
-WHERE p.active = true;
+FROM usage_events e;
 ```
 
 ## Per-model cost summary (user)
@@ -212,15 +208,9 @@ SELECT
   COUNT(*) AS requests,
   SUM(e.credits_used) AS credits_used,
 
-  ROUND(SUM(
-    (
-      (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-      (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-    ) * p.credit_multiplier
-  ), 4) AS total_cost_usd
+  ROUND(SUM(e.model_cost_usd), 4) AS total_cost_usd
 
 FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
 WHERE e.user_id = $1
 GROUP BY e.model
 ORDER BY total_cost_usd DESC;
@@ -236,15 +226,9 @@ SELECT
   COUNT(*) AS requests,
   SUM(e.credits_used) AS credits_used,
 
-  ROUND(SUM(
-    (
-      (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-      (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-    ) * p.credit_multiplier
-  ), 4) AS cost_usd
+  ROUND(SUM(e.model_cost_usd), 4) AS cost_usd
 
 FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
 WHERE e.user_id = $1
 GROUP BY day, e.model
 ORDER BY day DESC, cost_usd DESC;
@@ -256,16 +240,10 @@ ORDER BY day DESC, cost_usd DESC;
 SELECT
   e.model,
   ROUND(
-    SUM(
-      (
-        (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-        (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-      ) * p.credit_multiplier
-    ) / NULLIF(SUM(e.credits_used), 0),
+    SUM(e.model_cost_usd) / NULLIF(SUM(e.credits_used), 0),
     4
   ) AS usd_per_credit
 FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
 GROUP BY e.model;
 ```
 
@@ -281,15 +259,9 @@ SELECT
   COUNT(*) AS requests,
   SUM(e.credits_used) AS credits_used,
 
-  SUM(
-    (
-      (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-      (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-    ) * p.credit_multiplier
-  ) AS cost_usd
+  SUM(e.model_cost_usd) AS cost_usd
 
 FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
 GROUP BY e.user_id, day, e.model;
 ```
 
@@ -325,14 +297,14 @@ SELECT
   u.plan,
   e.credits_used,
 
-  (e.credits_used * p.credit_normalization_factor)
+  (e.credits_used * e.credit_norm_factor)
     AS normalized_credits_used,
 
   e.created_at
 
 FROM usage_events e
 JOIN users u ON u.id = e.user_id
-JOIN plan_tiers p ON p.plan = u.plan;
+;
 ```
 
 ### Plan-aware cost attribution
@@ -344,22 +316,12 @@ SELECT
   e.model,
 
   SUM(e.credits_used) AS raw_credits,
-  SUM(e.credits_used * p.credit_normalization_factor) AS normalized_credits,
+  SUM(e.credits_used * e.credit_norm_factor) AS normalized_credits,
 
-  ROUND(SUM(
-    (
-      (e.tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-      (e.tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-    )
-    * mp.credit_multiplier
-    * p.credit_normalization_factor
-  ), 4) AS effective_cost_usd
+  ROUND(SUM(e.model_cost_usd * e.credit_norm_factor), 4) AS effective_cost_usd
 
 FROM usage_events e
 JOIN users u ON u.id = e.user_id
-JOIN plan_tiers p ON p.plan = u.plan
-JOIN model_pricing mp ON mp.model = e.model
-
 GROUP BY e.user_id, u.plan, e.model;
 ```
 
@@ -403,10 +365,13 @@ ORDER BY day DESC;
 
 ```sql
 ALTER TABLE usage_events
-ADD COLUMN credit_norm_factor NUMERIC(6,3);
+ADD COLUMN input_tokens INTEGER,
+ADD COLUMN output_tokens INTEGER,
+ADD COLUMN credit_norm_factor NUMERIC(6,3),
+ADD COLUMN model_cost_usd NUMERIC(10,6);
 
 INSERT INTO usage_events (...)
-VALUES (..., current_plan.credit_normalization_factor);
+VALUES (..., current_plan.credit_normalization_factor, model_cost_usd);
 ```
 
 ## Plan-aware routing policy
@@ -574,14 +539,8 @@ WITH daily_cost AS (
   SELECT
     user_id,
     DATE(created_at) AS day,
-    SUM(
-      (
-        (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-        (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-      ) * mp.credit_multiplier
-    ) AS cost_usd
+    SUM(model_cost_usd) AS cost_usd
   FROM usage_events e
-  JOIN model_pricing mp ON mp.model = e.model
   GROUP BY user_id, DATE(created_at)
 )
 SELECT * FROM daily_cost;
@@ -599,14 +558,8 @@ WITH stats AS (
     SELECT
       user_id,
       DATE(created_at) AS day,
-      SUM(
-        (
-          (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-          (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-        ) * mp.credit_multiplier
-      ) AS cost_usd
+      SUM(model_cost_usd) AS cost_usd
     FROM usage_events e
-    JOIN model_pricing mp ON mp.model = e.model
     WHERE created_at >= NOW() - INTERVAL '14 days'
     GROUP BY user_id, DATE(created_at)
   ) d
@@ -615,14 +568,8 @@ WITH stats AS (
  today AS (
   SELECT
     e.user_id,
-    SUM(
-      (
-        (e.tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-        (e.tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-      ) * mp.credit_multiplier
-    ) AS cost_usd
+    SUM(e.model_cost_usd) AS cost_usd
   FROM usage_events e
-  JOIN model_pricing mp ON mp.model = e.model
   WHERE DATE(e.created_at) = CURRENT_DATE
   GROUP BY e.user_id
 )
@@ -657,14 +604,8 @@ WITH daily AS (
   SELECT
     user_id,
     DATE(created_at) AS day,
-    SUM(
-      (
-        (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-        (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-      ) * mp.credit_multiplier
-    ) AS cost_usd
+    SUM(model_cost_usd) AS cost_usd
   FROM usage_events e
-  JOIN model_pricing mp ON mp.model = e.model
   WHERE created_at >= NOW() - INTERVAL '7 days'
   GROUP BY user_id, DATE(created_at)
 ),
@@ -712,25 +653,14 @@ SELECT
   e.user_id,
   'runaway_session',
   'critical',
-  SUM(
-    (
-      (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-      (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-    ) * mp.credit_multiplier
-  ) AS cost_usd,
+  SUM(e.model_cost_usd) AS cost_usd,
   MIN(e.created_at),
   MAX(e.created_at),
   jsonb_build_object('session_id', e.session_id)
 FROM usage_events e
-JOIN model_pricing mp ON mp.model = e.model
 GROUP BY e.user_id, e.session_id
 HAVING
-  SUM(
-    (
-      (tokens_in  / 1000.0) * mp.cost_per_1k_input_tokens +
-      (tokens_out / 1000.0) * mp.cost_per_1k_output_tokens
-    ) * mp.credit_multiplier
-  ) > 5.00;
+  SUM(e.model_cost_usd) > 5.00;
 ```
 
 ### Alert consumption (ops/admin)

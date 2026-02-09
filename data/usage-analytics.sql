@@ -8,9 +8,11 @@ CREATE TABLE usage_events (
   intent TEXT CHECK (intent IN ('code', 'text')) NOT NULL,
   model TEXT NOT NULL,
 
-  tokens_in INTEGER NOT NULL,
-  tokens_out INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
   credits_used INTEGER NOT NULL,
+  credit_norm_factor NUMERIC(6,3) NOT NULL,
+  model_cost_usd NUMERIC(10,6) NOT NULL,
 
   latency_ms INTEGER NOT NULL,
   success BOOLEAN NOT NULL,
@@ -78,15 +80,9 @@ SELECT
   COUNT(*) AS requests,
   SUM(e.credits_used) AS credits_used,
 
-  SUM(
-    (
-      (e.tokens_in  / 1000.0) * p.cost_per_1k_input_tokens +
-      (e.tokens_out / 1000.0) * p.cost_per_1k_output_tokens
-    ) * p.credit_multiplier
-  ) AS cost_usd
+  SUM(e.model_cost_usd) AS cost_usd
 
 FROM usage_events e
-JOIN model_pricing p ON p.model = e.model
 GROUP BY e.user_id, day, e.model;
 
 CREATE TABLE plan_tiers (
@@ -109,7 +105,10 @@ ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'
 REFERENCES plan_tiers(plan);
 
 ALTER TABLE usage_events
-ADD COLUMN credit_norm_factor NUMERIC(6,3);
+ADD COLUMN IF NOT EXISTS input_tokens INTEGER,
+ADD COLUMN IF NOT EXISTS output_tokens INTEGER,
+ADD COLUMN IF NOT EXISTS credit_norm_factor NUMERIC(6,3),
+ADD COLUMN IF NOT EXISTS model_cost_usd NUMERIC(10,6);
 
 CREATE TABLE plan_model_policy (
   plan TEXT NOT NULL REFERENCES plan_tiers(plan),

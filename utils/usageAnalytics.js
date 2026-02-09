@@ -32,25 +32,29 @@ export async function insertUsageEvent({
   sessionId,
   intentType,
   model,
-  tokensIn,
-  tokensOut,
+  inputTokens,
+  outputTokens,
   creditsUsed,
+  creditNormFactor,
+  modelCostUsd,
   latencyMs,
   success
 }) {
   const result = await queryUsageAnalytics(
     `INSERT INTO usage_events
-      (user_id, session_id, intent, model, tokens_in, tokens_out, credits_used, latency_ms, success)
+      (user_id, session_id, intent, model, input_tokens, output_tokens, credits_used, credit_norm_factor, model_cost_usd, latency_ms, success)
      VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       userId,
       sessionId,
       normalizeIntent(intentType),
       model,
-      tokensIn,
-      tokensOut,
+      inputTokens,
+      outputTokens,
       creditsUsed,
+      creditNormFactor,
+      modelCostUsd,
       latencyMs,
       success
     ]
@@ -119,6 +123,37 @@ export async function isPremiumModel(model) {
     [model]
   );
   return Boolean(result?.rows?.[0]?.is_premium);
+}
+
+export async function fetchModelPricing({ model }) {
+  if (!model) {
+    return null;
+  }
+  const result = await queryUsageAnalytics(
+    `SELECT
+      cost_per_1k_input_tokens,
+      cost_per_1k_output_tokens,
+      credit_multiplier
+     FROM model_pricing
+     WHERE model = $1
+     LIMIT 1`,
+    [model]
+  );
+  return result?.rows?.[0] || null;
+}
+
+export async function fetchPlanNormalizationFactor({ plan }) {
+  if (!plan) {
+    return null;
+  }
+  const result = await queryUsageAnalytics(
+    `SELECT credit_normalization_factor
+     FROM plan_tiers
+     WHERE plan = $1
+     LIMIT 1`,
+    [plan]
+  );
+  return result?.rows?.[0]?.credit_normalization_factor ?? null;
 }
 
 export async function fetchFirstNonPremiumModel(models) {
@@ -219,8 +254,8 @@ export async function fetchUsageEventsByRange({ userId, startDate, endDate, days
       created_at,
       intent,
       model,
-      tokens_in,
-      tokens_out,
+      input_tokens AS tokens_in,
+      output_tokens AS tokens_out,
       credits_used,
       latency_ms,
       success,
@@ -258,8 +293,8 @@ export async function fetchSessionEvents({ userId, sessionId }) {
       created_at,
       intent,
       model,
-      tokens_in,
-      tokens_out,
+      input_tokens AS tokens_in,
+      output_tokens AS tokens_out,
       credits_used,
       latency_ms,
       success
