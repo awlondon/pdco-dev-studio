@@ -1,9 +1,53 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const LLM_PROXY_URL =
+  process.env.LLM_PROXY_URL
+  || 'https://text-code.primarydesigncompany.workers.dev';
+const SESSION_COOKIE_NAME = 'maya_session';
+const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
+const REQUIRED_USER_HEADERS = [
+  'user_id',
+  'email',
+  'auth_provider',
+  'provider_user_id',
+  'display_name',
+  'created_at',
+  'last_login_at',
+  'plan_tier',
+  'credits_total',
+  'credits_remaining',
+  'monthly_reset_at',
+  'newsletter_opt_in',
+  'account_status',
+  'stripe_customer_id',
+  'stripe_subscription_id',
+  'billing_status'
+];
+const STRIPE_PLAN_MAP = (() => {
+  const raw = process.env.STRIPE_PLAN_MAP;
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn('Invalid STRIPE_PLAN_MAP JSON.', error);
+    return {};
+  }
+})();
+const STRIPE_CREDIT_PACKS = (() => {
+  const raw = process.env.STRIPE_CREDIT_PACKS;
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn('Invalid STRIPE_CREDIT_PACKS JSON.', error);
+    return {};
+  }
+})();
 
 const CHAT_SYSTEM_PROMPT = `You are an assistant embedded in a live coding UI.
 
@@ -36,7 +80,13 @@ app.use(cors({
 
 app.options('*', cors());
 
-app.use(express.json());
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+app.use((req, res, next) => {
+  if (req.originalUrl.startsWith('/api/stripe/webhook')) {
+    return next();
+  }
+  return express.json()(req, res, next);
+});
 
 /**
  * 🔍 DIAGNOSTIC HEADERS (prove code is live)
@@ -56,8 +106,24 @@ app.get('/api/health', (req, res) => {
 /**
  * SESSION CHECK
  */
-app.get('/api/me', (req, res) => {
-  res.json({ user: null });
+app.get('/api/me', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    return res.json({
+      user: mapUserForClient(user),
+      token: session.token
+    });
+  } catch (error) {
+    console.error('Failed to load /me.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load session' });
+  }
 });
 
 /**
@@ -65,22 +131,120 @@ app.get('/api/me', (req, res) => {
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const workerRes = await fetch(
-      'https://text-code.primarydesigncompany.workers.dev',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(req.body)
-      }
-    );
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
 
-    const text = await workerRes.text();
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
 
-    res.status(workerRes.status);
+    const intentType = req.body?.intentType || 'chat';
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const inputChars = messages
+      .map((entry) => (entry?.content ? String(entry.content) : ''))
+      .join('').length;
+    const estimatedCredits = calculateCreditsUsed({
+      inputChars,
+      outputChars: 0,
+      intentType
+    });
+    const creditsRemaining = Number(user.credits_remaining || 0);
+
+    if (!Number.isFinite(creditsRemaining) || creditsRemaining <= 0) {
+      return res.status(402).json({
+        ok: false,
+        error: 'Out of credits',
+        credits_remaining: creditsRemaining
+      });
+    }
+
+    if (estimatedCredits > creditsRemaining) {
+      return res.status(402).json({
+        ok: false,
+        error: 'Insufficient credits for this request',
+        credits_remaining: creditsRemaining,
+        estimated_credits: estimatedCredits
+      });
+    }
+
+    const workerRes = await fetch(LLM_PROXY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const responseText = await workerRes.text();
+    if (!workerRes.ok) {
+      res.status(workerRes.status);
+      res.setHeader('Content-Type', 'application/json');
+      res.send(responseText);
+      return;
+    }
+
+    let data;
+    try {
+      data = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!data) {
+      res.status(502).json({ ok: false, error: 'Invalid LLM response' });
+      return;
+    }
+
+    const usage = data?.usage || {};
+    const totalTokens = Number(usage?.total_tokens);
+    const outputText =
+      data?.choices?.[0]?.message?.content
+      ?? data?.candidates?.[0]?.content
+      ?? data?.output_text
+      ?? '';
+    const outputChars = outputText ? String(outputText).length : 0;
+    const actualCredits = calculateCreditsUsed({
+      inputChars,
+      outputChars,
+      intentType,
+      totalTokens
+    });
+    const nextRemaining = Math.max(0, creditsRemaining - actualCredits);
+
+    await updateUser(user.user_id, {
+      credits_remaining: String(nextRemaining)
+    });
+
+    await appendUsageEntry({
+      user,
+      requestId: crypto.randomUUID(),
+      sessionId: req.body?.sessionId || '',
+      intentType,
+      model: data?.model || req.body?.model || OPENAI_MODEL,
+      inputChars,
+      outputChars,
+      totalTokens,
+      reservedCredits: estimatedCredits,
+      actualCredits,
+      creditsCharged: actualCredits,
+      status: 'success'
+    });
+
+    data.usage = {
+      ...usage,
+      actual_credits: actualCredits,
+      reserved_credits: estimatedCredits,
+      credits_charged: actualCredits,
+      remainingCredits: nextRemaining,
+      credits_remaining: nextRemaining
+    };
+
+    res.status(200);
     res.setHeader('Content-Type', 'application/json');
-    res.send(text);
+    res.send(JSON.stringify(data));
   } catch (err) {
     console.error('Worker proxy error:', err);
     res.status(500).json({ error: 'LLM proxy failed' });
@@ -90,11 +254,836 @@ app.post('/api/chat', async (req, res) => {
 /**
  * GOOGLE AUTH STUB
  */
-app.post('/api/auth/google', (req, res) => {
-  res.json({ ok: true });
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const idToken = typeof req.body?.id_token === 'string' ? req.body.id_token.trim() : '';
+    if (!idToken) {
+      return res.status(400).json({ ok: false, error: 'Missing id_token' });
+    }
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ ok: false, error: 'Missing GOOGLE_CLIENT_ID' });
+    }
+    const payload = decodeJwtPayload(idToken);
+    if (!payload) {
+      return res.status(401).json({ ok: false, error: 'Invalid token' });
+    }
+    if (payload.aud !== process.env.GOOGLE_CLIENT_ID) {
+      return res.status(401).json({ ok: false, error: 'Invalid audience' });
+    }
+    if (
+      payload.iss !== 'https://accounts.google.com' &&
+      payload.iss !== 'accounts.google.com'
+    ) {
+      return res.status(401).json({ ok: false, error: 'Invalid issuer' });
+    }
+    if (payload.exp && Date.now() / 1000 > payload.exp) {
+      return res.status(401).json({ ok: false, error: 'Token expired' });
+    }
+
+    const user = await findOrCreateUser({
+      email: payload.email,
+      provider: 'google',
+      providerUserId: payload.sub,
+      displayName: payload.name
+    });
+
+    return issueSessionCookie(res, req, user);
+  } catch (error) {
+    console.error('Google auth error', error);
+    return res.status(500).json({ ok: false, error: 'Google auth failed' });
+  }
+});
+
+app.post('/api/auth/email/request', async (req, res) => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email) {
+      return res.status(400).json({ ok: false, error: 'Email required' });
+    }
+    if (!process.env.EMAIL_TOKEN_SECRET) {
+      return res.status(500).json({ ok: false, error: 'Missing EMAIL_TOKEN_SECRET' });
+    }
+
+    const token = await createSignedToken(
+      {
+        sub: email,
+        type: 'email_magic',
+        exp: Math.floor(Date.now() / 1000) + 15 * 60
+      },
+      process.env.EMAIL_TOKEN_SECRET
+    );
+
+    const base = process.env.BACKEND_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const link = `${base.replace(/\/$/, '')}/auth/email?token=${encodeURIComponent(token)}`;
+
+    if (process.env.ENVIRONMENT === 'dev') {
+      return res.json({ ok: true, debug_magic_link: link });
+    }
+
+    await sendMagicEmail(email, link);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Email magic link request failed.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to send magic link' });
+  }
+});
+
+app.post('/api/auth/email/verify', async (req, res) => {
+  try {
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!token) {
+      return res.status(400).json({ ok: false, error: 'Missing token' });
+    }
+    if (!process.env.EMAIL_TOKEN_SECRET) {
+      return res.status(500).json({ ok: false, error: 'Missing EMAIL_TOKEN_SECRET' });
+    }
+    const payload = await verifySignedToken(token, process.env.EMAIL_TOKEN_SECRET);
+    if (!payload || payload.type !== 'email_magic' || !payload.sub) {
+      return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    }
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
+    }
+
+    const user = await findOrCreateUser({
+      email: payload.sub,
+      provider: 'email',
+      providerUserId: '',
+      displayName: payload.sub.split('@')[0]
+    });
+
+    return issueSessionCookie(res, req, user);
+  } catch (error) {
+    console.error('Email token verification failed.', error);
+    return res.status(500).json({ ok: false, error: 'Email verification failed' });
+  }
+});
+
+app.get('/auth/email', async (req, res) => {
+  try {
+    const token = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
+    if (!token) {
+      return res.redirect(process.env.FRONTEND_URL || '/');
+    }
+    if (!process.env.EMAIL_TOKEN_SECRET) {
+      return res.redirect(process.env.FRONTEND_URL || '/');
+    }
+    const payload = await verifySignedToken(token, process.env.EMAIL_TOKEN_SECRET);
+    if (!payload || payload.type !== 'email_magic' || !payload.sub) {
+      return res.redirect(process.env.FRONTEND_URL || '/');
+    }
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return res.redirect(process.env.FRONTEND_URL || '/');
+    }
+
+    const user = await findOrCreateUser({
+      email: payload.sub,
+      provider: 'email',
+      providerUserId: '',
+      displayName: payload.sub.split('@')[0]
+    });
+
+    issueSessionCookie(res, req, user, { redirect: true });
+  } catch (error) {
+    console.error('Email callback failed.', error);
+    res.redirect(process.env.FRONTEND_URL || '/');
+  }
+});
+
+app.post('/api/auth/apple', async (req, res) => {
+  try {
+    const idToken = typeof req.body?.id_token === 'string' ? req.body.id_token.trim() : '';
+    if (!idToken) {
+      return res.status(400).json({ ok: false, error: 'Missing id_token' });
+    }
+    if (!process.env.APPLE_CLIENT_ID) {
+      return res.status(500).json({ ok: false, error: 'Missing APPLE_CLIENT_ID' });
+    }
+    const payload = decodeJwtPayload(idToken);
+    if (!payload) {
+      return res.status(401).json({ ok: false, error: 'Invalid token' });
+    }
+    if (payload.aud !== process.env.APPLE_CLIENT_ID) {
+      return res.status(401).json({ ok: false, error: 'Invalid audience' });
+    }
+    if (payload.iss !== 'https://appleid.apple.com') {
+      return res.status(401).json({ ok: false, error: 'Invalid issuer' });
+    }
+    if (payload.exp && Date.now() / 1000 > payload.exp) {
+      return res.status(401).json({ ok: false, error: 'Token expired' });
+    }
+
+    const email = payload.email || `${payload.sub}@appleid.apple.com`;
+    const user = await findOrCreateUser({
+      email,
+      provider: 'apple',
+      providerUserId: payload.sub,
+      displayName: payload.name || email.split('@')[0]
+    });
+
+    return issueSessionCookie(res, req, user);
+  } catch (error) {
+    console.error('Apple auth failed.', error);
+    return res.status(500).json({ ok: false, error: 'Apple auth failed' });
+  }
+});
+
+app.get('/checkout/subscription', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    const priceId = process.env.STRIPE_SUBSCRIPTION_PRICE_ID;
+    if (!priceId) {
+      return res.status(500).json({ ok: false, error: 'Missing subscription price id' });
+    }
+
+    const stripeSession = await createStripeCheckoutSession({
+      mode: 'subscription',
+      priceId,
+      user,
+      successUrl: process.env.STRIPE_SUCCESS_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`,
+      cancelUrl: process.env.STRIPE_CANCEL_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`
+    });
+
+    return res.redirect(303, stripeSession.url);
+  } catch (error) {
+    console.error('Subscription checkout failed.', error);
+    return res.status(500).json({ ok: false, error: 'Checkout failed' });
+  }
+});
+
+app.get('/checkout/credits', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    const packKey = typeof req.query?.pack === 'string' ? req.query.pack : 'default';
+    const pack = STRIPE_CREDIT_PACKS[packKey];
+    if (!pack || !pack.price_id || !pack.credits) {
+      return res.status(500).json({ ok: false, error: 'Credit pack not configured' });
+    }
+
+    const stripeSession = await createStripeCheckoutSession({
+      mode: 'payment',
+      priceId: pack.price_id,
+      user,
+      metadata: {
+        purchase_type: 'credits',
+        pack_key: packKey,
+        credits: String(pack.credits)
+      },
+      successUrl: process.env.STRIPE_SUCCESS_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`,
+      cancelUrl: process.env.STRIPE_CANCEL_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`
+    });
+
+    return res.redirect(303, stripeSession.url);
+  } catch (error) {
+    console.error('Credits checkout failed.', error);
+    return res.status(500).json({ ok: false, error: 'Checkout failed' });
+  }
+});
+
+app.post('/api/stripe/webhook', async (req, res) => {
+  try {
+    const signature = req.header('stripe-signature');
+    if (!signature) {
+      return res.status(400).json({ ok: false, error: 'Missing stripe-signature' });
+    }
+
+    const event = verifyStripeSignature({
+      rawBody: req.body.toString(),
+      signatureHeader: signature,
+      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET
+    });
+
+    await handleStripeEvent(event);
+
+    return res.json({ received: true });
+  } catch (error) {
+    console.error('Stripe webhook failed.', error);
+    return res.status(400).json({ ok: false, error: 'Webhook failed' });
+  }
 });
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
   console.log('Maya API listening on', port);
 });
+
+function base64UrlEncode(value) {
+  return Buffer.from(value, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (padded.length % 4)) % 4);
+  return Buffer.from(padded + padding, 'base64').toString('utf8');
+}
+
+function signHmac(data, secret) {
+  return crypto
+    .createHmac('sha256', secret)
+    .update(data)
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+async function createSignedToken(payload, secret) {
+  const data = JSON.stringify(payload);
+  const signature = signHmac(data, secret);
+  return `${base64UrlEncode(data)}.${signature}`;
+}
+
+async function verifySignedToken(token, secret) {
+  if (!secret) return null;
+  const [payloadPart, signature] = token.split('.');
+  if (!payloadPart || !signature) return null;
+  const payloadJson = base64UrlDecode(payloadPart);
+  const expected = signHmac(payloadJson, secret);
+  if (!timingSafeEqual(signature, expected)) {
+    return null;
+  }
+  try {
+    return JSON.parse(payloadJson);
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token) {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    return JSON.parse(base64UrlDecode(parts[1]));
+  } catch {
+    return null;
+  }
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let out = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return out === 0;
+}
+
+async function issueSessionCookie(res, req, user, options = {}) {
+  if (!process.env.SESSION_SECRET) {
+    res.status(500).json({ ok: false, error: 'Missing SESSION_SECRET' });
+    return;
+  }
+  const token = await createSignedToken(
+    {
+      sub: user.user_id,
+      email: user.email,
+      provider: user.auth_provider,
+      iat: Math.floor(Date.now() / 1000)
+    },
+    process.env.SESSION_SECRET
+  );
+
+  const cookieParts = [
+    `${SESSION_COOKIE_NAME}=${token}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=None'
+  ];
+
+  if (process.env.COOKIE_DOMAIN) {
+    cookieParts.push(`Domain=${process.env.COOKIE_DOMAIN}`);
+  }
+
+  res.setHeader('Set-Cookie', cookieParts.join('; '));
+
+  if (options.redirect) {
+    res.redirect(process.env.FRONTEND_URL || '/');
+    return;
+  }
+
+  res.json({
+    token,
+    user: mapUserForClient(user),
+    session: {
+      token,
+      user: mapUserForClient(user)
+    }
+  });
+}
+
+async function getSessionFromRequest(req) {
+  if (!process.env.SESSION_SECRET) {
+    return null;
+  }
+  const cookieHeader = req.header('cookie') || '';
+  const token = parseCookie(cookieHeader, SESSION_COOKIE_NAME);
+  if (!token) return null;
+  const payload = await verifySignedToken(token, process.env.SESSION_SECRET);
+  if (!payload) return null;
+  return { token, ...payload };
+}
+
+function parseCookie(cookieHeader, name) {
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';');
+  for (const entry of cookies) {
+    const [key, ...rest] = entry.trim().split('=');
+    if (key === name) {
+      return rest.join('=');
+    }
+  }
+  return null;
+}
+
+function mapUserForClient(user) {
+  return {
+    id: user.user_id,
+    email: user.email,
+    name: user.display_name || user.email?.split('@')[0] || 'User',
+    provider: user.auth_provider,
+    plan: user.plan_tier,
+    creditsRemaining: Number(user.credits_remaining ?? 0)
+  };
+}
+
+function calculateCreditsUsed({ inputChars, outputChars, intentType, totalTokens }) {
+  if (Number.isFinite(totalTokens)) {
+    return Math.ceil(totalTokens / 250);
+  }
+  const inputTokens = Math.ceil((inputChars || 0) / 4);
+  const outputTokens = Math.ceil((outputChars || 0) / 3);
+  const multiplier = intentType === 'code' ? 1.0 : 0.6;
+  const tokenEstimate = Math.ceil((inputTokens + outputTokens) * multiplier);
+  return Math.ceil(tokenEstimate / 250);
+}
+
+async function readUsersCSV() {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
+    throw new Error('Missing GitHub credentials for users.csv');
+  }
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const res = await githubRequest(`/repos/${repo}/contents/data/users.csv?ref=${branch}`);
+  const content = Buffer.from(res.content, 'base64').toString('utf8');
+  return { sha: res.sha, rows: parseCSV(content) };
+}
+
+async function writeUsersCSV(rows, sha, message) {
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const csv = serializeCSV(rows);
+  const encoded = Buffer.from(csv, 'utf8').toString('base64');
+
+  await githubRequest(`/repos/${repo}/contents/data/users.csv`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      message,
+      content: encoded,
+      sha,
+      branch
+    })
+  });
+}
+
+async function githubRequest(path, options = {}) {
+  const res = await fetch(`https://api.github.com${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'maya-api',
+      ...(options.headers || {})
+    }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API error ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+function parseCSV(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const lines = trimmed.split('\n');
+  const headers = lines.shift().split(',');
+  return lines.map((line) => {
+    const values = line.split(',');
+    const entry = {};
+    headers.forEach((header, index) => {
+      entry[header] = values[index] ?? '';
+    });
+    return entry;
+  });
+}
+
+function serializeCSV(rows) {
+  const headers = REQUIRED_USER_HEADERS;
+  const lines = [
+    headers.join(','),
+    ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+function csvEscape(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = String(value);
+  if (/[,"\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+async function getUserById(userId) {
+  const { rows } = await readUsersCSV();
+  return rows.find((row) => row.user_id === userId) || null;
+}
+
+async function findOrCreateUser({ email, provider, providerUserId, displayName }) {
+  const normalizedEmail = email?.toLowerCase() || '';
+  const { sha, rows } = await readUsersCSV();
+
+  let user = rows.find((row) => row.provider_user_id === providerUserId && row.auth_provider === provider);
+  if (!user && normalizedEmail) {
+    user = rows.find((row) => row.email === normalizedEmail);
+  }
+
+  const now = new Date().toISOString();
+
+  if (!user) {
+    user = {
+      user_id: crypto.randomUUID(),
+      email: normalizedEmail,
+      auth_provider: provider,
+      provider_user_id: providerUserId,
+      display_name: displayName || normalizedEmail.split('@')[0],
+      created_at: now,
+      last_login_at: now,
+      plan_tier: FREE_PLAN.tier,
+      credits_total: String(FREE_PLAN.monthly_credits),
+      credits_remaining: String(FREE_PLAN.monthly_credits),
+      monthly_reset_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+      newsletter_opt_in: 'true',
+      account_status: 'active',
+      stripe_customer_id: '',
+      stripe_subscription_id: '',
+      billing_status: 'active'
+    };
+    rows.push(user);
+  } else {
+    user.email = normalizedEmail || user.email;
+    user.auth_provider = provider;
+    user.provider_user_id = providerUserId || user.provider_user_id;
+    user.display_name = displayName || user.display_name;
+    user.last_login_at = now;
+  }
+
+  await writeUsersCSV(rows, sha, `auth: update user ${user.user_id}`);
+  return user;
+}
+
+async function updateUser(userId, patch) {
+  const { sha, rows } = await readUsersCSV();
+  const user = rows.find((row) => row.user_id === userId);
+  if (!user) {
+    throw new Error(`User ${userId} not found`);
+  }
+  Object.entries(patch).forEach(([key, value]) => {
+    user[key] = value;
+  });
+  await writeUsersCSV(rows, sha, `billing: update user ${userId}`);
+  return user;
+}
+
+async function appendUsageEntry({
+  user,
+  requestId,
+  sessionId,
+  intentType,
+  model,
+  inputChars,
+  outputChars,
+  totalTokens,
+  reservedCredits,
+  actualCredits,
+  creditsCharged,
+  status
+}) {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const entry = {
+    timestamp_utc: timestamp,
+    user_id: user.user_id,
+    email: user.email,
+    session_id: sessionId,
+    request_id: requestId,
+    intent_type: intentType,
+    model,
+    input_chars: inputChars,
+    input_est_tokens: '',
+    output_chars: outputChars,
+    output_est_tokens: '',
+    total_est_tokens: totalTokens,
+    estimated_credits: reservedCredits,
+    reserved_credits: reservedCredits,
+    actual_credits: actualCredits,
+    refunded_credits: 0,
+    credits_charged: creditsCharged,
+    latency_ms: '',
+    status
+  };
+
+  const { appendUsageLog } = await import('./api/usageLog.js');
+  await appendUsageLog(process.env, entry);
+}
+
+async function sendMagicEmail(email, link) {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('Missing RESEND_API_KEY');
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: process.env.MAGIC_EMAIL_FROM || 'Maya <auth@primarydesignco.com>',
+      to: email,
+      subject: 'Sign in to Maya',
+      html: `
+        <p>Click to sign in:</p>
+        <p><a href="${link}">Sign in to Maya</a></p>
+        <p>This link expires in 15 minutes.</p>
+      `
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to send email: ${text}`);
+  }
+}
+
+async function createStripeCheckoutSession({ mode, priceId, user, metadata = {}, successUrl, cancelUrl }) {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('Missing STRIPE_SECRET_KEY');
+  }
+
+  const params = new URLSearchParams();
+  params.set('mode', mode);
+  params.set('success_url', `${successUrl.replace(/\/$/, '')}/?checkout=success`);
+  params.set('cancel_url', `${cancelUrl.replace(/\/$/, '')}/?checkout=cancel`);
+  params.set('line_items[0][price]', priceId);
+  params.set('line_items[0][quantity]', '1');
+  params.set('client_reference_id', user.user_id);
+  params.set('metadata[user_id]', user.user_id);
+
+  Object.entries(metadata).forEach(([key, value]) => {
+    params.set(`metadata[${key}]`, value);
+  });
+
+  if (user.stripe_customer_id) {
+    params.set('customer', user.stripe_customer_id);
+  } else {
+    params.set('customer_email', user.email);
+  }
+
+  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params.toString()
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Stripe checkout failed: ${text}`);
+  }
+
+  return response.json();
+}
+
+function verifyStripeSignature({ rawBody, signatureHeader, webhookSecret }) {
+  if (!webhookSecret) {
+    throw new Error('Missing STRIPE_WEBHOOK_SECRET');
+  }
+  const parts = Object.fromEntries(
+    signatureHeader.split(',').map((kv) => {
+      const [key, value] = kv.split('=');
+      return [key, value];
+    })
+  );
+  const timestamp = parts.t;
+  const signature = parts.v1;
+  if (!timestamp || !signature) {
+    throw new Error('Invalid signature header');
+  }
+  const signedPayload = `${timestamp}.${rawBody}`;
+  const expected = crypto.createHmac('sha256', webhookSecret).update(signedPayload).digest('hex');
+  if (!timingSafeEqual(signature, expected)) {
+    throw new Error('Bad signature');
+  }
+  const toleranceSec = 5 * 60;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(nowSec - ts) > toleranceSec) {
+    throw new Error('Timestamp outside tolerance');
+  }
+  return JSON.parse(rawBody);
+}
+
+async function handleStripeEvent(event) {
+  switch (event.type) {
+    case 'checkout.session.completed':
+      await onCheckoutSessionCompleted(event.data.object);
+      break;
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated':
+      await onSubscriptionUpsert(event.data.object);
+      break;
+    case 'customer.subscription.deleted':
+      await onSubscriptionDeleted(event.data.object);
+      break;
+    case 'invoice.payment_succeeded':
+      await onInvoicePaymentSucceeded(event.data.object);
+      break;
+    case 'invoice.payment_failed':
+      await onInvoicePaymentFailed(event.data.object);
+      break;
+    default:
+      break;
+  }
+}
+
+async function onCheckoutSessionCompleted(session) {
+  const userId = session.metadata?.user_id || session.client_reference_id;
+  if (!userId) {
+    throw new Error('Missing user_id');
+  }
+
+  const patch = {
+    stripe_customer_id: session.customer || '',
+    stripe_subscription_id: session.subscription || '',
+    billing_status: 'active'
+  };
+
+  const purchaseType = session.metadata?.purchase_type;
+  if (purchaseType === 'credits') {
+    const credits = Number(session.metadata?.credits || 0);
+    if (Number.isFinite(credits) && credits > 0) {
+      const user = await getUserById(userId);
+      if (user) {
+        const nextRemaining = Number(user.credits_remaining || 0) + credits;
+        patch.credits_remaining = String(nextRemaining);
+      }
+    }
+  }
+
+  await updateUser(userId, patch);
+}
+
+async function onSubscriptionUpsert(subscription) {
+  const stripeCustomerId = subscription.customer;
+  const stripeSubscriptionId = subscription.id;
+  const priceId = subscription.items?.data?.[0]?.price?.id;
+  const plan = STRIPE_PLAN_MAP[priceId] || FREE_PLAN;
+  const user = await findUserByStripeCustomer(stripeCustomerId);
+  if (!user) {
+    throw new Error(`No user for stripe_customer_id=${stripeCustomerId}`);
+  }
+
+  await updateUser(user.user_id, {
+    stripe_customer_id: stripeCustomerId,
+    stripe_subscription_id: stripeSubscriptionId,
+    plan_tier: plan.tier,
+    credits_total: String(plan.monthly_credits || FREE_PLAN.monthly_credits),
+    billing_status: normalizeStripeSubStatus(subscription.status)
+  });
+}
+
+async function onSubscriptionDeleted(subscription) {
+  const stripeCustomerId = subscription.customer;
+  const user = await findUserByStripeCustomer(stripeCustomerId);
+  if (!user) return;
+
+  const remaining = Math.min(
+    Number(user.credits_remaining || 0),
+    FREE_PLAN.monthly_credits
+  );
+
+  await updateUser(user.user_id, {
+    billing_status: 'canceled',
+    plan_tier: 'free',
+    credits_total: String(FREE_PLAN.monthly_credits),
+    credits_remaining: String(remaining)
+  });
+}
+
+async function onInvoicePaymentSucceeded(invoice) {
+  const stripeCustomerId = invoice.customer;
+  const user = await findUserByStripeCustomer(stripeCustomerId);
+  if (!user) return;
+
+  const nextResetAt = invoice.lines?.data?.[0]?.period?.end
+    ? new Date(invoice.lines.data[0].period.end * 1000).toISOString()
+    : new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+
+  await updateUser(user.user_id, {
+    billing_status: 'active',
+    credits_remaining: String(user.credits_total || FREE_PLAN.monthly_credits),
+    monthly_reset_at: nextResetAt
+  });
+}
+
+async function onInvoicePaymentFailed(invoice) {
+  const stripeCustomerId = invoice.customer;
+  const user = await findUserByStripeCustomer(stripeCustomerId);
+  if (!user) return;
+
+  await updateUser(user.user_id, {
+    billing_status: 'past_due'
+  });
+}
+
+async function findUserByStripeCustomer(stripeCustomerId) {
+  if (!stripeCustomerId) return null;
+  const { rows } = await readUsersCSV();
+  return rows.find((row) => row.stripe_customer_id === stripeCustomerId) || null;
+}
+
+function normalizeStripeSubStatus(status) {
+  if (status === 'active' || status === 'trialing') return 'active';
+  if (status === 'past_due' || status === 'unpaid') return 'past_due';
+  return 'canceled';
+}
