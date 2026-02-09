@@ -649,6 +649,41 @@ html, body {
   gap: 4px;
 }
 
+.credit-session {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.credit-session-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.credit-session-metrics {
+  display: grid;
+  gap: 6px;
+}
+
+.credit-session-metrics div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.credit-session-previous {
+  font-size: 11px;
+  color: #d7defb;
+}
+
+.credit-session-previous.hidden {
+  display: none;
+}
+
 .credit-panel-callout {
   margin-top: 10px;
   padding: 8px 10px;

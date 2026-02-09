@@ -29,9 +29,12 @@ export function serializeUsageLogRow(entry) {
     entry.user_id,
     entry.email,
     entry.session_id,
+    entry.event_type,
     entry.request_id,
     entry.intent_type,
     entry.model,
+    entry.input_tokens,
+    entry.output_tokens,
     entry.input_chars,
     entry.input_est_tokens,
     entry.output_chars,
@@ -42,6 +45,7 @@ export function serializeUsageLogRow(entry) {
     entry.actual_credits,
     entry.refunded_credits,
     entry.credits_charged,
+    entry.credits_used,
     entry.latency_ms,
     entry.status
   ].map(csvEscape).join(',') + '\n';

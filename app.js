@@ -142,6 +142,10 @@ const creditMeterFill = document.querySelector('.credit-meter .fill');
 const creditMeterLabel = document.querySelector('.credit-meter .label');
 const creditResetLabel = document.getElementById('credit-reset');
 const creditDailyLimitLabel = document.getElementById('credit-daily-limit');
+const sessionTurnsEl = document.getElementById('session-turns');
+const sessionCreditsEl = document.getElementById('session-credits');
+const sessionDurationEl = document.getElementById('session-duration');
+const sessionPreviousEl = document.getElementById('session-previous');
 const creditInlineWarning = document.getElementById('credit-inline-warning');
 const creditBanner = document.getElementById('credit-banner');
 const creditZero = document.getElementById('credit-zero');
@@ -1011,9 +1015,117 @@ function abortActiveChat({ silent = false } = {}) {
   chatAbortController.abort();
 }
 
+function resetSessionStats() {
+  sessionStats.turns = 0;
+  sessionStats.creditsUsedEstimate = 0;
+  sessionStats.tokensIn = 0;
+  sessionStats.tokensOut = 0;
+}
+
+function buildSessionSummary(endedAt = new Date()) {
+  const startedAt = sessionStartedAt || new Date().toISOString();
+  const creditsUsed = Number.isFinite(sessionStats.creditsUsedEstimate)
+    ? sessionStats.creditsUsedEstimate
+    : 0;
+  return {
+    session_id: sessionId,
+    started_at: startedAt,
+    ended_at: endedAt.toISOString(),
+    turns: sessionStats.turns,
+    credits_used_estimate: creditsUsed,
+    tokens_in: sessionStats.tokensIn,
+    tokens_out: sessionStats.tokensOut
+  };
+}
+
+function formatSessionDuration(startedAt) {
+  if (!startedAt) {
+    return '0 min';
+  }
+  const elapsedMs = Math.max(0, Date.now() - new Date(startedAt).getTime());
+  const minutes = Math.max(0, Math.round(elapsedMs / 60000));
+  if (minutes < 1) {
+    return '0 min';
+  }
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${hours}h ${remainder}m`;
+}
+
+function updateSessionAnalyticsPanel() {
+  if (sessionTurnsEl) {
+    sessionTurnsEl.textContent = `${sessionStats.turns}`;
+  }
+  if (sessionCreditsEl) {
+    sessionCreditsEl.textContent = `~${formatCreditNumber(sessionStats.creditsUsedEstimate)}`;
+  }
+  if (sessionDurationEl) {
+    sessionDurationEl.textContent = formatSessionDuration(sessionStartedAt);
+  }
+  if (sessionPreviousEl) {
+    if (lastSessionSummary) {
+      sessionPreviousEl.textContent =
+        `Previous session used ~${formatCreditNumber(lastSessionSummary.credits_used_estimate)} credits.`;
+      sessionPreviousEl.classList.remove('hidden');
+    } else {
+      sessionPreviousEl.classList.add('hidden');
+    }
+  }
+}
+
+function updateSessionStatsFromUsage({ usage, inputTokensEstimate, outputTokensEstimate }) {
+  const creditsCharged = Number(
+    usage?.creditsCharged
+    ?? usage?.credits_charged
+    ?? usage?.actualCredits
+    ?? usage?.actual_credits
+  );
+  const inputTokens = Number(usage?.prompt_tokens ?? usage?.input_tokens);
+  const outputTokens = Number(usage?.completion_tokens ?? usage?.output_tokens);
+  const resolvedInputTokens = Number.isFinite(inputTokens) ? inputTokens : inputTokensEstimate;
+  const resolvedOutputTokens = Number.isFinite(outputTokens) ? outputTokens : outputTokensEstimate;
+  const resolvedCredits = Number.isFinite(creditsCharged)
+    ? creditsCharged
+    : tokensToCredits((resolvedInputTokens || 0) + (resolvedOutputTokens || 0));
+
+  sessionStats.turns += 1;
+  sessionStats.tokensIn += resolvedInputTokens || 0;
+  sessionStats.tokensOut += resolvedOutputTokens || 0;
+  sessionStats.creditsUsedEstimate += resolvedCredits || 0;
+  updateSessionAnalyticsPanel();
+}
+
+async function postSessionClose(summary) {
+  if (!summary?.session_id || !API_BASE) {
+    return;
+  }
+  try {
+    await fetch(`${API_BASE}/api/session/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        session_id: summary.session_id,
+        ended_at: summary.ended_at,
+        client_estimate: {
+          credits_used: summary.credits_used_estimate,
+          turns: summary.turns
+        }
+      })
+    });
+  } catch (error) {
+    console.warn('Session close event failed.', error);
+  }
+}
+
 function startNewSession() {
   systemPrompt = DEFAULT_SYSTEM_PROMPT;
   sessionId = startNewSessionId();
+  sessionStartedAt = startNewSessionStartedAt();
+  resetSessionStats();
   chatAbortController = null;
   chatAbortSilent = false;
   clearChatState();
@@ -1021,6 +1133,7 @@ function startNewSession() {
   clearPreviewState();
   resetExecutionPreparation();
   updateGenerationIndicator();
+  updateSessionAnalyticsPanel();
   chatInput?.focus();
 }
 
@@ -1040,9 +1153,13 @@ async function handleClearChat(mode) {
   clearChatInProgress = true;
   setClearChatModalButtonsDisabled(true);
   try {
+    abortActiveChat({ silent: true });
+    const summary = buildSessionSummary(new Date());
+    lastSessionSummary = summary;
     if (mode === 'save') {
-      await saveChatToJSON();
+      await saveChatToJSON(summary);
     }
+    await postSessionClose(summary);
     startNewSession();
     ModalManager.close();
   } catch (error) {
@@ -1139,6 +1256,7 @@ function initializeAppForAuthenticatedUser() {
   }
   appInitialized = true;
   updateCreditUI();
+  updateSessionAnalyticsPanel();
   refreshAnalyticsAndThrottle({ force: false }).catch((error) => {
     console.warn('Usage analytics refresh failed.', error);
   });
@@ -1278,6 +1396,19 @@ function getOrCreateSessionId() {
   return created;
 }
 
+function getOrCreateSessionStartedAt() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  const stored = window.sessionStorage?.getItem('mayaSessionStartedAt');
+  if (stored) {
+    return stored;
+  }
+  const created = new Date().toISOString();
+  window.sessionStorage?.setItem('mayaSessionStartedAt', created);
+  return created;
+}
+
 function startNewSessionId() {
   if (typeof window === 'undefined') {
     return '';
@@ -1287,7 +1418,24 @@ function startNewSessionId() {
   return created;
 }
 
+function startNewSessionStartedAt() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  const startedAt = new Date().toISOString();
+  window.sessionStorage?.setItem('mayaSessionStartedAt', startedAt);
+  return startedAt;
+}
+
 let sessionId = getOrCreateSessionId();
+let sessionStartedAt = getOrCreateSessionStartedAt();
+const sessionStats = {
+  turns: 0,
+  creditsUsedEstimate: 0,
+  tokensIn: 0,
+  tokensOut: 0
+};
+let lastSessionSummary = null;
 let systemPrompt = DEFAULT_SYSTEM_PROMPT;
 
 const isDev = window.location.hostname === 'localhost'
@@ -2642,15 +2790,27 @@ function getChatExportMessages() {
     });
 }
 
-function buildChatExportPayload() {
+function buildChatExportPayload(summary) {
   const now = new Date();
   const creditState = getCreditState();
   return {
-    schema_version: '1.0',
+    schema_version: '1.1',
     app: 'maya-dev-ui',
     saved_at: now.toISOString(),
     user_id: getUserContext().id || '',
-    session_id: generateSessionId(),
+    session: summary
+      ? {
+        id: summary.session_id,
+        started_at: summary.started_at,
+        ended_at: summary.ended_at,
+        turns: summary.turns,
+        credits_used_estimate: summary.credits_used_estimate,
+        tokens: {
+          input: summary.tokens_in,
+          output: summary.tokens_out
+        }
+      }
+      : null,
     messages: getChatExportMessages(),
     editor: {
       language: 'html',
@@ -2663,8 +2823,8 @@ function buildChatExportPayload() {
   };
 }
 
-async function saveChatToJSON() {
-  const payload = buildChatExportPayload();
+async function saveChatToJSON(summary) {
+  const payload = buildChatExportPayload(summary);
   const filename = `maya-chat-${formatTimestampForFilename(new Date())}.json`;
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: 'application/json'
@@ -4498,6 +4658,8 @@ async function sendChat() {
   let rawReply = '';
   let usageMetadata = { usageText: '', warningText: '' };
   let throttleSnapshot = throttle;
+  const inputTokensEstimate = tokenEstimate;
+  let outputTokensEstimate = 0;
   try {
     const llmStartTime = performance.now();
     chatAbortController?.abort();
@@ -4557,7 +4719,13 @@ async function sendChat() {
       throw new Error('No model output returned');
     }
     rawReply = content;
+    outputTokensEstimate = estimateTokensForContent(rawReply);
     applyUsageToCredits(data?.usage);
+    updateSessionStatsFromUsage({
+      usage: data?.usage,
+      inputTokensEstimate,
+      outputTokensEstimate
+    });
     throttleSnapshot = updateThrottleState({ estimatedNextCost: 0 });
     usageMetadata = formatUsageMetadata(data?.usage, getCreditState(), throttleSnapshot);
     updateCreditPreview({ force: true });
@@ -5177,6 +5345,7 @@ setStatusOnline(false);
 updateGenerationIndicator();
 setPreviewStatus('Ready — auto-run enabled');
 setPreviewExecutionStatus('ready', 'Ready');
+setInterval(updateSessionAnalyticsPanel, 60000);
 
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
   preview.once('ready', () => {

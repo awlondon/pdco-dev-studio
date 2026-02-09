@@ -200,6 +200,17 @@ app.post('/api/chat', async (req, res) => {
 
     const usage = data?.usage || {};
     const totalTokens = Number(usage?.total_tokens);
+    const usageInputTokens = Number(usage?.prompt_tokens ?? usage?.input_tokens);
+    const usageOutputTokens = Number(usage?.completion_tokens ?? usage?.output_tokens);
+    const estimatedInputTokens = estimateTokensFromChars(inputChars);
+    const resolvedInputTokens = Number.isFinite(usageInputTokens)
+      ? usageInputTokens
+      : estimatedInputTokens;
+    const resolvedOutputTokens = Number.isFinite(usageOutputTokens)
+      ? usageOutputTokens
+      : Number.isFinite(totalTokens)
+        ? Math.max(0, totalTokens - resolvedInputTokens)
+        : estimateTokensFromChars(outputChars);
     const outputText =
       data?.choices?.[0]?.message?.content
       ?? data?.candidates?.[0]?.content
@@ -222,8 +233,11 @@ app.post('/api/chat', async (req, res) => {
       user,
       requestId: crypto.randomUUID(),
       sessionId: req.body?.sessionId || '',
+      eventType: intentType === 'code' ? 'code_gen' : 'chat_turn',
       intentType,
       model: data?.model || req.body?.model || OPENAI_MODEL,
+      inputTokens: resolvedInputTokens,
+      outputTokens: resolvedOutputTokens,
       inputChars,
       outputChars,
       totalTokens,
@@ -248,6 +262,53 @@ app.post('/api/chat', async (req, res) => {
   } catch (err) {
     console.error('Worker proxy error:', err);
     res.status(500).json({ error: 'LLM proxy failed' });
+  }
+});
+
+/**
+ * SESSION CLOSE (LOGGING ONLY)
+ */
+app.post('/api/session/close', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    const sessionId = typeof req.body?.session_id === 'string' ? req.body.session_id : '';
+    const endedAt = typeof req.body?.ended_at === 'string'
+      ? req.body.ended_at
+      : new Date().toISOString();
+    const creditsUsed = Number(req.body?.client_estimate?.credits_used) || 0;
+
+    await appendUsageEntry({
+      user,
+      requestId: crypto.randomUUID(),
+      sessionId,
+      eventType: 'session_close',
+      intentType: 'session_close',
+      model: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      inputChars: 0,
+      outputChars: 0,
+      totalTokens: 0,
+      reservedCredits: creditsUsed,
+      actualCredits: creditsUsed,
+      creditsCharged: creditsUsed,
+      status: 'success',
+      timestamp: endedAt
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('Session close log failed:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to log session close' });
   }
 });
 
@@ -667,11 +728,15 @@ function mapUserForClient(user) {
   };
 }
 
+function estimateTokensFromChars(chars) {
+  return Math.ceil((chars || 0) / 4);
+}
+
 function calculateCreditsUsed({ inputChars, outputChars, intentType, totalTokens }) {
   if (Number.isFinite(totalTokens)) {
     return Math.ceil(totalTokens / 250);
   }
-  const inputTokens = Math.ceil((inputChars || 0) / 4);
+  const inputTokens = estimateTokensFromChars(inputChars);
   const outputTokens = Math.ceil((outputChars || 0) / 3);
   const multiplier = intentType === 'code' ? 1.0 : 0.6;
   const tokenEstimate = Math.ceil((inputTokens + outputTokens) * multiplier);
@@ -823,29 +888,36 @@ async function appendUsageEntry({
   user,
   requestId,
   sessionId,
+  eventType,
   intentType,
   model,
+  inputTokens,
+  outputTokens,
   inputChars,
   outputChars,
   totalTokens,
   reservedCredits,
   actualCredits,
   creditsCharged,
-  status
+  status,
+  timestamp
 }) {
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
     return;
   }
 
-  const timestamp = new Date().toISOString();
+  const timestampValue = timestamp || new Date().toISOString();
   const entry = {
-    timestamp_utc: timestamp,
+    timestamp_utc: timestampValue,
     user_id: user.user_id,
     email: user.email,
     session_id: sessionId,
+    event_type: eventType,
     request_id: requestId,
     intent_type: intentType,
     model,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
     input_chars: inputChars,
     input_est_tokens: '',
     output_chars: outputChars,
@@ -856,6 +928,7 @@ async function appendUsageEntry({
     actual_credits: actualCredits,
     refunded_credits: 0,
     credits_charged: creditsCharged,
+    credits_used: creditsCharged,
     latency_ms: '',
     status
   };
