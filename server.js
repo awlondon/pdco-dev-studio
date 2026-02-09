@@ -64,16 +64,6 @@ const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
 
 const CHAT_SYSTEM_PROMPT = `You are an assistant embedded in a live coding UI.
 
-Tone constraints:
-- Default to neutral, professional, and concise.
-- Do not use whimsical, mystical, or anthropomorphic language unless explicitly requested.
-- Avoid metaphors, emojis, playful framing, or theatrical narration.
-- Assume the user is working on a real task unless stated otherwise.
-
-If the user input is vague or underspecified:
-- Respond briefly and ask a clarifying question.
-- Do not introduce narrative, roleplay, or thematic content.
-
 You MUST respond with valid JSON only. Do not wrap in markdown or code fences.
 Return ONLY the following schema with no extra top-level keys:
 

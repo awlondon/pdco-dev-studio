@@ -394,25 +394,17 @@ const defaultInterfaceCode = `<!doctype html>
 </html>`;
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
-const SYSTEM_BASE = 'You are a coding assistant embedded in a professional workspace.';
-const PERSONALITY_LAYER = `Tone constraints:
-- Default to neutral, professional, and concise.
-- Do not use whimsical, mystical, or anthropomorphic language unless explicitly requested.
-- Avoid metaphors, emojis, playful framing, or theatrical narration.
-- Assume the user is working on a real task unless stated otherwise.
+const SYSTEM_BASE = 'You are a coding assistant.';
+const PERSONALITY_LAYER = `Tone:
+- Helpful
+- Adaptive
+- Slightly warm
 
-If the user input is vague or underspecified:
-- Respond briefly and ask a clarifying question.
-- Do not introduce narrative, roleplay, or thematic content.`;
-const CHAT_PROMPT_CONTENT = `Tone constraints:
-- Default to neutral, professional, and concise.
-- Do not use whimsical, mystical, or anthropomorphic language unless explicitly requested.
-- Avoid metaphors, emojis, playful framing, or theatrical narration.
-
-Output rules:
+You may ask clarifying questions and use light framing when helpful.`;
+const CHAT_PROMPT_CONTENT = `Output rules:
 - Never output JSON, YAML, or code fences.
 - If you return HTML, the FIRST line must be:
-  <!--CHAT: <a short neutral status message for the user> -->
+  <!--CHAT: <a short conversational message for the user> -->
   Then output a complete HTML document.
 - If no HTML is needed, output plain conversational text only.
 - If a visual is requested as part of a technical discussion, prioritize correctness and demonstration over expressiveness or celebration.`;
@@ -6323,7 +6315,8 @@ function inferIntentFromText(userText) {
   if (!normalized) {
     return { type: 'text', inferred: false };
   }
-  const creativeSignals = /\b(creative mode|expressive mode|exploratory mode|playful mode|\/creative|expressive|poetic|surreal|experimental|improvise|dreamlike|inventive)\b/i.test(normalized);
+  const creativeSignals = /express|explore|improvise|interpret|reflect|play|dream|invent|yourself/i.test(normalized)
+    || normalized.length <= 20; // short, open-ended prompts
 
   const wantsExplicitUI = /\b(draw|build|render|interface|canvas|ui|prototype)\b/.test(normalized);
 
