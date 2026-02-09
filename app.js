@@ -564,7 +564,7 @@ function extractRuntimeError(rawError = {}) {
   return {
     line: Number.isFinite(line) && line > 0 ? line : 1,
     column: Number.isFinite(column) && column > 0 ? column : 1,
-    message: rawError.message || 'Execution error',
+    message: rawError.message || 'Execution failed.',
     severity: rawError.severity || 'error'
   };
 }
@@ -627,23 +627,29 @@ async function initializeCodeEditor({ value, language }) {
 }
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
-const SYSTEM_BASE = 'You are Maya, an AI assistant embedded in a real-time creative and technical workspace.';
-const PERSONALITY_LAYER = `Default behavior:
-- Be proactive and demonstrate capability when possible.
-- If the user input is underspecified, choose a reasonable, concrete task and execute it.
-- Prefer generating working code, UI components, or functional examples over discussion.
+const SYSTEM_BASE = `You are the execution engine for PDCo Dev Studio.
 
-Tone constraints:
-- Use a grounded, professional, and direct tone.
-- Avoid whimsical, mystical, or anthropomorphic language.
-- Avoid filler phrases, metaphors, or performative enthusiasm.
-- Do not narrate your own process or intent.
+Your role is to generate correct, runnable outputs with minimal overhead.
+Prioritize clarity, correctness, and efficiency.
 
-Creativity guidelines:
-- Be creative in *solutions*, structure, and execution.
-- Do not be creative in *tone* unless explicitly requested.
+Defaults:
+- When asked to build or modify something, produce working code first.
+- Explanations are brief unless explicitly requested.
+- Avoid stylistic filler, role-play, or narrative language.
+- Do not anthropomorphize yourself or the system.
 
-Assume the user is evaluating capability unless stated otherwise.`;
+Behavior:
+- Respect provided constraints and environment details.
+- Modify existing code when context indicates iteration or refactor.
+- Ask a clarifying question only if required to proceed correctly.
+- If uncertain, choose the simplest correct implementation.
+
+Output:
+- Prefer complete, executable artifacts.
+- Keep responses concise and technically grounded.`;
+const DEV_PREAMBLE = `Context may be provided via compact glyph headers.
+Treat glyph headers as authoritative state describing intent, constraints, and style.
+Do not explain or expand on glyphs unless explicitly asked.`;
 const CHAT_PROMPT_CONTENT = `Output rules:
 - Never output JSON, YAML, or code fences.
 - If you return HTML, the FIRST line must be:
@@ -666,17 +672,17 @@ Output rules:
 
 function buildPrompt({ role, content }) {
   const base = SYSTEM_BASE;
+  const promptParts = [base, DEV_PREAMBLE, content].filter(Boolean);
 
   if (role === 'metadata' || role === 'execution') {
     return [
-      base,
+      ...promptParts,
       'Disable conversational tone.',
-      'Prioritize precision over friendliness.',
-      content
+      'Prioritize precision over friendliness.'
     ].join('\n\n');
   }
 
-  return [base, PERSONALITY_LAYER, content].join('\n\n');
+  return promptParts.join('\n\n');
 }
 
 function getSystemPromptForIntent(resolvedIntent) {
@@ -814,7 +820,7 @@ function clearAuthFromRoot() {
 function renderAuthModalHTML() {
   return `
     <div class="auth-card">
-      <h2 class="auth-title">Welcome to Maya</h2>
+      <h2 class="auth-title">Welcome to PDCo Dev Studio</h2>
 
       <div class="auth-stack">
 
@@ -998,7 +1004,7 @@ function handleSandboxErrorMessage(event) {
   }
   applyEditorDiagnostics([editorError]);
   revealEditorError(editorError);
-  showToast(`Execution error on line ${editorError.line}`, { variant: 'error', duration: 4000 });
+  showToast(`Execution failed on line ${editorError.line}`, { variant: 'error', duration: 4000 });
 }
 
 window.addEventListener('message', handleSandboxErrorMessage);
@@ -6143,7 +6149,7 @@ function updateCreditAlerts(state, throttle) {
   if (creditDailyMessage) {
     if (dailyCapHit) {
       const resetTime = state.dailyResetTime || 'tomorrow';
-      creditDailyMessage.innerHTML = `⏳ Daily limit reached. More credits unlock in ${resetTime}.${!state.isFreeTier ? ' <span class="credit-link">Need more today? Buy a top-up →</span>' : ''}`;
+      creditDailyMessage.innerHTML = `Daily credit limit reached. More credits unlock in ${resetTime}.${!state.isFreeTier ? ' <span class="credit-link">Need more today? Buy a top-up →</span>' : ''}`;
       creditDailyMessage.classList.remove('hidden');
     } else {
       creditDailyMessage.classList.add('hidden');
@@ -6179,11 +6185,11 @@ function updateThrottleUI(throttle) {
   upgrade.addEventListener('click', () => openStripeCheckout('subscription'));
 
   if (throttle.state === 'warning') {
-    message.textContent = 'This request was slowed due to your daily limit. Pro plans remove most throttles.';
+    message.textContent = 'Daily credit limit approaching. Request delayed.';
   }
 
   if (throttle.state === 'blocked') {
-    message.textContent = 'This request was blocked due to your daily limit. Pro plans remove most throttles.';
+    message.textContent = 'Daily credit limit reached. Request blocked.';
   }
 
   throttleNotice.appendChild(message);
@@ -6203,7 +6209,7 @@ function updateSendButton(throttle) {
   const creditState = getCreditState();
   if (creditState.remainingCredits !== null && creditState.remainingCredits <= 0) {
     sendButton.disabled = true;
-    sendButton.title = 'Out of credits';
+    sendButton.title = 'Credit limit reached';
     return;
   }
 
@@ -7459,7 +7465,7 @@ function stopSandboxFromUser() {
   sandbox.stop('user');
   setSandboxAnimationState('stopped');
   setSandboxControlsVisible(false);
-  setPreviewExecutionStatus('stopped', '🛑 Stopped');
+  setPreviewExecutionStatus('stopped', 'Stopped');
   setPreviewStatus('Sandbox stopped by user.');
   setRuntimeState('idle');
 }
@@ -7473,7 +7479,7 @@ async function hardStopRuntime() {
   resetSandboxFrame();
   setSandboxAnimationState('stopped');
   setSandboxControlsVisible(false);
-  setPreviewExecutionStatus('stopped', '🛑 Stopped');
+  setPreviewExecutionStatus('stopped', 'Stopped');
   setPreviewStatus('Execution stopped for revert.');
   setRuntimeState('idle');
 }
@@ -7517,13 +7523,13 @@ function updateGenerationIndicator() {
   }
   const isModifying = Boolean(currentCode);
   generationIndicator.textContent = isModifying
-    ? '🧠 Modifying existing UI'
-    : '✨ Creating new UI';
+    ? 'Modifying output'
+    : 'Generating output';
   generationIndicator.classList.toggle('active', isModifying);
 }
 
 function markPreviewStale() {
-  setPreviewStatus('✏️ Code modified — click Run Code to apply');
+  setPreviewStatus('Code modified. Run Code to apply.');
   setPreviewExecutionStatus('stale', 'MODIFIED · not running');
   updatePromoteVisibility();
 }
@@ -7856,7 +7862,7 @@ function setCodeFromLLM(code, messageId = null) {
   updatePromoteVisibility();
   updateLineNumbers();
   updateSaveCodeButtonState();
-  setPreviewStatus('Preview updated by assistant');
+  setPreviewStatus('Preview updated.');
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
@@ -8049,7 +8055,7 @@ async function sendChat() {
 
   const pendingMessageId = addMessage(
     'assistant',
-    '<em>Generating text + code…</em>',
+    '<em>Generating output…</em>',
     { pending: true }
   );
   currentTurnMessageId = pendingMessageId;
@@ -8188,7 +8194,7 @@ async function sendChat() {
     'Text-only response attempted to modify UI'
   );
   if (hasCode && (!extractedText || !extractedText.trim())) {
-    extractedText = `Okay — I generated and ran an updated interface for: “${userInput}”.`;
+    extractedText = `Updated interface generated for: “${userInput}”.`;
   }
   if (!hasCode) {
     const assistantProposal = getAssistantProposal(extractedText);
@@ -9043,7 +9049,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateRollbackVisibility();
     updatePromoteVisibility();
     updateLineNumbers();
-    handleUserRun(lastLLMCode, 'rolled back', 'Rolling back to last generated…');
+    handleUserRun(lastLLMCode, 'rolled back', 'Reverting to last generated…');
     setStatus('RUNNING', 'rolled back');
   });
   if (!promoteButton) {

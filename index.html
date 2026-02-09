@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Maya Dev UI</title>
+  <title>PDCo Dev Studio</title>
   <link rel="stylesheet" href="styles.css" />
   <link
     rel="stylesheet"
@@ -28,7 +28,7 @@
   >
     <header id="top-bar">
       <div>
-        <h1>Maya Dev UI</h1>
+        <h1>PDCo Dev Studio</h1>
         <p class="subtitle">Chat with the model, edit code, and run it live.</p>
       </div>
       <div class="top-bar-actions">
@@ -302,7 +302,7 @@
         <div class="account-grid">
           <div class="account-card">
             <div class="account-field">
-              <span class="account-label">Total credits used</span>
+              <span class="account-label">Credits used</span>
               <span id="accountMonthCredits" class="account-value">—</span>
             </div>
           </div>
@@ -370,7 +370,8 @@
             <div id="credit-inline-warning" class="credit-inline-warning hidden"></div>
             <div id="throttleNotice" class="throttle hidden"></div>
             <div id="credit-zero" class="credit-zero hidden">
-              <span>You’ve hit your monthly limit — upgrade or wait for reset.</span>
+              <span>You are approaching your credit limit.</span>
+              <span>Upgrade your plan or add credits to continue.</span>
               <div class="credit-cta">
                 <button class="ghost-button" type="button">Upgrade Plan</button>
                 <button class="ghost-button" type="button" data-open-usage>View Usage</button>
@@ -384,7 +385,7 @@
               <span class="timer">0.0s</span>
             </div>
             <div class="chat-input-wrapper">
-              <textarea id="chat-input" placeholder="Ask the model something..."></textarea>
+              <textarea id="chat-input" placeholder="Describe what you want to build or change."></textarea>
               <div id="credit-preview" class="credit-preview" aria-live="polite"></div>
             </div>
             <button id="btn-mic" title="Speak" type="button">🎙️</button>
@@ -415,16 +416,16 @@
               <span id="line-count">Lines: 1</span>
             </div>
             <button id="runCode" type="button">Run Code</button>
-            <button id="revertButton" type="button" title="Go to previous code version" disabled>
+            <button id="revertButton" type="button" title="Revert to previous version" disabled>
               ⟲ Revert
             </button>
             <button id="forwardButton" type="button" title="Go to next code version" disabled>
               ⟳ Forward
             </button>
-            <button id="rollbackButton" type="button">Roll back to last generated</button>
+            <button id="rollbackButton" type="button">Revert to last generated</button>
             <button id="promoteButton" type="button">Promote to baseline</button>
             <div id="generation-indicator" class="generation-indicator">
-              ✨ Creating new UI
+              Generating output
             </div>
           </div>
         </section>
@@ -446,7 +447,7 @@
               </div>
               <div id="executionWarnings" class="execution-warnings hidden" aria-live="polite"></div>
               <div id="previewStatus" class="preview-status">
-                Preview updated by assistant
+                Preview updated.
               </div>
               <button id="viewDiffBtn" class="ghost-button" type="button" style="display:none;">
                 View changes

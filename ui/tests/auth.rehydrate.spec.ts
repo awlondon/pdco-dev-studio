@@ -26,7 +26,7 @@ test('app rehydrates session and hides auth modal', async ({ page, context }) =>
 
   await page.goto(baseUrl);
 
-  await expect(page.locator('text=Welcome to Maya')).toHaveCount(0);
+  await expect(page.locator('text=Welcome to PDCo Dev Studio')).toHaveCount(0);
   await expect(page.locator('#workspace')).toBeVisible();
 });
 
