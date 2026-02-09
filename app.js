@@ -153,6 +153,39 @@ const creditDailyMessage = document.getElementById('credit-daily-message');
 const creditUpgradeNudge = document.getElementById('credit-upgrade-nudge');
 const userMenuTrigger = document.getElementById('userMenuTrigger');
 const userMenu = document.getElementById('userMenu');
+const accountLink = document.getElementById('accountLink');
+const accountPage = document.getElementById('account-page');
+const accountBackButton = document.getElementById('accountBack');
+const accountEmailEl = document.getElementById('accountEmail');
+const accountAuthMethodsEl = document.getElementById('accountAuthMethods');
+const accountCreatedDateEl = document.getElementById('accountCreatedDate');
+const accountAgeEl = document.getElementById('accountAge');
+const accountUserIdEl = document.getElementById('accountUserId');
+const accountCopyUserIdButton = document.getElementById('accountCopyUserId');
+const accountPlanTierEl = document.getElementById('accountPlanTier');
+const accountBillingStatusEl = document.getElementById('accountBillingStatus');
+const accountRenewalDateEl = document.getElementById('accountRenewalDate');
+const accountCreditsRemainingEl = document.getElementById('accountCreditsRemaining');
+const accountCreditsTotalEl = document.getElementById('accountCreditsTotal');
+const accountCreditsResetEl = document.getElementById('accountCreditsReset');
+const accountPrimaryActionButton = document.getElementById('accountPrimaryAction');
+const accountBuyCreditsButton = document.getElementById('accountBuyCredits');
+const accountSessionStartedEl = document.getElementById('accountSessionStarted');
+const accountSessionTurnsEl = document.getElementById('accountSessionTurns');
+const accountSessionCreditsEl = document.getElementById('accountSessionCredits');
+const accountSessionTokensEl = document.getElementById('accountSessionTokens');
+const accountClearSessionButton = document.getElementById('accountClearSession');
+const accountSaveSessionButton = document.getElementById('accountSaveSession');
+const accountSessionHistoryBody = document.getElementById('accountSessionHistoryBody');
+const accountSessionHistoryEmpty = document.getElementById('accountSessionHistoryEmpty');
+const accountHistoryRangeLabel = document.getElementById('accountHistoryRange');
+const accountHistoryLoadMore = document.getElementById('accountHistoryLoadMore');
+const accountMonthCreditsEl = document.getElementById('accountMonthCredits');
+const accountMonthSessionsEl = document.getElementById('accountMonthSessions');
+const accountMonthAvgCreditsEl = document.getElementById('accountMonthAvgCredits');
+const accountDownloadLatestButton = document.getElementById('accountDownloadLatest');
+const accountSignOutButton = document.getElementById('accountSignOut');
+const accountDeleteButton = document.getElementById('accountDelete');
 const upgradePlanButton = document.getElementById('upgradePlan');
 const pricingModal = document.getElementById('pricing-modal');
 const pricingModalBody = document.getElementById('pricing-modal-body');
@@ -209,6 +242,7 @@ const lineCountEl = document.getElementById('line-count');
 const consoleLog = document.getElementById('console-output-log');
 const consolePane = document.getElementById('consoleOutput');
 const root = document.getElementById('root');
+const workspace = document.getElementById('workspace');
 let sandboxFrame = document.getElementById('sandbox');
 const previewFrameHost = document.getElementById('previewFrameContainer');
 const statusLabel = document.getElementById('status-label');
@@ -359,6 +393,7 @@ const ANALYTICS_CACHE_TTL_MS = 45 * 1000;
 const ANALYTICS_TIMEOUT_MS = 3000;
 const USAGE_FETCH_TIMEOUT_MS = 5000;
 const USAGE_RANGE_STEPS = [14, 30, 60, 90];
+const ACCOUNT_RANGE_STEPS = [30, 60, 90];
 const PLAN_DAILY_CAPS = {
   free: 100,
   starter: 500,
@@ -393,6 +428,16 @@ const analyticsModalState = {
   error: null,
   data: null,
   watchdogId: null
+};
+
+const accountState = {
+  user: null,
+  plan: null,
+  credits: null,
+  currentSession: null,
+  sessionHistory: [],
+  rangeIndex: 0,
+  loading: false
 };
 
 function applyAuthToRoot() {
@@ -454,6 +499,7 @@ function showAuthModal() {
 
 function bootstrapAuthenticatedUI(user) {
   currentUser = user;
+  accountState.user = user;
 
   uiState = UI_STATE.APP;
   showAnalytics = false;
@@ -464,6 +510,8 @@ function bootstrapAuthenticatedUI(user) {
 
   renderUserHeader();
   renderCredits();
+  updateAccountOverview();
+  updateAccountPlan();
   renderUI();
 }
 
@@ -504,6 +552,7 @@ function updateCreditsUI(credits) {
   }
   updateCreditUI();
   renderCredits();
+  updateAccountPlan();
 }
 
 function hydrateCreditState() {
@@ -578,6 +627,7 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
     plan: planLabel,
     creditsRemaining: resolvedCredits
   };
+  accountState.user = user;
 
   window.localStorage?.setItem('maya_credits', `${resolvedCredits}`);
 
@@ -586,6 +636,8 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
   updateCreditsUI(resolvedCredits);
   renderUserHeader();
   renderCredits();
+  updateAccountOverview();
+  updateAccountPlan();
 
   uiState = UI_STATE.APP;
   showAnalytics = false;
@@ -1055,6 +1107,215 @@ function formatSessionDuration(startedAt) {
   return `${hours}h ${remainder}m`;
 }
 
+function formatDurationBetween(startedAt, endedAt) {
+  if (!startedAt || !endedAt) {
+    return formatSessionDuration(startedAt);
+  }
+  const start = new Date(startedAt).getTime();
+  const end = new Date(endedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return '—';
+  }
+  const elapsedMs = Math.max(0, end - start);
+  const minutes = Math.max(0, Math.round(elapsedMs / 60000));
+  if (minutes < 1) {
+    return '0 min';
+  }
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return `${hours}h ${remainder}m`;
+}
+
+function formatDateLong(value) {
+  if (!value) {
+    return '—';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+}
+
+function formatRelativeDuration(value) {
+  if (!value) {
+    return '—';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+  const diffMs = Date.now() - date.getTime();
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (days >= 1) {
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+  const hours = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60)));
+  if (hours >= 1) {
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  const minutes = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function formatAuthProviders(value) {
+  const providers = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',').map((entry) => entry.trim())
+      : [];
+  const normalized = providers.filter(Boolean).map((provider) => {
+    const lower = provider.toLowerCase();
+    if (lower === 'google') return 'Google';
+    if (lower === 'apple') return 'Apple';
+    if (lower === 'email' || lower === 'magic') return 'Email';
+    return provider;
+  });
+  if (!normalized.length) {
+    return '—';
+  }
+  return normalized.join(' · ');
+}
+
+function normalizePlanTier(value) {
+  if (!value) {
+    return 'Free';
+  }
+  const lower = value.toString().toLowerCase();
+  if (lower === 'starter') return 'Starter';
+  if (lower === 'pro') return 'Pro';
+  if (lower === 'power') return 'Power';
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+function resolveAccountUser() {
+  return accountState.user || currentUser || Auth.user;
+}
+
+function updateAccountOverview() {
+  if (!accountPage) {
+    return;
+  }
+  const user = resolveAccountUser();
+  if (accountEmailEl) {
+    accountEmailEl.textContent = user?.email || '—';
+  }
+  if (accountAuthMethodsEl) {
+    const providers = user?.auth_providers || user?.authProviders || user?.providers || user?.provider;
+    accountAuthMethodsEl.textContent = formatAuthProviders(providers);
+  }
+  if (accountCreatedDateEl) {
+    accountCreatedDateEl.textContent = formatDateLong(user?.created_at || user?.createdAt);
+  }
+  if (accountAgeEl) {
+    accountAgeEl.textContent = formatRelativeDuration(user?.created_at || user?.createdAt);
+  }
+  if (accountUserIdEl) {
+    accountUserIdEl.textContent = user?.user_id || user?.id || '—';
+  }
+}
+
+function updateAccountPlan() {
+  if (!accountPage) {
+    return;
+  }
+  const user = resolveAccountUser();
+  const planTierValue = user?.plan_tier || user?.planTier || user?.plan;
+  const planTier = normalizePlanTier(planTierValue);
+  if (accountPlanTierEl) {
+    accountPlanTierEl.textContent = planTier;
+  }
+  if (accountBillingStatusEl) {
+    const status = user?.billing_status || user?.billingStatus || '—';
+    accountBillingStatusEl.textContent = status ? status.toString().replace(/_/g, ' ') : '—';
+  }
+  const resetAt = user?.monthly_reset_at || user?.monthlyResetAt;
+  if (accountRenewalDateEl) {
+    const isPaid = ['Pro', 'Power'].includes(planTier);
+    accountRenewalDateEl.textContent = isPaid ? formatDateLong(resetAt) : '—';
+  }
+  const creditState = getCreditState();
+  const remaining = Number(
+    user?.credits_remaining
+    ?? user?.creditsRemaining
+    ?? creditState.remainingCredits
+  );
+  const total = Number(
+    user?.credits_total
+    ?? user?.creditsTotal
+    ?? creditState.creditsTotal
+  );
+  if (accountCreditsRemainingEl) {
+    accountCreditsRemainingEl.textContent = Number.isFinite(remaining)
+      ? formatCreditNumber(remaining)
+      : '—';
+  }
+  if (accountCreditsTotalEl) {
+    accountCreditsTotalEl.textContent = Number.isFinite(total)
+      ? formatCreditNumber(total)
+      : '—';
+  }
+  if (accountCreditsResetEl) {
+    if (resetAt) {
+      const diffDays = Math.max(
+        0,
+        Math.ceil((new Date(resetAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      );
+      accountCreditsResetEl.textContent = `${diffDays} day${diffDays === 1 ? '' : 's'}`;
+    } else {
+      accountCreditsResetEl.textContent = '—';
+    }
+  }
+  updateAccountActions(planTierValue);
+}
+
+function updateAccountSessionSnapshot() {
+  if (!accountPage) {
+    return;
+  }
+  if (accountSessionStartedEl) {
+    const relative = formatRelativeDuration(sessionStartedAt);
+    accountSessionStartedEl.textContent = relative === '—' ? '—' : `${relative} ago`;
+  }
+  if (accountSessionTurnsEl) {
+    accountSessionTurnsEl.textContent = `${sessionStats.turns}`;
+  }
+  if (accountSessionCreditsEl) {
+    accountSessionCreditsEl.textContent = `~${formatCreditNumber(sessionStats.creditsUsedEstimate)}`;
+  }
+  if (accountSessionTokensEl) {
+    accountSessionTokensEl.textContent = `${formatNumber(sessionStats.tokensIn)} / ${formatNumber(sessionStats.tokensOut)}`;
+  }
+}
+
+function updateAccountActions(planTierValue) {
+  if (!accountPage) {
+    return;
+  }
+  const resolvedPlan = (planTierValue || '').toString().toLowerCase();
+  const isPaid = ['pro', 'power'].includes(resolvedPlan);
+  if (accountPrimaryActionButton) {
+    accountPrimaryActionButton.textContent = isPaid ? 'Manage subscription' : 'Upgrade plan';
+    accountPrimaryActionButton.onclick = () => {
+      if (isPaid) {
+        openBillingPortal();
+      } else {
+        openStripeCheckout('subscription');
+      }
+    };
+  }
+  if (accountBuyCreditsButton) {
+    accountBuyCreditsButton.onclick = () => openStripeCheckout('credits');
+  }
+}
+
 function updateSessionAnalyticsPanel() {
   if (sessionTurnsEl) {
     sessionTurnsEl.textContent = `${sessionStats.turns}`;
@@ -1074,6 +1335,7 @@ function updateSessionAnalyticsPanel() {
       sessionPreviousEl.classList.add('hidden');
     }
   }
+  updateAccountSessionSnapshot();
 }
 
 function updateSessionStatsFromUsage({ usage, inputTokensEstimate, outputTokensEstimate }) {
@@ -1267,6 +1529,7 @@ function renderApp() {
   ModalManager.close();
   root?.classList.remove('hidden');
   initializeAppForAuthenticatedUser();
+  updateRouteView();
 }
 
 function renderUI() {
@@ -1281,6 +1544,37 @@ function renderUI() {
   } else {
     closeUsageModal();
   }
+}
+
+function isAccountRoute() {
+  return window.location.pathname === '/account';
+}
+
+function updateRouteView() {
+  const showAccount = isAccountRoute();
+  if (accountPage) {
+    accountPage.classList.toggle('hidden', !showAccount);
+  }
+  if (workspace) {
+    workspace.classList.toggle('hidden', showAccount);
+  }
+  if (showAccount) {
+    updateAccountOverview();
+    updateAccountPlan();
+    updateAccountSessionSnapshot();
+    loadAccountUsageHistory().catch((error) => {
+      console.warn('Failed to load account usage history.', error);
+    });
+  }
+}
+
+function setRoute(path) {
+  if (window.location.pathname === path) {
+    updateRouteView();
+    return;
+  }
+  window.history.pushState({}, '', path);
+  updateRouteView();
 }
 
 async function hydrateSessionFromServer() {
@@ -1356,6 +1650,7 @@ async function bootstrapApp() {
   uiState = UI_STATE.APP;
   showAnalytics = false;
   renderApp();
+  updateRouteView();
 }
 
 function onAnalyticsClick() {
@@ -1788,6 +2083,11 @@ function openStripeCheckout(mode) {
     ? `${API_BASE}/checkout/subscription`
     : `${API_BASE}/checkout/credits`;
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
+}
+
+function openBillingPortal() {
+  const portalUrl = `${API_BASE}/billing/portal`;
+  window.open(portalUrl, '_blank', 'noopener,noreferrer');
 }
 
 function setPaywallMode(mode) {
@@ -2241,6 +2541,189 @@ async function loadUsageCsv() {
   usageCache.userRows = userRows;
   usageCache.fetchedAt = now;
   return { usageRows, userRows };
+}
+
+function filterUsageRowsByDays(rows, days) {
+  if (!Number.isFinite(days)) {
+    return rows;
+  }
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return rows.filter((row) => {
+    const timestamp = new Date(row.timestamp_utc).getTime();
+    if (!Number.isFinite(timestamp)) {
+      return false;
+    }
+    return timestamp >= cutoff;
+  });
+}
+
+function buildSessionSummaries(rows) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const sessionKey = row.session_id || 'session_unknown';
+    if (!map.has(sessionKey)) {
+      map.set(sessionKey, {
+        session_id: sessionKey,
+        started_at: row.timestamp_utc,
+        ended_at: row.timestamp_utc,
+        turns: 0,
+        credits_used: 0,
+        tokens_in: 0,
+        tokens_out: 0
+      });
+    }
+    const summary = map.get(sessionKey);
+    summary.turns += 1;
+    summary.credits_used += toNumber(row.credits_charged || row.credits_used);
+    summary.tokens_in += toNumber(row.input_tokens);
+    summary.tokens_out += toNumber(row.output_tokens);
+    if (row.timestamp_utc < summary.started_at) {
+      summary.started_at = row.timestamp_utc;
+    }
+    if (row.timestamp_utc > summary.ended_at) {
+      summary.ended_at = row.timestamp_utc;
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+  });
+}
+
+function renderAccountSessionHistory(summaries) {
+  if (!accountSessionHistoryBody || !accountSessionHistoryEmpty) {
+    return;
+  }
+  accountSessionHistoryBody.innerHTML = '';
+  if (!summaries.length) {
+    accountSessionHistoryEmpty.classList.remove('hidden');
+    return;
+  }
+  accountSessionHistoryEmpty.classList.add('hidden');
+  summaries.forEach((summary) => {
+    const rowEl = document.createElement('tr');
+    const sessionDate = formatDateLong(summary.started_at);
+    const duration = formatDurationBetween(summary.started_at, summary.ended_at);
+    const credits = formatNumber(summary.credits_used);
+    rowEl.innerHTML = `
+      <td>${sessionDate}</td>
+      <td>${duration}</td>
+      <td>${formatNumber(summary.turns)}</td>
+      <td>${credits}</td>
+      <td>
+        <div class="account-table-actions">
+          <button class="ghost-button small" data-session-action="json" data-session-id="${summary.session_id}">JSON</button>
+          <button class="ghost-button small" data-session-action="txt" data-session-id="${summary.session_id}">TXT</button>
+          <button class="ghost-button small" data-session-action="md" data-session-id="${summary.session_id}">MD</button>
+        </div>
+      </td>
+    `;
+    accountSessionHistoryBody.appendChild(rowEl);
+  });
+}
+
+function renderAccountMonthlySummary(rows, summaries) {
+  if (!accountMonthCreditsEl || !accountMonthSessionsEl || !accountMonthAvgCreditsEl) {
+    return;
+  }
+  const monthTotals = rows.length
+    ? getMonthTotals(rows)
+    : {
+      totalCredits: summaries.reduce((sum, entry) => sum + toNumber(entry.credits_used), 0),
+      totalRequests: 0,
+      avgLatency: 0,
+      successRate: 0
+    };
+  const sessionCount = summaries.length;
+  const avgCredits = sessionCount
+    ? Math.round(monthTotals.totalCredits / sessionCount)
+    : 0;
+  accountMonthCreditsEl.textContent = formatNumber(monthTotals.totalCredits);
+  accountMonthSessionsEl.textContent = formatNumber(sessionCount);
+  accountMonthAvgCreditsEl.textContent = formatNumber(avgCredits);
+}
+
+async function fetchUsageSummaryFromApi(days) {
+  const params = new URLSearchParams();
+  params.set('group_by', 'session');
+  if (Number.isFinite(days)) {
+    params.set('days', `${days}`);
+  }
+  const res = await fetch(`${API_BASE}/api/usage/summary?${params.toString()}`, {
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    throw new Error('Usage summary unavailable');
+  }
+  return res.json().catch(() => ({}));
+}
+
+async function loadAccountUsageHistory() {
+  if (!accountPage || accountState.loading) {
+    return;
+  }
+  accountState.loading = true;
+  const rangeDays = ACCOUNT_RANGE_STEPS[accountState.rangeIndex] || ACCOUNT_RANGE_STEPS[0];
+  let usageRows = [];
+  let usageRowsForMonth = [];
+  let sessionSummaries = [];
+  try {
+    const apiData = await fetchUsageSummaryFromApi(rangeDays);
+    const sessions = apiData?.sessions || apiData?.data || [];
+    if (Array.isArray(sessions)) {
+      sessionSummaries = sessions.map((session) => ({
+        session_id: session.session_id || session.id || session.sessionId,
+        started_at: session.started_at || session.startedAt,
+        ended_at: session.ended_at || session.endedAt,
+        turns: toNumber(session.turns),
+        credits_used: toNumber(session.credits_used || session.credits_used_estimate || session.credits),
+        tokens_in: toNumber(session.tokens_in),
+        tokens_out: toNumber(session.tokens_out)
+      }));
+    }
+  } catch (error) {
+    try {
+      const { usageRows: csvRows } = await loadUsageCsv();
+      const context = getUserContext();
+      const filtered = filterUsageRows(
+        csvRows,
+        { userId: context.id, planTier: 'all', startDate: '', endDate: '' },
+        {},
+        false
+      );
+      usageRowsForMonth = filtered;
+      usageRows = filterUsageRowsByDays(filtered, rangeDays);
+      sessionSummaries = buildSessionSummaries(usageRows);
+    } catch (fallbackError) {
+      console.warn('Account usage fallback failed.', fallbackError);
+      sessionSummaries = [];
+    }
+  }
+
+  if (!usageRows.length) {
+    const { usageRows: csvRows } = await loadUsageCsv();
+    const context = getUserContext();
+    const filtered = filterUsageRows(
+      csvRows,
+      { userId: context.id, planTier: 'all', startDate: '', endDate: '' },
+      {},
+      false
+    );
+    usageRowsForMonth = filtered;
+    usageRows = filterUsageRowsByDays(filtered, rangeDays);
+  }
+
+  accountState.sessionHistory = sessionSummaries;
+  if (accountHistoryRangeLabel) {
+    accountHistoryRangeLabel.textContent = `Last ${rangeDays} days`;
+  }
+  if (accountHistoryLoadMore) {
+    const canLoadMore = accountState.rangeIndex < ACCOUNT_RANGE_STEPS.length - 1;
+    accountHistoryLoadMore.disabled = !canLoadMore;
+    accountHistoryLoadMore.textContent = canLoadMore ? 'Load more' : 'Showing all';
+  }
+  renderAccountSessionHistory(sessionSummaries);
+  renderAccountMonthlySummary(usageRowsForMonth.length ? usageRowsForMonth : usageRows, sessionSummaries);
+  accountState.loading = false;
 }
 
 function buildUsersById(userRows) {
@@ -2837,6 +3320,73 @@ async function saveChatToJSON(summary) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadFile({ content, filename, type }) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildSessionExportPayload(summary) {
+  return {
+    session: summary,
+    exported_at: new Date().toISOString()
+  };
+}
+
+async function downloadSessionExport(summary, format) {
+  if (!summary?.session_id) {
+    return;
+  }
+  let payload = null;
+  try {
+    const res = await fetch(`${API_BASE}/api/session/export/${encodeURIComponent(summary.session_id)}`, {
+      credentials: 'include'
+    });
+    if (res.ok) {
+      payload = await res.json().catch(() => null);
+    }
+  } catch (error) {
+    console.warn('Session export fetch failed.', error);
+  }
+
+  const resolvedPayload = payload || buildSessionExportPayload(summary);
+  const baseFilename = `maya-session-${summary.session_id}-${formatTimestampForFilename(new Date(summary.started_at || Date.now()))}`;
+
+  if (format === 'json') {
+    downloadFile({
+      content: JSON.stringify(resolvedPayload, null, 2),
+      filename: `${baseFilename}.json`,
+      type: 'application/json'
+    });
+    return;
+  }
+
+  const transcriptLines = [
+    `Session ${summary.session_id}`,
+    `Started: ${summary.started_at || '—'}`,
+    `Ended: ${summary.ended_at || '—'}`,
+    `Turns: ${summary.turns ?? 0}`,
+    `Credits used: ${summary.credits_used ?? 0}`,
+    '',
+    'Transcript data is not yet available for this session export.'
+  ];
+  const content = format === 'md'
+    ? transcriptLines.map((line) => (line ? `- ${line}` : '')).join('\n')
+    : transcriptLines.join('\n');
+
+  downloadFile({
+    content,
+    filename: `${baseFilename}.${format === 'md' ? 'md' : 'txt'}`,
+    type: 'text/plain'
+  });
 }
 
 function getEstimatedNextCost() {
@@ -4926,6 +5476,102 @@ if (userMenuTrigger && userMenu) {
     if (event.key === 'Escape') {
       closeUserMenu();
     }
+  });
+}
+
+if (accountLink) {
+  accountLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    closeUserMenu?.();
+    setRoute('/account');
+  });
+}
+
+if (accountBackButton) {
+  accountBackButton.addEventListener('click', () => {
+    setRoute('/');
+  });
+}
+
+window.addEventListener('popstate', () => {
+  updateRouteView();
+});
+
+if (accountCopyUserIdButton) {
+  accountCopyUserIdButton.addEventListener('click', async () => {
+    const userId = accountUserIdEl?.textContent?.trim();
+    if (!userId || userId === '—') {
+      return;
+    }
+    const copied = await copyToClipboard(userId);
+    if (copied) {
+      showToast('User ID copied.', { variant: 'success', duration: 2000 });
+    }
+  });
+}
+
+if (accountClearSessionButton) {
+  accountClearSessionButton.addEventListener('click', () => {
+    openClearChatModal();
+  });
+}
+
+if (accountSaveSessionButton) {
+  accountSaveSessionButton.addEventListener('click', () => {
+    const summary = buildSessionSummary(new Date());
+    saveChatToJSON(summary);
+  });
+}
+
+if (accountDownloadLatestButton) {
+  accountDownloadLatestButton.addEventListener('click', () => {
+    const summary = buildSessionSummary(new Date());
+    downloadSessionExport({
+      session_id: summary.session_id,
+      started_at: summary.started_at,
+      ended_at: summary.ended_at,
+      turns: summary.turns,
+      credits_used: summary.credits_used_estimate,
+      tokens_in: summary.tokens_in,
+      tokens_out: summary.tokens_out
+    }, 'json');
+  });
+}
+
+if (accountSessionHistoryBody) {
+  accountSessionHistoryBody.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-session-action]');
+    if (!button) {
+      return;
+    }
+    const sessionId = button.dataset.sessionId;
+    const action = button.dataset.sessionAction;
+    const summary = accountState.sessionHistory.find((entry) => entry.session_id === sessionId);
+    if (!summary) {
+      return;
+    }
+    if (action === 'json') {
+      downloadSessionExport(summary, 'json');
+    } else if (action === 'md') {
+      downloadSessionExport(summary, 'md');
+    } else {
+      downloadSessionExport(summary, 'txt');
+    }
+  });
+}
+
+if (accountHistoryLoadMore) {
+  accountHistoryLoadMore.addEventListener('click', () => {
+    accountState.rangeIndex = Math.min(accountState.rangeIndex + 1, ACCOUNT_RANGE_STEPS.length - 1);
+    loadAccountUsageHistory().catch((error) => {
+      console.warn('Failed to load more account history.', error);
+    });
+  });
+}
+
+if (accountSignOutButton) {
+  accountSignOutButton.addEventListener('click', () => {
+    signOut();
   });
 }
 

@@ -99,6 +99,202 @@
       </div>
     </div>
 
+    <main id="account-page" class="account-page hidden" aria-label="Account">
+      <div class="account-header">
+        <div>
+          <h2>Account</h2>
+          <p class="account-subtitle">Operational details about your identity, plan, and usage.</p>
+        </div>
+        <button id="accountBack" class="ghost-button" type="button">Back to workspace</button>
+      </div>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Account overview</h3>
+          <p>Identity and authentication details for support and debugging.</p>
+        </div>
+        <div class="account-grid">
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Email</span>
+              <span id="accountEmail" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Auth methods</span>
+              <span id="accountAuthMethods" class="account-value">—</span>
+            </div>
+          </div>
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Account created</span>
+              <span id="accountCreatedDate" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Account age</span>
+              <span id="accountAge" class="account-value">—</span>
+            </div>
+          </div>
+        </div>
+        <details class="account-details">
+          <summary>User ID (for support)</summary>
+          <div class="account-user-id">
+            <span id="accountUserId" class="account-value">—</span>
+            <button id="accountCopyUserId" class="ghost-button small" type="button">Copy</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Plan &amp; billing</h3>
+          <p>What you’re on and how your monthly credits reset.</p>
+        </div>
+        <div class="account-grid">
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Current plan</span>
+              <span id="accountPlanTier" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Billing status</span>
+              <span id="accountBillingStatus" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Renewal date</span>
+              <span id="accountRenewalDate" class="account-value">—</span>
+            </div>
+          </div>
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Credits remaining</span>
+              <span id="accountCreditsRemaining" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Monthly allowance</span>
+              <span id="accountCreditsTotal" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Days until reset</span>
+              <span id="accountCreditsReset" class="account-value">—</span>
+            </div>
+          </div>
+        </div>
+        <div class="account-action-row">
+          <button id="accountPrimaryAction" class="ghost-button" type="button">Upgrade plan</button>
+          <button id="accountBuyCredits" class="ghost-button subtle" type="button">Buy credits</button>
+        </div>
+      </section>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Current session snapshot</h3>
+          <p>Live view of the session you’re in right now.</p>
+        </div>
+        <div class="account-card account-session-card">
+          <div class="account-metric">
+            <span class="account-label">Started</span>
+            <span id="accountSessionStarted" class="account-value">—</span>
+          </div>
+          <div class="account-metric">
+            <span class="account-label">Turns</span>
+            <span id="accountSessionTurns" class="account-value">0</span>
+          </div>
+          <div class="account-metric">
+            <span class="account-label">Credits used (est.)</span>
+            <span id="accountSessionCredits" class="account-value">~0</span>
+          </div>
+          <div class="account-metric">
+            <span class="account-label">Tokens in / out</span>
+            <span id="accountSessionTokens" class="account-value">0 / 0</span>
+          </div>
+        </div>
+        <div class="account-action-row">
+          <button id="accountClearSession" class="ghost-button" type="button">Clear Chat / New Session</button>
+          <button id="accountSaveSession" class="ghost-button subtle" type="button">Save Session</button>
+        </div>
+      </section>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Usage history</h3>
+          <p>Session-level usage over the last 30 days.</p>
+        </div>
+        <div class="account-table-wrapper">
+          <table class="account-table">
+            <thead>
+              <tr>
+                <th>Session start</th>
+                <th>Duration</th>
+                <th>Turns</th>
+                <th>Credits used</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accountSessionHistoryBody"></tbody>
+          </table>
+          <div id="accountSessionHistoryEmpty" class="account-empty hidden">
+            No session history available yet.
+          </div>
+        </div>
+        <div class="account-action-row align-between">
+          <span id="accountHistoryRange" class="account-muted">Last 30 days</span>
+          <button id="accountHistoryLoadMore" class="ghost-button subtle" type="button">Load more</button>
+        </div>
+      </section>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Monthly usage summary</h3>
+          <p>Aggregated usage for the current month.</p>
+        </div>
+        <div class="account-grid">
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Total credits used</span>
+              <span id="accountMonthCredits" class="account-value">—</span>
+            </div>
+          </div>
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Total sessions</span>
+              <span id="accountMonthSessions" class="account-value">—</span>
+            </div>
+          </div>
+          <div class="account-card">
+            <div class="account-field">
+              <span class="account-label">Avg credits per session</span>
+              <span id="accountMonthAvgCredits" class="account-value">—</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="account-section">
+        <div class="account-section-header">
+          <h3>Downloads &amp; exports</h3>
+          <p>Export session data for your records.</p>
+        </div>
+        <div class="account-action-row">
+          <button id="accountDownloadLatest" class="ghost-button" type="button">Download latest session (JSON)</button>
+          <button class="ghost-button subtle" type="button" disabled>Download all sessions (ZIP)</button>
+          <button class="ghost-button subtle" type="button" disabled>Download monthly usage report (CSV)</button>
+        </div>
+        <p class="account-muted">Bulk exports are coming soon.</p>
+      </section>
+
+      <section class="account-section account-footer">
+        <div class="account-section-header">
+          <h3>Account actions</h3>
+          <p>Security and support options.</p>
+        </div>
+        <div class="account-action-row">
+          <button id="accountSignOut" class="ghost-button" type="button">Sign out</button>
+          <button id="accountDelete" class="ghost-button danger" type="button" disabled>Delete account (coming soon)</button>
+          <a class="ghost-button subtle" href="mailto:support@maya.dev">Support / contact</a>
+        </div>
+      </section>
+    </main>
+
     <main id="workspace">
       <div id="left-pane" class="left-pane">
         <section id="chat-panel" class="panel">

@@ -252,11 +252,22 @@ async function handleMe(request, env) {
 
   const resolvedUser = {
     id: session.user?.id,
+    user_id: session.user?.user_id ?? session.user?.id,
     email: session.user?.email,
     name: session.user?.name ?? session.user?.email?.split('@')[0] ?? 'User',
+    provider: session.user?.provider,
+    auth_providers: session.user?.auth_providers
+      ?? session.user?.authProviders
+      ?? (session.user?.provider ? [session.user.provider] : []),
+    created_at: session.user?.created_at,
     plan: session.user?.plan ?? 'Free',
-    creditsRemaining: session.user?.creditsRemaining ?? 500,
-    provider: session.user?.provider
+    plan_tier: session.user?.plan_tier ?? session.user?.plan,
+    billing_status: session.user?.billing_status,
+    creditsRemaining: session.user?.creditsRemaining ?? session.user?.credits_remaining ?? 500,
+    creditsTotal: session.user?.creditsTotal ?? session.user?.credits_total,
+    credits_remaining: session.user?.credits_remaining ?? session.user?.creditsRemaining ?? 500,
+    credits_total: session.user?.credits_total ?? session.user?.creditsTotal,
+    monthly_reset_at: session.user?.monthly_reset_at
   };
 
   return new Response(JSON.stringify({

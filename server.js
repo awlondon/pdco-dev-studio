@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -123,6 +124,90 @@ app.get('/api/me', async (req, res) => {
   } catch (error) {
     console.error('Failed to load /me.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load session' });
+  }
+});
+
+app.get('/api/usage/summary', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const groupBy = String(req.query.group_by || 'session');
+    const days = Number(req.query.days);
+    const startDate = req.query.start_date ? String(req.query.start_date) : '';
+    const endDate = req.query.end_date ? String(req.query.end_date) : '';
+    const usageRows = await loadUsageLogRows();
+    const filtered = filterUsageRowsByRange({
+      rows: usageRows,
+      userId: session.sub,
+      days,
+      startDate,
+      endDate
+    });
+    if (groupBy === 'session') {
+      return res.json({
+        ok: true,
+        sessions: buildSessionSummariesFromUsage(filtered)
+      });
+    }
+    return res.json({ ok: true, rows: filtered });
+  } catch (error) {
+    console.error('Failed to load usage summary.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load usage summary' });
+  }
+});
+
+app.get('/api/session/export/:sessionId', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const sessionId = req.params.sessionId;
+    const usageRows = await loadUsageLogRows();
+    const filtered = usageRows.filter((row) => {
+      return row.session_id === sessionId && row.user_id === session.sub;
+    });
+    if (!filtered.length) {
+      return res.status(404).json({ ok: false, error: 'Session not found' });
+    }
+    const [summary] = buildSessionSummariesFromUsage(filtered);
+    return res.json({
+      ok: true,
+      session: summary,
+      events: filtered
+    });
+  } catch (error) {
+    console.error('Failed to export session.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to export session' });
+  }
+});
+
+app.get('/billing/portal', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).send('Unauthorized');
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+    if (!user.stripe_customer_id) {
+      return res.status(400).send('No Stripe customer ID');
+    }
+    const returnUrl = process.env.FRONTEND_URL
+      || req.headers.origin
+      || 'https://maya-dev-ui.pages.dev';
+    const portalSession = await createStripeBillingPortalSession({
+      customerId: user.stripe_customer_id,
+      returnUrl
+    });
+    return res.redirect(portalSession.url);
+  } catch (error) {
+    console.error('Billing portal failed.', error);
+    return res.status(500).send('Unable to load billing portal');
   }
 });
 
@@ -718,13 +803,26 @@ function parseCookie(cookieHeader, name) {
 }
 
 function mapUserForClient(user) {
+  const creditsRemaining = Number(user.credits_remaining ?? 0);
+  const creditsTotal = Number(user.credits_total ?? 0);
   return {
     id: user.user_id,
+    user_id: user.user_id,
     email: user.email,
     name: user.display_name || user.email?.split('@')[0] || 'User',
     provider: user.auth_provider,
+    auth_providers: user.auth_providers
+      ? String(user.auth_providers).split(',').map((entry) => entry.trim())
+      : [user.auth_provider].filter(Boolean),
+    created_at: user.created_at,
     plan: user.plan_tier,
-    creditsRemaining: Number(user.credits_remaining ?? 0)
+    plan_tier: user.plan_tier,
+    billing_status: user.billing_status,
+    credits_remaining: creditsRemaining,
+    credits_total: creditsTotal,
+    monthly_reset_at: user.monthly_reset_at,
+    creditsRemaining: creditsRemaining,
+    creditsTotal: creditsTotal
   };
 }
 
@@ -800,6 +898,78 @@ function parseCSV(text) {
       entry[header] = values[index] ?? '';
     });
     return entry;
+  });
+}
+
+async function loadUsageLogRows() {
+  try {
+    const fileUrl = new URL('./data/usage_log.csv', import.meta.url);
+    const text = await fs.readFile(fileUrl, 'utf8');
+    return parseCSV(text);
+  } catch {
+    return [];
+  }
+}
+
+function filterUsageRowsByRange({ rows, userId, days, startDate, endDate }) {
+  const cutoff = Number.isFinite(days)
+    ? Date.now() - days * 24 * 60 * 60 * 1000
+    : null;
+  return rows.filter((row) => {
+    if (userId && row.user_id !== userId) {
+      return false;
+    }
+    if (startDate) {
+      const day = row.timestamp_utc?.slice(0, 10);
+      if (day && day < startDate) {
+        return false;
+      }
+    }
+    if (endDate) {
+      const day = row.timestamp_utc?.slice(0, 10);
+      if (day && day > endDate) {
+        return false;
+      }
+    }
+    if (cutoff) {
+      const timestamp = new Date(row.timestamp_utc).getTime();
+      if (!Number.isFinite(timestamp) || timestamp < cutoff) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function buildSessionSummariesFromUsage(rows) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const sessionId = row.session_id || 'session_unknown';
+    if (!map.has(sessionId)) {
+      map.set(sessionId, {
+        session_id: sessionId,
+        started_at: row.timestamp_utc,
+        ended_at: row.timestamp_utc,
+        turns: 0,
+        credits_used: 0,
+        tokens_in: 0,
+        tokens_out: 0
+      });
+    }
+    const summary = map.get(sessionId);
+    summary.turns += 1;
+    summary.credits_used += Number(row.credits_charged || row.credits_used || 0) || 0;
+    summary.tokens_in += Number(row.input_tokens || 0) || 0;
+    summary.tokens_out += Number(row.output_tokens || 0) || 0;
+    if (row.timestamp_utc < summary.started_at) {
+      summary.started_at = row.timestamp_utc;
+    }
+    if (row.timestamp_utc > summary.ended_at) {
+      summary.ended_at = row.timestamp_utc;
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
   });
 }
 
@@ -1002,6 +1172,31 @@ async function createStripeCheckoutSession({ mode, priceId, user, metadata = {},
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Stripe checkout failed: ${text}`);
+  }
+
+  return response.json();
+}
+
+async function createStripeBillingPortalSession({ customerId, returnUrl }) {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('Missing STRIPE_SECRET_KEY');
+  }
+  const params = new URLSearchParams();
+  params.set('customer', customerId);
+  params.set('return_url', returnUrl);
+
+  const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params.toString()
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Stripe billing portal failed: ${text}`);
   }
 
   return response.json();
