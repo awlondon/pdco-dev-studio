@@ -325,6 +325,7 @@ const sandboxResumeButton = document.getElementById('sandboxResume');
 const sandboxResetButton = document.getElementById('sandboxReset');
 const sandboxStopButton = document.getElementById('sandboxStop');
 const runButton = document.getElementById('runCode');
+const revertButton = document.getElementById('revertButton');
 const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
@@ -1143,6 +1144,11 @@ function clearChatState() {
   updateClearChatButtonState();
 }
 
+function resetCodeHistory() {
+  codeHistory.length = 0;
+  updateRevertButtonState();
+}
+
 function clearEditorState() {
   if (!codeEditor) {
     return;
@@ -1156,6 +1162,7 @@ function clearEditorState() {
   lastRunSource = null;
   lastCodeSource = null;
   userHasEditedCode = false;
+  resetCodeHistory();
   updateLineNumbers();
   updateRunButtonVisibility();
   updateRollbackVisibility();
@@ -2210,6 +2217,7 @@ function applyArtifactToEditor(artifact) {
   baselineCode = artifact.code.content;
   lastLLMCode = artifact.code.content;
   userHasEditedCode = false;
+  resetCodeHistory();
   lastCodeSource = 'artifact';
   activeArtifactId = artifact.artifact_id || null;
   updateRunButtonVisibility();
@@ -5351,6 +5359,8 @@ let loadingInterval = null;
 let isGenerating = false;
 let isPaywallVisible = false;
 let lastLLMCode = null;
+const MAX_CODE_HISTORY = 10;
+const codeHistory = [];
 let userHasEditedCode = false;
 let baseExecutionWarnings = [];
 let sandboxMode = 'finite';
@@ -6521,6 +6531,15 @@ function updateRollbackVisibility() {
     userHasEditedCode && lastLLMCode ? 'inline-flex' : 'none';
 }
 
+function updateRevertButtonState() {
+  if (!revertButton) {
+    return;
+  }
+  const hasHistory = codeHistory.length > 0;
+  revertButton.disabled = !hasHistory;
+  revertButton.setAttribute('aria-disabled', hasHistory ? 'false' : 'true');
+}
+
 function updatePromoteVisibility() {
   if (!promoteButton) {
     return;
@@ -6530,9 +6549,24 @@ function updatePromoteVisibility() {
     userHasEditedCode && isRunning ? 'inline-flex' : 'none';
 }
 
+function applyLLMEdit(newCode) {
+  if (!codeEditor) {
+    return;
+  }
+  const previousCode = codeEditor.value;
+  if (typeof previousCode === 'string') {
+    codeHistory.push(previousCode);
+    if (codeHistory.length > MAX_CODE_HISTORY) {
+      codeHistory.splice(0, codeHistory.length - MAX_CODE_HISTORY);
+    }
+  }
+  codeEditor.value = newCode;
+  updateRevertButtonState();
+}
+
 function setCodeFromLLM(code) {
   lastLLMCode = code;
-  codeEditor.value = code;
+  applyLLMEdit(code);
   baselineCode = code;
   userHasEditedCode = false;
   lastCodeSource = 'llm';
@@ -7701,6 +7735,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
+  updateRevertButtonState();
   updateSaveCodeButtonState();
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
@@ -7710,6 +7745,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     handleUserRun(codeEditor.value);
   });
+  if (!revertButton) {
+    console.warn('⚠️ Revert button not found');
+  } else {
+    revertButton.addEventListener('click', () => {
+      const lastVersion = codeHistory.pop();
+      updateRevertButtonState();
+      if (typeof lastVersion !== 'string') {
+        return;
+      }
+      codeEditor.value = lastVersion;
+      userHasEditedCode = codeEditor.value !== baselineCode;
+      lastCodeSource = 'user';
+      updateRunButtonVisibility();
+      updateRollbackVisibility();
+      updatePromoteVisibility();
+      updateLineNumbers();
+      updateSaveCodeButtonState();
+      if (userHasEditedCode) {
+        markPreviewStale();
+      }
+      resetExecutionPreparation();
+      requestCreditPreviewUpdate();
+      showToast('Reverted to previous version', { variant: 'success', duration: 2500 });
+    });
+  }
   if (!rollbackButton) {
     console.warn('⚠️ Rollback button not found');
     return;
