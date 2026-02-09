@@ -150,21 +150,21 @@ app.post('/api/artifacts/metadata', async (req, res) => {
     const prompt = [
       {
         role: 'system',
-        content: `You are generating metadata for a saved code artifact.
+        content: `You are generating public-facing metadata for a code artifact.
 
-Given:
-1. A chat transcript that led to this code
-2. The final code output
+Constraints:
+- Tone must be neutral, technical, and professional.
+- Do not use conversational language.
+- Do not use filler phrases.
+- Do not mention the process, assistant, or chat.
+- Do not sound friendly or promotional.
+- Avoid these phrases: “Here’s”, “Let’s”, “You can”, “This helps”, “In this example”, “We”.
+- Do not mention “artifact” or “chat”.
 
-Return:
-- A concise, human-readable title (≤ 60 characters)
-- A clear 1–2 sentence description of what the code does
-
-Rules:
-- Do NOT mention “artifact”
-- Do NOT mention “chat”
-- Assume this will be shown publicly
-- Be specific, not generic
+Output requirements:
+- Title: concise, specific, ≤ 60 characters.
+- Description: 1–2 sentences, factual, concrete.
+- Assume this will be shown publicly.
 
 Return JSON only:
 {

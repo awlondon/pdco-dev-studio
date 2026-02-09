@@ -394,15 +394,54 @@ const defaultInterfaceCode = `<!doctype html>
 </html>`;
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
-const DEFAULT_SYSTEM_PROMPT = `You are a coding assistant.
+const SYSTEM_BASE = 'You are a coding assistant.';
+const PERSONALITY_LAYER = `Tone:
+- Helpful
+- Adaptive
+- Slightly warm
 
-Output rules:
+You may ask clarifying questions and use light framing when helpful.`;
+const CHAT_PROMPT_CONTENT = `Output rules:
 - Never output JSON, YAML, or code fences.
 - If you return HTML, the FIRST line must be:
   <!--CHAT: <a short conversational message for the user> -->
   Then output a complete HTML document.
 - If no HTML is needed, output plain conversational text only.
 - If a visual is requested as part of a technical discussion, prioritize correctness and demonstration over expressiveness or celebration.`;
+const EXECUTION_PROMPT_CONTENT = `Respond with correct, production-quality code.
+Do not explain unless asked.
+Do not use conversational language.
+No metaphors. No encouragement. No emojis. No hedging language.
+Avoid: “Here’s”, “Let’s”, “You can”, “This helps”, “In this example”, “We”.
+
+Output rules:
+- Never output JSON, YAML, or code fences.
+- If you return HTML, the FIRST line must be:
+  <!--CHAT: <a short neutral status message> -->
+  Then output a complete HTML document.
+- If no HTML is needed, output plain text only.`;
+
+function buildPrompt({ role, content }) {
+  const base = SYSTEM_BASE;
+
+  if (role === 'metadata' || role === 'execution') {
+    return [
+      base,
+      'Disable conversational tone.',
+      'Prioritize precision over friendliness.',
+      content
+    ].join('\n\n');
+  }
+
+  return [base, PERSONALITY_LAYER, content].join('\n\n');
+}
+
+function getSystemPromptForIntent(resolvedIntent) {
+  if (resolvedIntent?.type === 'code') {
+    return buildPrompt({ role: 'execution', content: EXECUTION_PROMPT_CONTENT });
+  }
+  return buildPrompt({ role: 'chat', content: CHAT_PROMPT_CONTENT });
+}
 
 const SESSION_BRIDGE_MARKER = '<!-- MAYA_SESSION_BRIDGE -->';
 const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
@@ -1445,7 +1484,7 @@ async function postSessionClose(summary) {
 }
 
 function startNewSession() {
-  systemPrompt = DEFAULT_SYSTEM_PROMPT;
+  systemPrompt = getSystemPromptForIntent({ type: 'chat' });
   sessionId = startNewSessionId();
   sessionStartedAt = startNewSessionStartedAt();
   resetSessionStats();
@@ -1853,7 +1892,7 @@ const sessionStats = {
   tokensOut: 0
 };
 let lastSessionSummary = null;
-let systemPrompt = DEFAULT_SYSTEM_PROMPT;
+let systemPrompt = getSystemPromptForIntent({ type: 'chat' });
 
 const isDev = window.location.hostname === 'localhost'
   || window.location.hostname === '127.0.0.1';
@@ -6711,10 +6750,12 @@ async function sendChat() {
     chatAbortController = new AbortController();
     chatAbortSilent = false;
 
+    const systemPromptForIntent = getSystemPromptForIntent(resolvedIntent);
+    systemPrompt = systemPromptForIntent;
     const messages = [
       {
         role: 'system',
-        content: systemPrompt
+        content: systemPromptForIntent
       },
       {
         role: 'user',
