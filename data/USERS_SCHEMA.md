@@ -1,47 +1,70 @@
-# Users CSV schema
+# User storage schema (Postgres)
 
-Canonical file: `data/users.csv`.
+Canonical schema lives in Postgres migrations (see `data/migrations/001_create_user_storage.sql`).
 
-## Columns
+`data/users.csv` is deprecated and retained only for historical backfill.
+
+## Tables
+
+### `users`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| user_id | string (uuid) | Primary key. Never changes. |
-| email | string | Normalized lowercase email. Used for identity merging. |
-| auth_provider | enum | `google`, `apple`, `email`. |
-| provider_user_id | string | OAuth subject/Apple user identifier (nullable for email). |
-| display_name | string | Optional (Google/Apple name or user-provided). |
-| created_at | ISO 8601 | Account creation timestamp. |
-| last_login_at | ISO 8601 | Last successful login. |
-| plan_tier | enum | `free`, `starter`, `pro`, `enterprise`. |
-| credits_total | int | Total credits granted for the current period. |
-| credits_remaining | int | Remaining credits for the current period. |
-| credits_balance | int | Authoritative remaining credits (ledger-backed). |
-| daily_credit_limit | int | Optional per-plan daily cap. |
-| credits_last_reset | ISO 8601 | Last daily reset timestamp. |
-| monthly_reset_at | ISO 8601 | Next monthly reset timestamp. |
-| newsletter_opt_in | boolean | Always true by default. |
-| account_status | enum | `active`, `suspended`. |
-| stripe_customer_id | string | Stripe customer identifier. |
-| stripe_subscription_id | string | Stripe subscription identifier. |
-| billing_status | enum | `active`, `past_due`, `canceled`. |
+| id | uuid | Primary key. |
+| email | text | Normalized lowercase email. |
+| display_name | text | Display name. |
+| created_at | timestamptz | Account creation timestamp. |
+| last_seen_at | timestamptz | Last successful login. |
+| auth_providers | jsonb | Array of `{ provider, provider_user_id }` objects. |
+
+### `billing`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| user_id | uuid | Primary key, FK to users. |
+| plan_tier | text | `free`, `starter`, `pro`, `power`. |
+| stripe_customer_id | text | Stripe customer identifier. |
+| stripe_subscription_id | text | Stripe subscription identifier. |
+| status | text | `active`, `past_due`, `canceled`. |
+| current_period_start | timestamptz | Billing period start. |
+| current_period_end | timestamptz | Billing period end (monthly reset target). |
+
+### `credits`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| user_id | uuid | Primary key, FK to users. |
+| monthly_quota | int | Total credits for the current period. |
+| balance | int | Authoritative remaining credits. |
+| daily_cap | int | Optional per-plan daily cap. |
+| daily_used | int | Credits consumed today. |
+| last_daily_reset_at | timestamptz | Last daily reset timestamp. |
+| last_monthly_reset_at | timestamptz | Last monthly reset timestamp. |
+
+### `credit_ledger`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| id | uuid | Primary key. |
+| user_id | uuid | FK to users. |
+| session_id | text | Session identifier. |
+| turn_id | text | Turn identifier (idempotency key). |
+| delta | int | Credit change (negative for debits). |
+| balance_after | int | Balance after the change. |
+| reason | text | Reason code (e.g. `llm_usage`). |
+| metadata | text | Serialized metadata. |
+| created_at | timestamptz | Ledger timestamp. |
 
 ## Notes
 
-- `provider_user_id` should store Google `sub` or Apple user identifier permanently.
-- Apple may return email only on the first login; fall back to `provider_user_id` for matching.
-- Email remains the primary identity merge key when present.
+- Apple may return email only on the first login; the stored provider IDs remain the primary identity link.
+- Email remains the primary merge key when present.
 
-## Update strategy
+## Migration/backfill
 
-- Fetch the latest `data/users.csv` from GitHub.
-- Parse into rows, update or append a single row, and write the file back with the latest SHA.
-- Avoid rewriting the file locally to prevent race conditions and silent overwrites.
+- Run the migration in `data/migrations/001_create_user_storage.sql`.
+- Use `scripts/import-users.js` to backfill existing CSV users into Postgres.
 
-## Update flow (GitHub contents API)
+## CSV deprecation
 
-1. `GET /repos/awlondon/maya-dev-ui/contents/data/users.csv` to retrieve `content` and `sha`.
-2. Parse the CSV.
-3. Modify or append a user record.
-4. Serialize the CSV (preserve header order).
-5. `PUT /repos/awlondon/maya-dev-ui/contents/data/users.csv` with the new content, prior `sha`, and `main` branch.
+`data/users.csv` remains in the repo for audit/backfill only. All runtime user reads/writes now go through Postgres.

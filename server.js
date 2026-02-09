@@ -25,10 +25,12 @@ import {
   isPremiumModel
 } from './utils/usageAnalytics.js';
 import {
-  appendCreditLedger,
-  parseCreditLedger,
-  readCreditLedger
-} from './api/creditLedger.js';
+  applyCreditDeduction,
+  findOrCreateUser,
+  findUserByStripeCustomer,
+  getUserById,
+  updateUser
+} from './utils/userDb.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -44,27 +46,6 @@ const PLAN_DAILY_CAPS = {
   pro: 2000,
   power: 10000
 };
-const REQUIRED_USER_HEADERS = [
-  'user_id',
-  'email',
-  'auth_provider',
-  'provider_user_id',
-  'display_name',
-  'created_at',
-  'last_login_at',
-  'plan_tier',
-  'credits_total',
-  'credits_remaining',
-  'credits_balance',
-  'daily_credit_limit',
-  'credits_last_reset',
-  'monthly_reset_at',
-  'newsletter_opt_in',
-  'account_status',
-  'stripe_customer_id',
-  'stripe_subscription_id',
-  'billing_status'
-];
 const STRIPE_PLAN_MAP = (() => {
   const raw = process.env.STRIPE_PLAN_MAP;
   if (!raw) return {};
@@ -1489,11 +1470,11 @@ app.post('/api/chat', async (req, res) => {
         turnId: requestId,
         creditsToCharge: actualCredits,
         creditsTotal,
-        metadata: {
+        metadata: formatCreditLedgerMetadata({
           model: data?.model || req.body?.model || requestedModel,
           tokens_in: resolvedInputTokens,
           tokens_out: resolvedOutputTokens
-        }
+        })
       });
       nextRemaining = Number.isFinite(chargeResult.nextBalance)
         ? chargeResult.nextBalance
@@ -1688,7 +1669,10 @@ app.post('/api/auth/google', async (req, res) => {
       email: payload.email,
       provider: 'google',
       providerUserId: payload.sub,
-      displayName: payload.name
+      displayName: payload.name,
+      planTier: FREE_PLAN.tier,
+      monthlyCredits: FREE_PLAN.monthly_credits,
+      dailyCap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null
     });
 
     return issueSessionCookie(res, req, user);
@@ -1753,7 +1737,10 @@ app.post('/api/auth/email/verify', async (req, res) => {
       email: payload.sub,
       provider: 'email',
       providerUserId: '',
-      displayName: payload.sub.split('@')[0]
+      displayName: payload.sub.split('@')[0],
+      planTier: FREE_PLAN.tier,
+      monthlyCredits: FREE_PLAN.monthly_credits,
+      dailyCap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null
     });
 
     return issueSessionCookie(res, req, user);
@@ -1784,7 +1771,10 @@ app.get('/auth/email', async (req, res) => {
       email: payload.sub,
       provider: 'email',
       providerUserId: '',
-      displayName: payload.sub.split('@')[0]
+      displayName: payload.sub.split('@')[0],
+      planTier: FREE_PLAN.tier,
+      monthlyCredits: FREE_PLAN.monthly_credits,
+      dailyCap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null
     });
 
     issueSessionCookie(res, req, user, { redirect: true });
@@ -1822,7 +1812,10 @@ app.post('/api/auth/apple', async (req, res) => {
       email,
       provider: 'apple',
       providerUserId: payload.sub,
-      displayName: payload.name || email.split('@')[0]
+      displayName: payload.name || email.split('@')[0],
+      planTier: FREE_PLAN.tier,
+      monthlyCredits: FREE_PLAN.monthly_credits,
+      dailyCap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null
     });
 
     return issueSessionCookie(res, req, user);
@@ -2064,14 +2057,19 @@ function mapUserForClient(user) {
   const creditsRemainingRaw = resolveCreditsBalance(user);
   const creditsTotal = Number(user.credits_total ?? 0);
   const creditsRemaining = clampCredits(creditsRemainingRaw, creditsTotal);
+  const authProviders = Array.isArray(user.auth_providers)
+    ? user.auth_providers
+    : user.auth_providers
+      ? String(user.auth_providers).split(',').map((entry) => entry.trim()).filter(Boolean)
+      : [];
   return {
     id: user.user_id,
     user_id: user.user_id,
     email: user.email,
     name: user.display_name || user.email?.split('@')[0] || 'User',
     provider: user.auth_provider,
-    auth_providers: user.auth_providers
-      ? String(user.auth_providers).split(',').map((entry) => entry.trim())
+    auth_providers: authProviders.length
+      ? authProviders
       : [user.auth_provider].filter(Boolean),
     created_at: user.created_at,
     plan: user.plan_tier,
@@ -2169,50 +2167,6 @@ function formatCreditLedgerMetadata(metadata) {
     .join(';');
 }
 
-async function readUsersCSV() {
-  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
-    throw new Error('Missing GitHub credentials for users.csv');
-  }
-  const repo = process.env.GITHUB_REPO;
-  const branch = process.env.GITHUB_BRANCH || 'main';
-  const res = await githubRequest(`/repos/${repo}/contents/data/users.csv?ref=${branch}`);
-  const content = Buffer.from(res.content, 'base64').toString('utf8');
-  return { sha: res.sha, rows: parseCSV(content) };
-}
-
-async function writeUsersCSV(rows, sha, message) {
-  const repo = process.env.GITHUB_REPO;
-  const branch = process.env.GITHUB_BRANCH || 'main';
-  const csv = serializeCSV(rows);
-  const encoded = Buffer.from(csv, 'utf8').toString('base64');
-
-  await githubRequest(`/repos/${repo}/contents/data/users.csv`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      message,
-      content: encoded,
-      sha,
-      branch
-    })
-  });
-}
-
-async function githubRequest(path, options = {}) {
-  const res = await fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'maya-api',
-      ...(options.headers || {})
-    }
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API error ${res.status}: ${text}`);
-  }
-  return res.json();
-}
 
 function parseCSV(text) {
   const trimmed = text.trim();
@@ -2877,15 +2831,6 @@ function buildSessionSummariesFromUsage(rows) {
   });
 }
 
-function serializeCSV(rows) {
-  const headers = REQUIRED_USER_HEADERS;
-  const lines = [
-    headers.join(','),
-    ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(','))
-  ];
-  return `${lines.join('\n')}\n`;
-}
-
 function csvEscape(value) {
   if (value === null || value === undefined) {
     return '';
@@ -2897,69 +2842,6 @@ function csvEscape(value) {
   return str;
 }
 
-async function getUserById(userId) {
-  const { rows } = await readUsersCSV();
-  return rows.find((row) => row.user_id === userId) || null;
-}
-
-async function findOrCreateUser({ email, provider, providerUserId, displayName }) {
-  const normalizedEmail = email?.toLowerCase() || '';
-  const { sha, rows } = await readUsersCSV();
-
-  let user = rows.find((row) => row.provider_user_id === providerUserId && row.auth_provider === provider);
-  if (!user && normalizedEmail) {
-    user = rows.find((row) => row.email === normalizedEmail);
-  }
-
-  const now = new Date().toISOString();
-
-  if (!user) {
-    user = {
-      user_id: crypto.randomUUID(),
-      email: normalizedEmail,
-      auth_provider: provider,
-      provider_user_id: providerUserId,
-      display_name: displayName || normalizedEmail.split('@')[0],
-      created_at: now,
-      last_login_at: now,
-      plan_tier: FREE_PLAN.tier,
-      credits_total: String(FREE_PLAN.monthly_credits),
-      credits_remaining: String(FREE_PLAN.monthly_credits),
-      credits_balance: String(FREE_PLAN.monthly_credits),
-      daily_credit_limit: String(PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? ''),
-      credits_last_reset: new Date().toISOString(),
-      monthly_reset_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
-      newsletter_opt_in: 'true',
-      account_status: 'active',
-      stripe_customer_id: '',
-      stripe_subscription_id: '',
-      billing_status: 'active'
-    };
-    rows.push(user);
-  } else {
-    user.email = normalizedEmail || user.email;
-    user.auth_provider = provider;
-    user.provider_user_id = providerUserId || user.provider_user_id;
-    user.display_name = displayName || user.display_name;
-    user.last_login_at = now;
-  }
-
-  await writeUsersCSV(rows, sha, `auth: update user ${user.user_id}`);
-  return user;
-}
-
-async function updateUser(userId, patch) {
-  const { sha, rows } = await readUsersCSV();
-  const user = rows.find((row) => row.user_id === userId);
-  if (!user) {
-    throw new Error(`User ${userId} not found`);
-  }
-  Object.entries(patch).forEach(([key, value]) => {
-    user[key] = value;
-  });
-  await writeUsersCSV(rows, sha, `billing: update user ${userId}`);
-  return user;
-}
 
 async function routeModelForUser({ user, intentType, requestedModel, sessionId }) {
   const pool = getUsageAnalyticsPool();
@@ -3112,91 +2994,6 @@ async function appendUsageEntry({
   await appendUsageLog(process.env, entry);
 }
 
-async function findCreditLedgerEntry({ userId, turnId, reason }) {
-  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO || !turnId) {
-    return null;
-  }
-
-  try {
-    const { content } = await readCreditLedger(process.env);
-    const rows = parseCreditLedger(content);
-    return rows.find((row) => {
-      return row.user_id === userId && row.turn_id === turnId && row.reason === reason;
-    }) || null;
-  } catch (error) {
-    console.warn('Failed to read credit ledger.', error);
-    return null;
-  }
-}
-
-async function appendCreditLedgerEntry(entry) {
-  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
-    return;
-  }
-
-  try {
-    await appendCreditLedger(process.env, entry);
-  } catch (error) {
-    console.warn('Failed to append credit ledger entry.', error);
-  }
-}
-
-async function applyCreditDeduction({
-  userId,
-  sessionId,
-  turnId,
-  creditsToCharge,
-  creditsTotal,
-  metadata,
-  reason = 'llm_usage'
-}) {
-  if (!Number.isFinite(creditsToCharge) || creditsToCharge <= 0) {
-    return { nextBalance: resolveCreditsBalance(await getUserById(userId)), alreadyCharged: false };
-  }
-
-  const existing = await findCreditLedgerEntry({ userId, turnId, reason });
-  if (existing) {
-    const balanceAfter = Number(existing.balance_after);
-    const resolvedBalance = Number.isFinite(balanceAfter)
-      ? balanceAfter
-      : resolveCreditsBalance(await getUserById(userId));
-    if (Number.isFinite(balanceAfter)) {
-      await updateUser(userId, {
-        credits_balance: String(balanceAfter),
-        credits_remaining: String(balanceAfter)
-      });
-    }
-    return { nextBalance: resolvedBalance, alreadyCharged: true };
-  }
-
-  const freshUser = await getUserById(userId);
-  if (!freshUser) {
-    throw new Error(`User ${userId} not found`);
-  }
-  const currentBalance = resolveCreditsBalance(freshUser);
-  if (currentBalance < creditsToCharge) {
-    throw new Error('INSUFFICIENT_CREDITS');
-  }
-  const nextBalance = clampCredits(currentBalance - creditsToCharge, creditsTotal);
-
-  await updateUser(userId, {
-    credits_balance: String(nextBalance),
-    credits_remaining: String(nextBalance)
-  });
-
-  await appendCreditLedgerEntry({
-    timestamp_utc: new Date().toISOString(),
-    user_id: userId,
-    session_id: sessionId || '',
-    turn_id: turnId || '',
-    delta: -creditsToCharge,
-    balance_after: nextBalance,
-    reason,
-    metadata: formatCreditLedgerMetadata(metadata)
-  });
-
-  return { nextBalance, alreadyCharged: false };
-}
 
 async function sendMagicEmail(email, link) {
   if (!process.env.RESEND_API_KEY) {
@@ -3439,12 +3236,6 @@ async function onInvoicePaymentFailed(invoice) {
   await updateUser(user.user_id, {
     billing_status: 'past_due'
   });
-}
-
-async function findUserByStripeCustomer(stripeCustomerId) {
-  if (!stripeCustomerId) return null;
-  const { rows } = await readUsersCSV();
-  return rows.find((row) => row.stripe_customer_id === stripeCustomerId) || null;
 }
 
 function normalizeStripeSubStatus(status) {

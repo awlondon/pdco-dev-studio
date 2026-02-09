@@ -50,6 +50,18 @@ If you host the UI on a static site, keep the API key on the server (for example
 ## Documentation
 
 - [Glyph schema v1](docs/glyph-schema.md)
+- [User storage schema](data/USERS_SCHEMA.md)
+
+## User storage migration
+
+User accounts, billing, and credits are stored in Postgres. To bootstrap a new database:
+
+1. Apply `data/migrations/001_create_user_storage.sql`.
+2. (Optional) Import legacy CSV users:
+
+   ```bash
+   node scripts/import-users.js
+   ```
 
 ## Next steps
 

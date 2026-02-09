@@ -790,6 +790,7 @@ async function getUserFromStore(env, userId) {
 }
 
 async function upsertUserToStore(env, userId, patch) {
+  assertLegacyUserStoreEnabled(env);
   const repo = env.GITHUB_REPO;
   const branch = env.GITHUB_BRANCH || 'main';
 
@@ -849,6 +850,7 @@ async function githubRequest(env, path, options = {}) {
 }
 
 async function readUsersCSV(env) {
+  assertLegacyUserStoreEnabled(env);
   const repo = env.GITHUB_REPO;
   const branch = env.GITHUB_BRANCH || 'main';
 
@@ -858,6 +860,13 @@ async function readUsersCSV(env) {
     sha: data.sha,
     rows: parseCSV(content)
   };
+}
+
+function assertLegacyUserStoreEnabled(env) {
+  if (env.LEGACY_USERS_CSV === 'true') {
+    return;
+  }
+  throw new Error('Legacy CSV user store is disabled. Use Postgres-backed storage instead.');
 }
 
 async function readUsageLogRows(env) {
