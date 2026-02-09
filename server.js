@@ -176,6 +176,7 @@ app.get('/api/me', async (req, res) => {
 });
 
 app.post('/api/artifacts/metadata', async (req, res) => {
+  let source = 'code-only';
   try {
     const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : transcript;
@@ -193,8 +194,9 @@ app.post('/api/artifacts/metadata', async (req, res) => {
       }
     ];
 
+    source = hasChatContext ? 'chat+code' : 'code-only';
     if (!LLM_PROXY_URL) {
-      return res.json(normalizeMetadata({}));
+      return res.json(buildMetadataResponse({}, source));
     }
 
     const workerRes = await fetch(LLM_PROXY_URL, {
@@ -210,7 +212,7 @@ app.post('/api/artifacts/metadata', async (req, res) => {
     });
 
     if (!workerRes.ok) {
-      return res.json(normalizeMetadata({}));
+      return res.json(buildMetadataResponse({}, source));
     }
 
     const responseText = await workerRes.text();
@@ -232,10 +234,10 @@ app.post('/api/artifacts/metadata', async (req, res) => {
       parsed = null;
     }
 
-    res.json(normalizeMetadata(parsed || {}));
+    res.json(buildMetadataResponse(parsed || {}, source));
   } catch (error) {
     console.error('Failed to infer artifact metadata.', error);
-    res.json(normalizeMetadata({}));
+    res.json(buildMetadataResponse({}, source));
   }
 });
 
@@ -253,10 +255,12 @@ app.post('/api/artifacts', async (req, res) => {
 
     const screenshotDataUrl = resolveScreenshotDataUrl(req.body);
     const resolvedCode = resolveArtifactCode(req.body) || { language: 'html', content: '' };
+    const codeVersions = resolveArtifactCodeVersions(req.body);
+    const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
     const validation = validateArtifactPayload({
-      title: req.body?.title,
-      description: req.body?.description,
       code: resolvedCode,
+      codeVersions,
+      visibility,
       screenshotDataUrl
     });
     if (!validation.ok) {
@@ -269,13 +273,11 @@ app.post('/api/artifacts', async (req, res) => {
 
     const now = new Date().toISOString();
     const artifactId = crypto.randomUUID();
-    const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
     const code = resolvedCode;
     const screenshotUrl = await persistArtifactScreenshot(screenshotDataUrl, artifactId);
     const derivedFrom = req.body?.derived_from || { artifact_id: null, owner_user_id: null };
     const sourceSession = req.body?.source_session || { session_id: req.body?.session_id || '', credits_used_estimate: 0 };
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
-    const codeVersions = Array.isArray(req.body?.code_versions) ? req.body.code_versions : null;
 
     const version = buildArtifactVersion({
       artifactId,
@@ -379,10 +381,14 @@ app.post('/api/artifacts/:id/versions', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
     const resolvedCode = resolveArtifactCode(req.body) || artifact.code;
+    const codeVersions = resolveArtifactCodeVersions(req.body);
+    const visibility = req.body?.visibility === 'public'
+      ? 'public'
+      : (req.body?.visibility === 'private' ? 'private' : artifact.visibility);
     const validation = validateArtifactPayload({
-      title: req.body?.title ?? artifact.title,
-      description: req.body?.description ?? artifact.description,
       code: resolvedCode || artifact.code,
+      codeVersions,
+      visibility,
       screenshotDataUrl: req.body?.screenshot_data_url
     });
     if (!validation.ok) {
@@ -397,7 +403,6 @@ app.post('/api/artifacts/:id/versions', async (req, res) => {
     const code = resolvedCode || artifact.code;
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
     const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
-    const codeVersions = Array.isArray(req.body?.code_versions) ? req.body.code_versions : null;
     const version = buildArtifactVersion({
       artifactId: artifact.artifact_id,
       code,
@@ -2161,13 +2166,16 @@ function mapPublicProfile(profile, user, stats) {
   };
 }
 
-function validateArtifactPayload({ title, description, code, screenshotDataUrl }) {
+function validateArtifactPayload({ code, codeVersions, visibility, screenshotDataUrl }) {
   const errors = [];
   if (!code || !String(code.content || '').trim()) {
     errors.push('Code content is required.');
   }
-  if (!code || !String(code.language || '').trim()) {
-    errors.push('Code language is required.');
+  if (!Array.isArray(codeVersions) || codeVersions.length < 1) {
+    errors.push('Code versions are required.');
+  }
+  if (!visibility || (visibility !== 'public' && visibility !== 'private')) {
+    errors.push('Visibility must be public or private.');
   }
   if (screenshotDataUrl && typeof screenshotDataUrl === 'string') {
     if (!screenshotDataUrl.startsWith('data:image/png;base64,')) {
@@ -2208,6 +2216,16 @@ function resolveArtifactCode(body) {
     };
   }
   return null;
+}
+
+function resolveArtifactCodeVersions(body) {
+  if (body?.code && typeof body.code === 'object' && Array.isArray(body.code.versions)) {
+    return body.code.versions;
+  }
+  if (Array.isArray(body?.code_versions)) {
+    return body.code_versions;
+  }
+  return [];
 }
 
 function buildChatPlusCodePrompt(messages = [], code = {}) {
@@ -2258,14 +2276,16 @@ Return JSON ONLY:
 }`;
 }
 
-function normalizeMetadata(result = {}) {
+function buildMetadataResponse(result = {}, source = 'code-only') {
+  const title = typeof result.title === 'string' ? result.title.trim() : '';
+  const description = typeof result.description === 'string' ? result.description.trim() : '';
+  const hasInferred = Boolean(title || description);
   return {
-    title: typeof result.title === 'string' && result.title.trim()
-      ? result.title.trim()
-      : '',
-    description: typeof result.description === 'string' && result.description.trim()
-      ? result.description.trim()
-      : ''
+    ok: true,
+    inferred: hasInferred,
+    title: title || null,
+    description: description || null,
+    source
   };
 }
 

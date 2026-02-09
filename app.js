@@ -1241,6 +1241,12 @@ function generateMessageId() {
     : `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function generateArtifactTempId() {
+  return window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `artifact-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function createInitialSessionState() {
   return {
     session_id: sessionId,
@@ -1301,6 +1307,41 @@ function openSessionStateDb() {
     request.onerror = () => resolve(null);
   });
   return sessionStateDbPromise;
+}
+
+async function upsertArtifactRecordInIndexedDb(record) {
+  const db = await openSessionStateDb();
+  if (!db) {
+    return false;
+  }
+  const tx = db.transaction(SESSION_ARTIFACTS_STORE_NAME, 'readwrite');
+  const store = tx.objectStore(SESSION_ARTIFACTS_STORE_NAME);
+  store.put(record);
+  return new Promise((resolve) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  });
+}
+
+async function updateArtifactRecordInIndexedDb(artifactId, updates) {
+  const db = await openSessionStateDb();
+  if (!db) {
+    return false;
+  }
+  const tx = db.transaction(SESSION_ARTIFACTS_STORE_NAME, 'readwrite');
+  const store = tx.objectStore(SESSION_ARTIFACTS_STORE_NAME);
+  const existing = await requestToPromise(store.get(artifactId), null);
+  const next = {
+    ...(existing || { artifact_id: artifactId }),
+    ...updates
+  };
+  store.put(next);
+  return new Promise((resolve) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  });
 }
 
 async function getSessionMessagesFromIndexedDb(db, id) {
@@ -2659,6 +2700,20 @@ async function captureArtifactScreenshot() {
   }
 }
 
+async function captureArtifactScreenshotBestEffort({ timeoutMs = 800 } = {}) {
+  try {
+    const screenshot = await Promise.race([
+      captureArtifactScreenshot(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Screenshot timeout')), timeoutMs);
+      })
+    ]);
+    return typeof screenshot === 'string' ? screenshot : '';
+  } catch {
+    return '';
+  }
+}
+
 function formatArtifactDate(dateValue) {
   if (!dateValue) {
     return '—';
@@ -3144,22 +3199,78 @@ async function inferArtifactMetadata({ messages, code }) {
       })
     });
     if (!res.ok) {
-      throw new Error('Metadata inference failed');
+      return {
+        ok: true,
+        inferred: false,
+        title: null,
+        description: null,
+        source: 'fallback'
+      };
     }
     const data = await res.json().catch(() => ({}));
     return {
       ok: true,
-      title: typeof data?.title === 'string' ? data.title : '',
-      description: typeof data?.description === 'string' ? data.description : ''
+      inferred: Boolean(data?.inferred),
+      title: typeof data?.title === 'string' ? data.title : null,
+      description: typeof data?.description === 'string' ? data.description : null,
+      source: typeof data?.source === 'string' ? data.source : 'fallback'
     };
   } catch (error) {
     console.warn('Metadata inference failed.', error);
     return {
-      ok: false,
-      title: '',
-      description: ''
+      ok: true,
+      inferred: false,
+      title: null,
+      description: null,
+      source: 'fallback'
     };
   }
+}
+
+function deriveTitleFromCode(content = '') {
+  const trimmed = String(content || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  const titleMatch = trimmed.match(/<title>([^<]+)<\/title>/i);
+  if (titleMatch?.[1]) {
+    return titleMatch[1].trim();
+  }
+  const lines = trimmed.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^\s*(?:\/\/|#|<!--|\/\*+|\*+)\s*(.+?)\s*(?:-->|\\*\\/)?\s*$/);
+    if (match?.[1]) {
+      return match[1].trim();
+    }
+  }
+  const firstLine = lines.find((line) => line.trim());
+  if (!firstLine) {
+    return '';
+  }
+  const cleaned = firstLine.replace(/<[^>]+>/g, '').trim();
+  if (!cleaned) {
+    return '';
+  }
+  return cleaned.length > 60 ? `${cleaned.slice(0, 57)}…` : cleaned;
+}
+
+function deriveDescriptionFromCode(content = '', language = '') {
+  const trimmed = String(content || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  const sample = trimmed
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' ')
+    .replace(/\s+/g, ' ');
+  if (sample) {
+    return sample.length > 160 ? `${sample.slice(0, 157)}…` : sample;
+  }
+  const languageLabel = language ? language.toUpperCase() : 'CODE';
+  return `Generated ${languageLabel} artifact.`;
 }
 
 async function loadArtifactCodeVersions() {
@@ -3355,7 +3466,7 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
     const descriptionInput = document.getElementById('artifactDescriptionInput');
     const visibilityInput = document.getElementById('artifactVisibilityInput');
     onConfirm({
-      title: titleInput?.value.trim() || 'Untitled artifact',
+      title: titleInput?.value.trim() || '',
       description: descriptionInput?.value.trim() || '',
       visibility: visibilityInput?.value === 'public' ? 'public' : 'private'
     });
@@ -3386,27 +3497,57 @@ async function handleSaveCodeArtifact() {
     role: entry.role,
     content: entry.content
   }));
-  const codeVersions = await loadArtifactCodeVersions();
+  ensureCurrentCodeVersion(lastCodeSource === 'llm' ? 'llm' : 'user');
+  let codeVersions = await loadArtifactCodeVersions();
+  if (!codeVersions.length && codeVersionStack.length) {
+    codeVersions = codeVersionStack.slice();
+  }
+  if (!codeVersions.length) {
+    const fallbackVersion = addCodeVersion({
+      content: codeEditor.value,
+      source: lastCodeSource === 'llm' ? 'llm' : 'user'
+    });
+    if (fallbackVersion) {
+      codeVersions = [fallbackVersion];
+    }
+  }
   const activeVersionId = sessionState?.current_editor?.version_id
     || codeVersions.at(-1)?.id
     || '';
-  const activeCodeVersion = codeVersions.find((version) => version?.id === activeVersionId);
+  const activeCodeVersion = codeVersions.find((version) => version?.id === activeVersionId)
+    || codeVersions.at(-1);
   const resolvedLanguage = activeCodeVersion?.language || 'html';
   const resolvedContent = (activeCodeVersion?.content || '').trim() || content;
+  const metadataPromise = inferArtifactMetadata({
+    messages: chat,
+    code: {
+      language: resolvedLanguage,
+      content: resolvedContent
+    }
+  }).catch(() => null);
   openArtifactModal({
     title: '',
     description: '',
     codePreview: resolvedContent,
     onConfirm: async ({ title, description, visibility }) => {
+      const tempId = generateArtifactTempId();
       try {
-        const normalizedTitle = title.trim() || 'Untitled artifact';
-        const normalizedDescription = description.trim();
+        const inferred = await metadataPromise;
+        const normalizedTitle = title.trim()
+          || inferred?.title
+          || deriveTitleFromCode(resolvedContent)
+          || 'Untitled artifact';
+        const normalizedDescription = description.trim()
+          || inferred?.description
+          || deriveDescriptionFromCode(resolvedContent, resolvedLanguage)
+          || 'Generated code artifact';
+        const screenshotDataUrl = await captureArtifactScreenshotBestEffort();
         const payload = {
           session_id: sessionId,
           title: normalizedTitle,
           description: normalizedDescription,
           visibility,
-          code: { language: resolvedLanguage, content: resolvedContent },
+          code: { language: resolvedLanguage, content: resolvedContent, versions: codeVersions },
           artifact: {
             code_version_id: activeVersionId,
             language: resolvedLanguage,
@@ -3414,6 +3555,10 @@ async function handleSaveCodeArtifact() {
           },
           chat,
           code_versions: codeVersions,
+          metadata: {
+            inferred: Boolean(inferred?.inferred),
+            source: typeof inferred?.source === 'string' ? inferred.source : 'fallback'
+          },
           snapshot: {
             tokens: {
               input: sessionStats.tokensIn,
@@ -3426,9 +3571,24 @@ async function handleSaveCodeArtifact() {
             credits_used_estimate: sessionStats.creditsUsedEstimate || 0
           }
         };
+        if (screenshotDataUrl) {
+          payload.screenshot_data_url = screenshotDataUrl;
+        }
+        await upsertArtifactRecordInIndexedDb({
+          artifact_id: tempId,
+          temp_id: tempId,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          payload
+        });
         const currentArtifact = activeArtifactId
           ? await createArtifactVersion(activeArtifactId, payload)
           : await createArtifact(payload);
+        await updateArtifactRecordInIndexedDb(tempId, {
+          status: 'synced',
+          synced_at: new Date().toISOString(),
+          server_artifact_id: currentArtifact?.artifact_id || null
+        });
         activeArtifactId = currentArtifact?.artifact_id || activeArtifactId;
         showToast('Artifact saved.', { variant: 'success', duration: 2500 });
         ModalManager.close();
@@ -3439,7 +3599,11 @@ async function handleSaveCodeArtifact() {
         await loadAccountArtifactSummary();
       } catch (error) {
         console.error('Artifact save failed.', error);
-        showToast(error?.message || 'Unable to save artifact.');
+        await updateArtifactRecordInIndexedDb(tempId, {
+          status: 'pending',
+          last_error: error?.message || 'Upload failed'
+        });
+        showToast('Saved locally – retry upload', { variant: 'warning', duration: 3000 });
       } finally {
         saveArtifactInProgress = false;
         updateSaveCodeButtonState();
@@ -3455,23 +3619,20 @@ async function handleSaveCodeArtifact() {
     }
   });
 
-  const metadata = await inferArtifactMetadata({
-    messages: chat,
-    code: {
-      language: resolvedLanguage,
-      content: resolvedContent
-    }
-  });
-  if (!metadata.ok) {
-    showToast('Couldn’t infer metadata. You can still save.', { variant: 'warning', duration: 2500 });
+  const metadata = await metadataPromise;
+  if (!metadata?.inferred) {
+    showToast('Metadata couldn’t be inferred. You can edit it manually or save anyway.', {
+      variant: 'warning',
+      duration: 2500
+    });
   }
   const titleInput = document.getElementById('artifactTitleInput');
   const descriptionInput = document.getElementById('artifactDescriptionInput');
-  if (titleInput) {
-    titleInput.value ||= metadata.title;
+  if (titleInput && !titleInput.value.trim() && metadata?.title) {
+    titleInput.value = metadata.title;
   }
-  if (descriptionInput) {
-    descriptionInput.value ||= metadata.description;
+  if (descriptionInput && !descriptionInput.value.trim() && metadata?.description) {
+    descriptionInput.value = metadata.description;
   }
 }
 
