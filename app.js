@@ -97,7 +97,6 @@ const EmailAuthSlot = (() => {
         return;
       }
 
-      markAuthAttempt('email');
       state = 'sending';
       render();
 
@@ -113,10 +112,6 @@ const EmailAuthSlot = (() => {
         if (!res.ok) {
           throw new Error('Email auth request failed.');
         }
-        if (data?.debug_magic_link) {
-          setDebugMagicLink(data.debug_magic_link);
-        }
-
         state = 'sent';
         render();
       } catch {
@@ -134,174 +129,6 @@ const EmailAuthSlot = (() => {
   };
 })();
 
-const isAuthDebugEnabled =
-  location.hostname === 'localhost' ||
-  location.hostname.startsWith('dev.') ||
-  new URLSearchParams(location.search).has('authDebug');
-
-let lastAuthProvider = '—';
-let lastMagicLink = '—';
-let lastGoogleAuthStatus = '—';
-let lastGoogleAuthJson = '—';
-
-export function markAuthAttempt(provider) {
-  lastAuthProvider = provider;
-}
-
-function setDebugMagicLink(link) {
-  lastMagicLink = link || '—';
-  const el = document.getElementById('authDebugMagicLink');
-  if (!el) return;
-
-  if (lastMagicLink !== '—') {
-    el.textContent = lastMagicLink;
-    el.href = lastMagicLink;
-  } else {
-    el.textContent = '—';
-    el.removeAttribute('href');
-  }
-}
-
-async function refreshAuthDebug() {
-  const panel = document.getElementById('auth-debug-panel');
-  if (!panel) return;
-
-  const fetchDebugInfo = async (url) => {
-    const res = await fetch(url, { credentials: 'include' });
-    const contentType = res.headers.get('content-type') || '—';
-    let preview = '—';
-    let json = null;
-
-    if (contentType.includes('application/json')) {
-      try {
-        json = await res.json();
-      } catch {
-        preview = 'Invalid JSON response';
-      }
-    } else {
-      const text = await res.text();
-      preview = text ? text.slice(0, 120) : '—';
-    }
-
-    return { res, contentType, preview, json };
-  };
-
-  document.getElementById('authDebugEnv').textContent = location.origin;
-
-  document.getElementById('authDebugCookie').textContent =
-    document.cookie.includes('maya_session')
-      ? 'present'
-      : 'not visible';
-
-  try {
-    const meInfo = await fetchDebugInfo(`${API_BASE}/api/me?ts=${Date.now()}`);
-    document.getElementById('authDebugMeStatus').textContent =
-      `${meInfo.res.status}`;
-    document.getElementById('authDebugMeType').textContent =
-      meInfo.contentType;
-    const authState = uiState === UI_STATE.APP ? 'authenticated' : 'unauthenticated';
-    if (isAuthDebugEnabled && authState === 'authenticated' && meInfo.res.status !== 200) {
-      console.error('[AUTH INVARIANT FAILED]', 'authenticated=true but /api/me != 200');
-    }
-
-    if (meInfo.contentType.includes('application/json')) {
-      const data = meInfo.json;
-      const keys = data && typeof data === 'object' ? Object.keys(data) : [];
-      document.getElementById('authDebugMeKeys').textContent =
-        keys.length ? keys.join(', ') : '—';
-      document.getElementById('authDebugMePreview').textContent = '—';
-    } else {
-      document.getElementById('authDebugMeKeys').textContent =
-        '/api/me returned HTML; domain is not wired to Pages Functions.';
-      document.getElementById('authDebugMePreview').textContent =
-        meInfo.preview;
-      console.error('/api/me returned HTML; domain is not wired to Pages Functions.');
-    }
-  } catch {
-    document.getElementById('authDebugMeStatus').textContent = 'network error';
-    document.getElementById('authDebugMeType').textContent = '—';
-    document.getElementById('authDebugMeKeys').textContent = '—';
-    document.getElementById('authDebugMePreview').textContent = '—';
-  }
-
-  try {
-    const envInfo = await fetchDebugInfo(`${API_BASE}/api/debug/env?ts=${Date.now()}`);
-    document.getElementById('authDebugEnvStatus').textContent =
-      `${envInfo.res.status}`;
-    if (envInfo.res.status === 404) {
-      document.getElementById('authDebugEnvMissing').textContent =
-        'debug endpoint disabled';
-    } else if (envInfo.contentType.includes('application/json')) {
-      const data = envInfo.json;
-      const envPresent = data?.env_present || {};
-      const missing = Object.entries(envPresent)
-        .filter(([, present]) => !present)
-        .map(([key]) => key);
-      document.getElementById('authDebugEnvMissing').textContent =
-        missing.length ? missing.join(', ') : 'none';
-    } else {
-      document.getElementById('authDebugEnvMissing').textContent = envInfo.preview;
-    }
-  } catch {
-    document.getElementById('authDebugEnvStatus').textContent = 'network error';
-    document.getElementById('authDebugEnvMissing').textContent = '—';
-  }
-
-  try {
-    const healthInfo = await fetchDebugInfo(`${API_BASE}/api/health`);
-    document.getElementById('authDebugHealthStatus').textContent =
-      `${healthInfo.res.status}`;
-    document.getElementById('authDebugHealthType').textContent =
-      healthInfo.contentType;
-    if (healthInfo.contentType.includes('application/json')) {
-      document.getElementById('authDebugHealthPreview').textContent = '—';
-    } else {
-      document.getElementById('authDebugHealthPreview').textContent =
-        healthInfo.preview;
-    }
-  } catch {
-    document.getElementById('authDebugHealthStatus').textContent = 'network error';
-    document.getElementById('authDebugHealthType').textContent = '—';
-    document.getElementById('authDebugHealthPreview').textContent = '—';
-  }
-
-  document.getElementById('authDebugLastProvider').textContent =
-    lastAuthProvider;
-
-  document.getElementById('authDebugGoogleStatus').textContent =
-    lastGoogleAuthStatus;
-  document.getElementById('authDebugGoogleJson').textContent =
-    lastGoogleAuthJson;
-
-  setDebugMagicLink(lastMagicLink);
-}
-
-function initAuthDebugPanel() {
-  if (!isAuthDebugEnabled) {
-    return;
-  }
-
-  const panel = document.getElementById('auth-debug-panel');
-  if (!panel) return;
-
-  panel.classList.remove('hidden');
-
-  document
-    .getElementById('authDebugRefresh')
-    ?.addEventListener('click', refreshAuthDebug);
-
-  const toggleBtn = document.getElementById('authDebugToggle');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      panel.classList.toggle('collapsed');
-      toggleBtn.title = panel.classList.contains('collapsed')
-        ? 'Expand debug panel'
-        : 'Collapse debug panel';
-    });
-  }
-
-  refreshAuthDebug();
-}
 
 const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
@@ -751,11 +578,9 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
   }
 
   syncSessionToSandbox();
-  refreshAuthDebug();
 }
 
 async function handleGoogleCredential(response) {
-  markAuthAttempt('google');
   const res = await fetch(`${API_BASE}/api/auth/google`, {
     method: 'POST',
     credentials: 'include',
@@ -766,13 +591,8 @@ async function handleGoogleCredential(response) {
   });
 
   const data = await res.json().catch(() => ({}));
-  lastGoogleAuthStatus = `${res.status}`;
-  lastGoogleAuthJson = data && typeof data === 'object'
-    ? JSON.stringify(data)
-    : String(data ?? '—');
   if (!res.ok) {
     console.warn('Google auth failed.', data);
-    refreshAuthDebug();
     return;
   }
 
@@ -783,7 +603,6 @@ async function handleGoogleCredential(response) {
 
   if (!meRes.ok) {
     console.error('Failed to fetch /me', meRes.status);
-    refreshAuthDebug();
     return;
   }
 
@@ -801,7 +620,6 @@ async function handleGoogleCredential(response) {
     plan: user?.plan ?? 'Free',
     creditsRemaining: user?.creditsRemaining ?? 500
   });
-  refreshAuthDebug();
 }
 
 AuthController.register('google', () => {
@@ -901,15 +719,17 @@ function initAppleAuth() {
   });
 
   button.onclick = async () => {
-    markAuthAttempt('apple');
     const res = await window.AppleID.auth.signIn();
     const auth = res.authorization;
 
-    const server = await fetch('/auth/apple', {
+    const server = await fetch(`${API_BASE}/api/auth/apple`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: auth.code })
+      body: JSON.stringify({
+        id_token: auth.id_token || auth.idToken,
+        code: auth.code
+      })
     });
 
     const data = await server.json();
@@ -1276,7 +1096,6 @@ async function bootstrapApp() {
       deferRender: true
     });
   }
-  initAuthDebugPanel();
   hydrateCreditState();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
@@ -1672,8 +1491,8 @@ function hidePaywall() {
 
 function openStripeCheckout(mode) {
   const checkoutUrl = mode === 'subscription'
-    ? '/checkout/subscription'
-    : '/checkout/credits';
+    ? `${API_BASE}/checkout/subscription`
+    : `${API_BASE}/checkout/credits`;
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
 }
 
