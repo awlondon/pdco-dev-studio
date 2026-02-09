@@ -10,7 +10,90 @@
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs/loader.js"></script>
 
   <script>
+    window.MonacoEnvironment = {
+      getWorkerUrl() {
+        const workerMain = "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs/base/worker/workerMain.js";
+        const baseUrl = "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/";
+        return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
+          self.MonacoEnvironment = { baseUrl: '${baseUrl}' };
+          importScripts('${workerMain}');
+        `)}`;
+      }
+    };
     window.__monacoReady = false;
+    window.__monacoReadyPromise = new Promise((resolve) => {
+      window.__resolveMonacoReady = resolve;
+    });
+
+    window.mountEditor = (containerId, options = {}) => {
+      if (!window.__monacoReady) {
+        throw new Error("Monaco not ready yet");
+      }
+
+      const el = document.getElementById(containerId);
+      if (!el) {
+        throw new Error(`Editor container not found: ${containerId}`);
+      }
+
+      if (el.__editorInstance) {
+        el.__editorInstance.dispose();
+      }
+
+      const editor = monaco.editor.create(el, options);
+      el.__editorInstance = editor;
+
+      const withModel = (callback) => {
+        const model = editor.getModel();
+        if (model) {
+          callback(model);
+        }
+      };
+
+      return {
+        editor,
+        keybindings: {
+          outdent: monaco.KeyMod.Shift | monaco.KeyCode.Tab,
+          gotoLine: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG,
+          runCode: monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter
+        },
+        getValue: () => editor.getValue(),
+        setValue: (value) => editor.setValue(value),
+        getPosition: () => editor.getPosition(),
+        setPosition: (position) => editor.setPosition(position),
+        getScrollTop: () => editor.getScrollTop(),
+        setScrollTop: (value) => editor.setScrollTop(value),
+        focus: () => editor.focus(),
+        revealLineInCenter: (lineNumber) => editor.revealLineInCenter(lineNumber),
+        onDidChangeModelContent: (handler) => editor.onDidChangeModelContent(handler),
+        addCommand: (...args) => editor.addCommand(...args),
+        addAction: (action) => editor.addAction(action),
+        trigger: (...args) => editor.trigger(...args),
+        updateOptions: (optionsToApply) => editor.updateOptions(optionsToApply),
+        updateModelOptions: (optionsToApply) => withModel((model) => model.updateOptions(optionsToApply)),
+        getLineCount: () => editor.getModel()?.getLineCount() ?? 0,
+        setLanguage: (language) => {
+          withModel((model) => monaco.editor.setModelLanguage(model, language));
+        },
+        clearMarkers: () => {
+          withModel((model) => monaco.editor.setModelMarkers(model, "runtime", []));
+        },
+        setMarkers: (errors = []) => {
+          withModel((model) => {
+            const markers = errors.map((error) => ({
+              startLineNumber: error.line || 1,
+              startColumn: error.column || 1,
+              endLineNumber: error.line || 1,
+              endColumn: (error.column || 1) + 1,
+              message: error.message || "Error",
+              severity: error.severity === "warning"
+                ? monaco.MarkerSeverity.Warning
+                : monaco.MarkerSeverity.Error
+            }));
+            monaco.editor.setModelMarkers(model, "runtime", markers);
+          });
+        }
+      };
+    };
 
     require.config({
       paths: {
@@ -20,25 +103,10 @@
 
     require(["vs/editor/editor.main"], function () {
       window.__monacoReady = true;
+      if (window.__resolveMonacoReady) {
+        window.__resolveMonacoReady(window.monaco);
+      }
     });
-  document.addEventListener("DOMContentLoaded", () => {
-  console.log("DOM loaded");
-  console.log("Monaco ready:", window.__monacoReady);
-
-  const el = document.getElementById("code-editor");
-  console.log("Editor element:", el);
-
-  if (!window.__monacoReady || !el) return;
-
-  monaco.editor.create(el, {
-    value: "// hello",
-    language: "javascript",
-    theme: "vs-dark"
-  });
-
-  console.log("Editor created");
-});
-
   </script>
 </head>
   
@@ -1014,12 +1082,6 @@
   <script>
     window.__MAYA_API_BASE = "https://maya-api-xxxxx-uc.a.run.app";
   </script>
-  <div
-    id="code-editor"
-    style="
-      height: 400px;
-      width: 100%;">
-   </div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -366,10 +366,7 @@ const runtimeState = {
   status: 'idle',
   started_at: null
 };
-const MONACO_CDN_BASE = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0';
-let monacoInstance = null;
-let monacoEditor = null;
-let monacoLoadPromise = null;
+let editorApi = null;
 let navigationInProgress = false;
 let revertModalOpen = false;
 const GENERATION_PHASES = [
@@ -414,45 +411,9 @@ const defaultInterfaceCode = `<!doctype html>
 </body>
 </html>`;
 
-function configureMonacoEnvironment() {
-  window.MonacoEnvironment = {
-    getWorkerUrl() {
-      const workerMain = `${MONACO_CDN_BASE}/min/vs/base/worker/workerMain.js`;
-      const baseUrl = `${MONACO_CDN_BASE}/min/`;
-      return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
-        self.MonacoEnvironment = { baseUrl: '${baseUrl}' };
-        importScripts('${workerMain}');
-      `)}`;
-    }
-  };
-}
-
-async function loadMonaco() {
-  if (monacoLoadPromise) {
-    return monacoLoadPromise;
-  }
-  monacoLoadPromise = new Promise((resolve, reject) => {
-    configureMonacoEnvironment();
-    const amdLoader = window.require;
-    if (!amdLoader) {
-      reject(new Error('Monaco AMD loader not found.'));
-      return;
-    }
-    amdLoader.config({
-      paths: {
-        vs: `${MONACO_CDN_BASE}/min/vs`
-      }
-    });
-    amdLoader(['vs/editor/editor.main'], () => {
-      resolve(window.monaco);
-    });
-  });
-  return monacoLoadPromise;
-}
-
 function getEditorValue() {
-  if (monacoEditor) {
-    return monacoEditor.getValue();
+  if (editorApi) {
+    return editorApi.getValue();
   }
   if (codeEditor && 'value' in codeEditor) {
     return codeEditor.value;
@@ -461,8 +422,8 @@ function getEditorValue() {
 }
 
 function setEditorValue(value = '') {
-  if (monacoEditor) {
-    monacoEditor.setValue(value);
+  if (editorApi) {
+    editorApi.setValue(value);
     return;
   }
   if (codeEditor && 'value' in codeEditor) {
@@ -471,90 +432,70 @@ function setEditorValue(value = '') {
 }
 
 function getEditorCursor() {
-  if (!monacoEditor) {
+  if (!editorApi) {
     return null;
   }
-  const position = monacoEditor.getPosition();
+  const position = editorApi.getPosition();
   return position
     ? { line: position.lineNumber, column: position.column }
     : null;
 }
 
 function getEditorScrollTop() {
-  if (!monacoEditor) {
+  if (!editorApi) {
     return 0;
   }
-  return monacoEditor.getScrollTop();
+  return editorApi.getScrollTop();
 }
 
 function applyEditorSnapshot({ value, cursor, scroll_top } = {}) {
   if (typeof value === 'string') {
     setEditorValue(value);
   }
-  if (monacoEditor) {
+  if (editorApi) {
     if (cursor?.line) {
-      monacoEditor.setPosition({
+      editorApi.setPosition({
         lineNumber: cursor.line,
         column: cursor.column || 1
       });
     }
     if (Number.isFinite(scroll_top)) {
-      monacoEditor.setScrollTop(scroll_top);
+      editorApi.setScrollTop(scroll_top);
     }
-    monacoEditor.focus();
+    editorApi.focus();
   }
 }
 
 function updateEditorLanguage(language) {
-  if (!monacoEditor || !monacoInstance) {
+  if (!editorApi) {
     return;
   }
-  const model = monacoEditor.getModel();
-  if (model) {
-    monacoInstance.editor.setModelLanguage(model, language);
-  }
+  editorApi.setLanguage(language);
 }
 
 function clearEditorDiagnostics() {
-  if (!monacoEditor || !monacoInstance) {
+  if (!editorApi) {
     return;
   }
-  const model = monacoEditor.getModel();
-  if (model) {
-    monacoInstance.editor.setModelMarkers(model, 'runtime', []);
-  }
+  editorApi.clearMarkers();
 }
 
 function applyEditorDiagnostics(errors = []) {
-  if (!monacoEditor || !monacoInstance) {
+  if (!editorApi) {
     return;
   }
-  const model = monacoEditor.getModel();
-  if (!model) {
-    return;
-  }
-  const markers = errors.map((error) => ({
-    startLineNumber: error.line || 1,
-    startColumn: error.column || 1,
-    endLineNumber: error.line || 1,
-    endColumn: (error.column || 1) + 1,
-    message: error.message || 'Error',
-    severity: error.severity === 'warning'
-      ? monacoInstance.MarkerSeverity.Warning
-      : monacoInstance.MarkerSeverity.Error
-  }));
-  monacoInstance.editor.setModelMarkers(model, 'runtime', markers);
+  editorApi.setMarkers(errors);
 }
 
 function revealEditorError(error) {
-  if (!monacoEditor || !error) {
+  if (!editorApi || !error) {
     return;
   }
   const lineNumber = error.line || 1;
   const column = error.column || 1;
-  monacoEditor.revealLineInCenter(lineNumber);
-  monacoEditor.setPosition({ lineNumber, column });
-  monacoEditor.focus();
+  editorApi.revealLineInCenter(lineNumber);
+  editorApi.setPosition({ lineNumber, column });
+  editorApi.focus();
 }
 
 function extractRuntimeError(rawError = {}) {
@@ -582,12 +523,16 @@ async function initializeCodeEditor({ value, language }) {
   if (!codeEditor) {
     return;
   }
-  if (monacoEditor) {
+  if (editorApi) {
     return;
   }
-  const monaco = await loadMonaco();
-  monacoInstance = monaco;
-  monacoEditor = monaco.editor.create(codeEditor, {
+  if (window.__monacoReadyPromise) {
+    await window.__monacoReadyPromise;
+  }
+  if (typeof window.mountEditor !== 'function') {
+    throw new Error('mountEditor is not available.');
+  }
+  editorApi = window.mountEditor('code-editor', {
     value,
     language,
     theme: 'vs-dark',
@@ -603,25 +548,22 @@ async function initializeCodeEditor({ value, language }) {
     cursorBlinking: 'smooth',
     smoothScrolling: true
   });
-  const model = monacoEditor.getModel();
-  if (model) {
-    model.updateOptions({
-      tabSize: 2,
-      insertSpaces: true
-    });
-  }
-  monacoEditor.addCommand(
-    monaco.KeyMod.Shift | monaco.KeyCode.Tab,
-    () => monacoEditor?.trigger('', 'outdent', null)
+  editorApi.updateModelOptions({
+    tabSize: 2,
+    insertSpaces: true
+  });
+  editorApi.addCommand(
+    editorApi.keybindings.outdent,
+    () => editorApi.trigger('', 'outdent', null)
   );
-  monacoEditor.addAction({
+  editorApi.addAction({
     id: 'goto-line',
     label: 'Go to Line',
-    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
-    run: () => monacoEditor?.trigger('', 'editor.action.gotoLine', null)
+    keybindings: [editorApi.keybindings.gotoLine],
+    run: () => editorApi.trigger('', 'editor.action.gotoLine', null)
   });
-  monacoEditor.addCommand(
-    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+  editorApi.addCommand(
+    editorApi.keybindings.runCode,
     () => {
       if (userHasEditedCode) {
         handleUserRun(getEditorValue());
@@ -630,7 +572,7 @@ async function initializeCodeEditor({ value, language }) {
       runActiveCodeVersion('user', 'Re-running active version…');
     }
   );
-  monacoEditor.onDidChangeModelContent(() => {
+  editorApi.onDidChangeModelContent(() => {
     handleEditorContentChange();
   });
 }
@@ -3019,7 +2961,7 @@ function updateLineNumbers() {
   if (!lineCountEl) {
     return;
   }
-  const modelLineCount = monacoEditor?.getModel()?.getLineCount();
+  const modelLineCount = editorApi?.getLineCount?.();
   const lines = Number.isFinite(modelLineCount)
     ? modelLineCount
     : getEditorValue().split('\n').length;
@@ -3055,8 +2997,8 @@ function updateSaveCodeButtonState() {
 }
 
 function lockEditor() {
-  if (monacoEditor) {
-    monacoEditor.updateOptions({ readOnly: true });
+  if (editorApi) {
+    editorApi.updateOptions({ readOnly: true });
   } else if (codeEditor && 'disabled' in codeEditor) {
     codeEditor.disabled = true;
   }
@@ -3064,8 +3006,8 @@ function lockEditor() {
 }
 
 function unlockEditor() {
-  if (monacoEditor) {
-    monacoEditor.updateOptions({ readOnly: false });
+  if (editorApi) {
+    editorApi.updateOptions({ readOnly: false });
   } else if (codeEditor && 'disabled' in codeEditor) {
     codeEditor.disabled = false;
   }
