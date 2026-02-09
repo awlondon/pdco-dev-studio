@@ -295,9 +295,9 @@ const paywallSecondaryButton = document.getElementById('paywall-secondary');
 const paywallTertiaryButton = document.getElementById('paywall-tertiary');
 const paywallCloseButton = document.getElementById('paywall-close');
 const codeEditor = document.getElementById('code-editor');
+const codeEditorWrapper = document.getElementById('code-editor-wrapper');
 const clearChatButton = document.getElementById('clearChatButton');
 const toast = document.getElementById('toast');
-const lineNumbersEl = document.getElementById('line-numbers');
 const lineCountEl = document.getElementById('line-count');
 const consoleLog = document.getElementById('console-output-log');
 const consolePane = document.getElementById('consoleOutput');
@@ -357,6 +357,10 @@ const runtimeState = {
   status: 'idle',
   started_at: null
 };
+const MONACO_CDN_BASE = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0';
+let monacoInstance = null;
+let monacoEditor = null;
+let monacoLoadPromise = null;
 let navigationInProgress = false;
 let revertModalOpen = false;
 const GENERATION_PHASES = [
@@ -400,6 +404,220 @@ const defaultInterfaceCode = `<!doctype html>
 <div id="app"></div>
 </body>
 </html>`;
+
+function configureMonacoEnvironment() {
+  window.MonacoEnvironment = {
+    getWorkerUrl() {
+      const workerMain = `${MONACO_CDN_BASE}/min/vs/base/worker/workerMain.js`;
+      const baseUrl = `${MONACO_CDN_BASE}/min/`;
+      return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
+        self.MonacoEnvironment = { baseUrl: '${baseUrl}' };
+        importScripts('${workerMain}');
+      `)}`;
+    }
+  };
+}
+
+async function loadMonaco() {
+  if (monacoLoadPromise) {
+    return monacoLoadPromise;
+  }
+  monacoLoadPromise = (async () => {
+    configureMonacoEnvironment();
+    try {
+      return await import(`${MONACO_CDN_BASE}/esm/vs/editor/editor.api.js`);
+    } catch (error) {
+      console.warn('Monaco ESM import failed, falling back to +esm bundle.', error);
+      return await import(`${MONACO_CDN_BASE}/+esm`);
+    }
+  })();
+  return monacoLoadPromise;
+}
+
+function getEditorValue() {
+  if (monacoEditor) {
+    return monacoEditor.getValue();
+  }
+  if (codeEditor && 'value' in codeEditor) {
+    return codeEditor.value;
+  }
+  return defaultInterfaceCode;
+}
+
+function setEditorValue(value = '') {
+  if (monacoEditor) {
+    monacoEditor.setValue(value);
+    return;
+  }
+  if (codeEditor && 'value' in codeEditor) {
+    codeEditor.value = value;
+  }
+}
+
+function getEditorCursor() {
+  if (!monacoEditor) {
+    return null;
+  }
+  const position = monacoEditor.getPosition();
+  return position
+    ? { line: position.lineNumber, column: position.column }
+    : null;
+}
+
+function getEditorScrollTop() {
+  if (!monacoEditor) {
+    return 0;
+  }
+  return monacoEditor.getScrollTop();
+}
+
+function applyEditorSnapshot({ value, cursor, scroll_top } = {}) {
+  if (typeof value === 'string') {
+    setEditorValue(value);
+  }
+  if (monacoEditor) {
+    if (cursor?.line) {
+      monacoEditor.setPosition({
+        lineNumber: cursor.line,
+        column: cursor.column || 1
+      });
+    }
+    if (Number.isFinite(scroll_top)) {
+      monacoEditor.setScrollTop(scroll_top);
+    }
+    monacoEditor.focus();
+  }
+}
+
+function updateEditorLanguage(language) {
+  if (!monacoEditor || !monacoInstance) {
+    return;
+  }
+  const model = monacoEditor.getModel();
+  if (model) {
+    monacoInstance.editor.setModelLanguage(model, language);
+  }
+}
+
+function clearEditorDiagnostics() {
+  if (!monacoEditor || !monacoInstance) {
+    return;
+  }
+  const model = monacoEditor.getModel();
+  if (model) {
+    monacoInstance.editor.setModelMarkers(model, 'runtime', []);
+  }
+}
+
+function applyEditorDiagnostics(errors = []) {
+  if (!monacoEditor || !monacoInstance) {
+    return;
+  }
+  const model = monacoEditor.getModel();
+  if (!model) {
+    return;
+  }
+  const markers = errors.map((error) => ({
+    startLineNumber: error.line || 1,
+    startColumn: error.column || 1,
+    endLineNumber: error.line || 1,
+    endColumn: (error.column || 1) + 1,
+    message: error.message || 'Error',
+    severity: error.severity === 'warning'
+      ? monacoInstance.MarkerSeverity.Warning
+      : monacoInstance.MarkerSeverity.Error
+  }));
+  monacoInstance.editor.setModelMarkers(model, 'runtime', markers);
+}
+
+function revealEditorError(error) {
+  if (!monacoEditor || !error) {
+    return;
+  }
+  const lineNumber = error.line || 1;
+  const column = error.column || 1;
+  monacoEditor.revealLineInCenter(lineNumber);
+  monacoEditor.setPosition({ lineNumber, column });
+  monacoEditor.focus();
+}
+
+function extractRuntimeError(rawError = {}) {
+  if (!rawError) {
+    return null;
+  }
+  let line = Number(rawError.line || rawError.lineNumber || rawError.lineno);
+  let column = Number(rawError.column || rawError.colno || rawError.columnNumber);
+  if ((!Number.isFinite(line) || !Number.isFinite(column)) && typeof rawError.stack === 'string') {
+    const match = rawError.stack.match(/:(\d+):(\d+)\)?$/m);
+    if (match) {
+      line = Number(match[1]);
+      column = Number(match[2]);
+    }
+  }
+  return {
+    line: Number.isFinite(line) && line > 0 ? line : 1,
+    column: Number.isFinite(column) && column > 0 ? column : 1,
+    message: rawError.message || 'Execution error',
+    severity: rawError.severity || 'error'
+  };
+}
+
+async function initializeCodeEditor({ value, language }) {
+  if (!codeEditor) {
+    return;
+  }
+  if (monacoEditor) {
+    return;
+  }
+  const monaco = await loadMonaco();
+  monacoInstance = monaco;
+  monacoEditor = monaco.editor.create(codeEditor, {
+    value,
+    language,
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 14,
+    tabSize: 2,
+    insertSpaces: true,
+    detectIndentation: true,
+    wordWrap: 'on',
+    accessibilitySupport: 'on',
+    renderLineHighlight: 'all',
+    cursorBlinking: 'smooth',
+    smoothScrolling: true
+  });
+  const model = monacoEditor.getModel();
+  if (model) {
+    model.updateOptions({
+      tabSize: 2,
+      insertSpaces: true
+    });
+  }
+  monacoEditor.addCommand(
+    monaco.KeyMod.Shift | monaco.KeyCode.Tab,
+    () => monacoEditor?.trigger('', 'outdent', null)
+  );
+  monacoEditor.addAction({
+    id: 'goto-line',
+    label: 'Go to Line',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
+    run: () => monacoEditor?.trigger('', 'editor.action.gotoLine', null)
+  });
+  monacoEditor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+    () => {
+      if (userHasEditedCode) {
+        handleUserRun(getEditorValue());
+        return;
+      }
+      runActiveCodeVersion('user', 'Re-running active version…');
+    }
+  );
+  monacoEditor.onDidChangeModelContent(() => {
+    handleEditorContentChange();
+  });
+}
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
 const SYSTEM_BASE = 'You are Maya, an AI assistant embedded in a real-time creative and technical workspace.';
@@ -469,6 +687,26 @@ const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
     if (event.data?.type === 'SESSION') {
       window.__SESSION__ = event.data;
     }
+  });
+  const notifyError = (payload) => {
+    if (window.parent) {
+      window.parent.postMessage({ type: 'SANDBOX_ERROR', error: payload }, '*');
+    }
+  };
+  window.addEventListener('error', (event) => {
+    notifyError({
+      message: event.message,
+      line: event.lineno,
+      column: event.colno,
+      stack: event.error?.stack || ''
+    });
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    notifyError({
+      message: reason?.message || String(reason || 'Unhandled rejection'),
+      stack: reason?.stack || ''
+    });
   });
 </script>`;
 
@@ -739,6 +977,24 @@ function postSessionToSandbox(frame = sandboxFrame) {
 function syncSessionToSandbox() {
   runWhenPreviewReady(() => postSessionToSandbox(sandboxFrame));
 }
+
+function handleSandboxErrorMessage(event) {
+  if (event?.data?.type !== 'SANDBOX_ERROR') {
+    return;
+  }
+  if (event.source !== sandboxFrame?.contentWindow) {
+    return;
+  }
+  const editorError = extractRuntimeError(event.data.error);
+  if (!editorError) {
+    return;
+  }
+  applyEditorDiagnostics([editorError]);
+  revealEditorError(editorError);
+  showToast(`Execution error on line ${editorError.line}`, { variant: 'error', duration: 4000 });
+}
+
+window.addEventListener('message', handleSandboxErrorMessage);
 
 function onAuthSuccess({ user, token, provider, credits, deferRender = false }) {
   const resolvedRemaining = resolveCredits(
@@ -1253,7 +1509,7 @@ function createInitialSessionState() {
     started_at: sessionStartedAt || new Date().toISOString(),
     current_editor: {
       language: 'html',
-      content: codeEditor?.value ?? defaultInterfaceCode,
+      content: getEditorValue(),
       version_id: ''
     },
     messages: [],
@@ -1427,7 +1683,7 @@ async function loadSessionStateFromIndexedDb(id) {
     started_at: sessionRecord.started_at,
     current_editor: {
       language: editorState?.language || latestVersion?.language || 'html',
-      content: latestVersion?.content ?? (codeEditor?.value ?? defaultInterfaceCode),
+      content: latestVersion?.content ?? getEditorValue(),
       version_id: activeVersionId
     },
     messages,
@@ -1529,7 +1785,7 @@ function normalizeSessionState(raw) {
       language: state.current_editor?.language || 'html',
       content: typeof state.current_editor?.content === 'string'
         ? state.current_editor.content
-        : (codeEditor?.value ?? defaultInterfaceCode),
+        : getEditorValue(),
       version_id: state.current_editor?.version_id || ''
     },
     messages: Array.isArray(state.messages) ? state.messages : [],
@@ -1624,7 +1880,13 @@ function normalizeStoredVersion(entry) {
   if (typeof entry.content === 'string') {
     return {
       session_id: entry.session_id || sessionId,
-      ...entry
+      ...entry,
+      cursor: entry.cursor || null,
+      scroll_top: Number.isFinite(entry.scroll_top)
+        ? entry.scroll_top
+        : Number.isFinite(entry.scrollTop)
+          ? entry.scrollTop
+          : 0
     };
   }
   if (typeof entry.code === 'string') {
@@ -1636,7 +1898,13 @@ function normalizeStoredVersion(entry) {
       message_id: entry.message_id || null,
       language: entry.language || 'html',
       content: entry.code,
-      diff_from_previous: entry.diff_from_previous || null
+      diff_from_previous: entry.diff_from_previous || null,
+      cursor: entry.cursor || null,
+      scroll_top: Number.isFinite(entry.scroll_top)
+        ? entry.scroll_top
+        : Number.isFinite(entry.scrollTop)
+          ? entry.scrollTop
+          : 0
     };
   }
   return null;
@@ -1724,24 +1992,29 @@ function addCodeVersion({
   content,
   source = 'user',
   messageId = null,
-  language = 'html'
+  language = null
 }) {
   const normalizedCode = typeof content === 'string' ? content : '';
   const lastVersion = codeVersionStack.at(-1);
   if (lastVersion?.content === normalizedCode) {
     return lastVersion;
   }
+  const resolvedLanguage = language || sessionState?.current_editor?.language || 'html';
+  const cursor = getEditorCursor();
+  const scrollTop = getEditorScrollTop();
   const version = {
     id: generateVersionId(),
     session_id: sessionId,
     created_at: new Date().toISOString(),
     source,
     message_id: messageId || undefined,
-    language,
+    language: resolvedLanguage,
     content: normalizedCode,
     diff_from_previous: lastVersion?.content
       ? simpleLineDiff(lastVersion.content, normalizedCode)
-      : null
+      : null,
+    cursor,
+    scroll_top: scrollTop
   };
   codeVersionStack.push(version);
   if (sessionState) {
@@ -1758,25 +2031,19 @@ function addCodeVersion({
 }
 
 function ensureCurrentCodeVersion(source = 'user') {
-  if (!codeEditor) {
-    return;
-  }
   addCodeVersion({
-    content: codeEditor.value,
+    content: getEditorValue(),
     source
   });
 }
 
 function scheduleUserCodeVersionSave() {
-  if (!codeEditor) {
-    return;
-  }
   if (userEditVersionTimer) {
     clearTimeout(userEditVersionTimer);
   }
   userEditVersionTimer = setTimeout(() => {
     addCodeVersion({
-      content: codeEditor.value,
+      content: getEditorValue(),
       source: 'user'
     });
     userEditVersionTimer = null;
@@ -1791,9 +2058,9 @@ function initializeVersionStack() {
   if (stored.length) {
     codeVersionStack.push(...stored.map(normalizeStoredVersion).filter(Boolean));
   }
-  if (codeEditor && !codeVersionStack.length) {
+  if (!codeVersionStack.length) {
     addCodeVersion({
-      content: codeEditor.value,
+      content: getEditorValue(),
       source: lastCodeSource === 'llm' ? 'llm' : 'user'
     });
   }
@@ -1813,7 +2080,7 @@ function resetCodeHistory() {
     sessionState.active_version_index = -1;
     sessionState.current_editor = {
       language: 'html',
-      content: codeEditor?.value ?? defaultInterfaceCode,
+      content: getEditorValue(),
       version_id: ''
     };
     scheduleSessionStatePersist();
@@ -1822,10 +2089,7 @@ function resetCodeHistory() {
 }
 
 function clearEditorState() {
-  if (!codeEditor) {
-    return;
-  }
-  codeEditor.value = defaultInterfaceCode;
+  setEditorValue(defaultInterfaceCode);
   baselineCode = defaultInterfaceCode;
   currentCode = defaultInterfaceCode;
   previousCode = null;
@@ -1836,7 +2100,7 @@ function clearEditorState() {
   userHasEditedCode = false;
   resetCodeHistory();
   addCodeVersion({
-    content: codeEditor.value,
+    content: getEditorValue(),
     source: 'user'
   });
   updateLineNumbers();
@@ -2618,40 +2882,60 @@ async function copyToClipboard(text) {
 }
 
 function updateLineNumbers() {
-  if (!codeEditor || !lineNumbersEl || !lineCountEl) {
+  if (!lineCountEl) {
     return;
   }
-  const lines = codeEditor.value.split('\n').length;
-  let numbers = '';
-  for (let i = 1; i <= lines; i += 1) {
-    numbers += `${i}\n`;
-  }
-  lineNumbersEl.textContent = numbers;
+  const modelLineCount = monacoEditor?.getModel()?.getLineCount();
+  const lines = Number.isFinite(modelLineCount)
+    ? modelLineCount
+    : getEditorValue().split('\n').length;
   lineCountEl.textContent = `Lines: ${lines}`;
 }
 
+function handleEditorContentChange() {
+  const currentValue = getEditorValue();
+  const hasEdits = currentValue !== baselineCode;
+  userHasEditedCode = hasEdits;
+  if (hasEdits) {
+    lastCodeSource = 'user';
+  }
+  updateRunButtonVisibility();
+  updateRollbackVisibility();
+  updatePromoteVisibility();
+  if (hasEdits) {
+    markPreviewStale();
+  }
+  scheduleUserCodeVersionSave();
+  resetExecutionPreparation();
+  updateLineNumbers();
+  updateSaveCodeButtonState();
+  requestCreditPreviewUpdate();
+}
+
 function updateSaveCodeButtonState() {
-  if (!saveCodeButton || !codeEditor) {
+  if (!saveCodeButton) {
     return;
   }
-  const hasContent = Boolean(codeEditor.value.trim());
+  const hasContent = Boolean(getEditorValue().trim());
   saveCodeButton.disabled = !hasContent;
 }
 
 function lockEditor() {
-  if (!codeEditor) {
-    return;
+  if (monacoEditor) {
+    monacoEditor.updateOptions({ readOnly: true });
+  } else if (codeEditor && 'disabled' in codeEditor) {
+    codeEditor.disabled = true;
   }
-  codeEditor.disabled = true;
-  codeEditor.classList.add('is-locked');
+  codePanel?.classList.add('is-locked');
 }
 
 function unlockEditor() {
-  if (!codeEditor) {
-    return;
+  if (monacoEditor) {
+    monacoEditor.updateOptions({ readOnly: false });
+  } else if (codeEditor && 'disabled' in codeEditor) {
+    codeEditor.disabled = false;
   }
-  codeEditor.disabled = false;
-  codeEditor.classList.remove('is-locked');
+  codePanel?.classList.remove('is-locked');
 }
 
 async function loadHtml2Canvas() {
@@ -2901,10 +3185,10 @@ function renderGalleryCards(artifacts, { mode }) {
 }
 
 function applyArtifactToEditor(artifact) {
-  if (!artifact?.code?.content || !codeEditor) {
+  if (!artifact?.code?.content) {
     return;
   }
-  codeEditor.value = artifact.code.content;
+  setEditorValue(artifact.code.content);
   currentCode = artifact.code.content;
   baselineCode = artifact.code.content;
   lastLLMCode = artifact.code.content;
@@ -3479,10 +3763,10 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
 }
 
 async function handleSaveCodeArtifact() {
-  if (!codeEditor || saveArtifactInProgress) {
+  if (saveArtifactInProgress) {
     return;
   }
-  const content = codeEditor.value.trim();
+  const content = getEditorValue().trim();
   if (!content) {
     return;
   }
@@ -4311,6 +4595,11 @@ function isRuntimeRunning() {
 function setRuntimeState(status) {
   runtimeState.status = status;
   runtimeState.started_at = status === 'running' ? Date.now() : null;
+  if (status === 'running' || status === 'terminating') {
+    lockEditor();
+  } else if (!saveArtifactInProgress) {
+    unlockEditor();
+  }
   updateUndoRedoState();
 }
 
@@ -5991,7 +6280,7 @@ const requestThrottleUpdate = debounce(() => {
   updateThrottleState({ estimatedNextCost: getEstimatedNextCost() });
 }, 200);
 
-codeEditor.value = defaultInterfaceCode;
+setEditorValue(defaultInterfaceCode);
 let currentCode = defaultInterfaceCode;
 let baselineCode = defaultInterfaceCode;
 let previousCode = null;
@@ -6271,7 +6560,7 @@ if (stt && micButton && chatInput) {
 
 if (copyCodeBtn && codeEditor) {
   copyCodeBtn.addEventListener('click', async () => {
-    const success = await copyToClipboard(codeEditor.value);
+    const success = await copyToClipboard(getEditorValue());
     if (!success) {
       return;
     }
@@ -7184,6 +7473,7 @@ async function hardStopRuntime() {
 
 async function handleLLMOutput(code, source = 'generated') {
   setStatus('COMPILING');
+  clearEditorDiagnostics();
 
   const analysis = updateExecutionWarningsFor(code);
   sandboxMode = getSandboxModeForExecution(analysis.executionProfile);
@@ -7233,6 +7523,7 @@ function markPreviewStale() {
 
 function resetExecutionPreparation() {
   applyExecutionWarnings([]);
+  clearEditorDiagnostics();
 }
 
 function updateRunButtonVisibility() {
@@ -7322,11 +7613,14 @@ async function activateVersion(id, version, timeline = null) {
     saveEditorStateToIndexedDb(sessionState);
     scheduleSessionStatePersist();
   }
-  if (codeEditor) {
-    codeEditor.value = version.content;
-  }
-  userHasEditedCode = codeEditor.value !== baselineCode;
+  applyEditorSnapshot({
+    value: version.content,
+    cursor: version.cursor,
+    scroll_top: version.scroll_top
+  });
+  userHasEditedCode = getEditorValue() !== baselineCode;
   lastCodeSource = version.source === 'llm' ? 'llm' : 'user';
+  updateEditorLanguage(version.language || 'html');
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
@@ -7534,16 +7828,13 @@ function runActiveCodeVersion(source = 'user', statusMessage = 'Applying your ed
 }
 
 function applyLLMEdit(newCode, { messageId = null } = {}) {
-  if (!codeEditor) {
-    return;
-  }
   ensureCurrentCodeVersion(lastCodeSource === 'llm' ? 'llm' : 'user');
   addCodeVersion({
     content: newCode,
     source: 'llm',
     messageId
   });
-  codeEditor.value = newCode;
+  setEditorValue(newCode);
   updateUndoRedoState();
 }
 
@@ -7562,6 +7853,7 @@ function setCodeFromLLM(code, messageId = null) {
 }
 
 function handleUserRun(code, source = 'user', statusMessage = 'Applying your edits…') {
+  clearEditorDiagnostics();
   addCodeVersion({
     content: code,
     source: source === 'user' ? 'user' : 'system'
@@ -8677,32 +8969,6 @@ window.addEventListener('resize', () => {
   });
 });
 
-codeEditor.addEventListener('input', () => {
-  const hasEdits = codeEditor.value !== baselineCode;
-  userHasEditedCode = hasEdits;
-  if (hasEdits) {
-    lastCodeSource = 'user';
-  }
-  updateRunButtonVisibility();
-  updateRollbackVisibility();
-  updatePromoteVisibility();
-  if (hasEdits) {
-    markPreviewStale();
-  }
-  scheduleUserCodeVersionSave();
-  resetExecutionPreparation();
-  updateLineNumbers();
-  updateSaveCodeButtonState();
-  requestCreditPreviewUpdate();
-});
-
-codeEditor.addEventListener('scroll', () => {
-  if (!lineNumbersEl) {
-    return;
-  }
-  lineNumbersEl.scrollTop = codeEditor.scrollTop;
-});
-
 document.addEventListener('DOMContentLoaded', () => {
   bootstrapApp();
 });
@@ -8716,19 +8982,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateRollbackVisibility();
   updatePromoteVisibility();
   await initializeSessionState();
-  if (sessionState?.current_editor?.content && codeEditor) {
-    codeEditor.value = sessionState.current_editor.content;
-    baselineCode = codeEditor.value;
-    currentCode = codeEditor.value;
-    updateLineNumbers();
+  const initialContent = sessionState?.current_editor?.content || defaultInterfaceCode;
+  const initialLanguage = sessionState?.current_editor?.language || 'html';
+  try {
+    await initializeCodeEditor({ value: initialContent, language: initialLanguage });
+  } catch (error) {
+    console.error('Failed to load Monaco editor.', error);
+    showToast('Unable to load the code editor.');
+    return;
   }
+  setEditorValue(initialContent);
+  baselineCode = initialContent;
+  currentCode = initialContent;
+  updateLineNumbers();
   initializeVersionStack();
   updateSaveCodeButtonState();
   console.log('✅ Run Code listener attached');
   runButton.addEventListener('click', () => {
     console.log('🟢 Run Code clicked');
     if (userHasEditedCode) {
-      handleUserRun(codeEditor.value);
+      handleUserRun(getEditorValue());
       return;
     }
     runActiveCodeVersion('user', 'Re-running active version…');
@@ -8757,7 +9030,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     userHasEditedCode = false;
     lastCodeSource = 'llm';
-    codeEditor.value = lastLLMCode;
+    setEditorValue(lastLLMCode);
     baselineCode = lastLLMCode;
     updateRunButtonVisibility();
     updateRollbackVisibility();
@@ -8771,7 +9044,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
   promoteButton.addEventListener('click', () => {
-    const currentCode = codeEditor.value;
+    const currentCode = getEditorValue();
     lastLLMCode = currentCode;
     baselineCode = currentCode;
     userHasEditedCode = false;
@@ -8796,17 +9069,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     sandboxStopButton.addEventListener('click', stopSandboxFromUser);
   }
 
-});
-
-codeEditor.addEventListener('keydown', (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-    event.preventDefault();
-    if (userHasEditedCode) {
-      handleUserRun(codeEditor.value);
-      return;
-    }
-    runActiveCodeVersion('user', 'Re-running active version…');
-  }
 });
 
 if (splitter && rightPane && codePanel && outputPanel) {
