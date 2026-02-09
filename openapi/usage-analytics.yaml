@@ -1,0 +1,479 @@
+openapi: 3.1.0
+info:
+  title: Usage Analytics & Cost Accounting API
+  description: |
+    Internal and user-facing APIs for LLM usage tracking, analytics,
+    cost attribution, plan-aware routing, and anomaly detection.
+  version: 1.0.0
+
+servers:
+  - url: https://api.primarydesignco.com
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Usage
+  - name: Cost
+  - name: Routing
+  - name: Anomalies
+  - name: Admin
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    UsageEventInput:
+      type: object
+      required:
+        - session_id
+        - intent
+        - model
+        - tokens_in
+        - tokens_out
+        - credits_used
+        - latency_ms
+        - success
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        intent:
+          type: string
+          enum: [code, text]
+        model:
+          type: string
+        tokens_in:
+          type: integer
+          minimum: 0
+        tokens_out:
+          type: integer
+          minimum: 0
+        credits_used:
+          type: integer
+          minimum: 0
+        latency_ms:
+          type: integer
+          minimum: 0
+        success:
+          type: boolean
+
+    UsageOverview:
+      type: object
+      properties:
+        requests:
+          type: integer
+        credits_used:
+          type: integer
+        avg_latency_ms:
+          type: integer
+        success_rate:
+          type: number
+          format: float
+
+    DailyCredits:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        credits_used:
+          type: integer
+
+    DailyRequests:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        code_requests:
+          type: integer
+        text_requests:
+          type: integer
+
+    DailyLatency:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        avg_latency_ms:
+          type: integer
+
+    SessionSummary:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        session_start:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+        turns:
+          type: integer
+        credits_used:
+          type: integer
+
+    SessionEvent:
+      type: object
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        intent:
+          type: string
+          enum: [code, text]
+        model:
+          type: string
+        tokens_in:
+          type: integer
+        tokens_out:
+          type: integer
+        credits_used:
+          type: integer
+        latency_ms:
+          type: integer
+        success:
+          type: boolean
+
+    ModelCostSummary:
+      type: object
+      properties:
+        model:
+          type: string
+        requests:
+          type: integer
+        credits_used:
+          type: integer
+        total_cost_usd:
+          type: number
+          format: float
+
+    DailyModelCost:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        model:
+          type: string
+        requests:
+          type: integer
+        credits_used:
+          type: integer
+        cost_usd:
+          type: number
+          format: float
+
+    QuotaState:
+      type: object
+      properties:
+        plan:
+          type: string
+        monthly_credits:
+          type: integer
+        normalized_credits_used:
+          type: number
+          format: float
+        usage_ratio:
+          type: number
+          format: float
+
+    RouteDecisionRequest:
+      type: object
+      required:
+        - intent
+      properties:
+        intent:
+          type: string
+          enum: [code, text]
+        requested_model:
+          type: string
+          nullable: true
+
+    RouteDecisionResponse:
+      type: object
+      properties:
+        routed_model:
+          type: string
+        reason:
+          type: string
+          enum: [policy_default, quota_fallback, premium_blocked]
+
+    CostAnomaly:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        anomaly_type:
+          type: string
+          enum: [spike, drift, runaway_session]
+        severity:
+          type: string
+          enum: [warning, critical]
+        baseline_value:
+          type: number
+          nullable: true
+        observed_value:
+          type: number
+        context:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+paths:
+  /api/usage/event:
+    post:
+      tags: [Usage]
+      summary: Ingest usage event (internal)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageEventInput'
+      responses:
+        '200':
+          description: Event recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /api/usage/overview:
+    get:
+      tags: [Usage]
+      summary: 30-day usage overview
+      responses:
+        '200':
+          description: Usage overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageOverview'
+
+  /api/usage/credits/daily:
+    get:
+      tags: [Usage]
+      summary: Daily credit burn
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 14
+      responses:
+        '200':
+          description: Daily credits
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyCredits'
+
+  /api/usage/requests/daily:
+    get:
+      tags: [Usage]
+      summary: Daily requests split by intent
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 14
+      responses:
+        '200':
+          description: Daily requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyRequests'
+
+  /api/usage/latency/daily:
+    get:
+      tags: [Usage]
+      summary: Daily latency trend
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 14
+      responses:
+        '200':
+          description: Daily latency
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyLatency'
+
+  /api/usage/sessions:
+    get:
+      tags: [Usage]
+      summary: Session history
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Session summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionSummary'
+
+  /api/usage/sessions/{session_id}:
+    get:
+      tags: [Usage]
+      summary: Session drill-down
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id:
+                    type: string
+                    format: uuid
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionEvent'
+
+  /api/usage/cost/models:
+    get:
+      tags: [Cost]
+      summary: Per-model cost summary
+      responses:
+        '200':
+          description: Model cost summary
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelCostSummary'
+
+  /api/usage/cost/models/daily:
+    get:
+      tags: [Cost]
+      summary: Daily per-model cost
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 14
+      responses:
+        '200':
+          description: Daily model cost
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyModelCost'
+
+  /api/usage/quota:
+    get:
+      tags: [Usage]
+      summary: Current plan quota state
+      responses:
+        '200':
+          description: Quota state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaState'
+
+  /api/router/decide:
+    post:
+      tags: [Routing]
+      summary: Decide LLM model (internal)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteDecisionRequest'
+      responses:
+        '200':
+          description: Routing decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDecisionResponse'
+
+  /api/admin/anomalies:
+    get:
+      tags: [Anomalies, Admin]
+      summary: List cost anomalies
+      responses:
+        '200':
+          description: Cost anomalies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CostAnomaly'
+
+  /api/admin/anomalies/{id}/acknowledge:
+    post:
+      tags: [Anomalies, Admin]
+      summary: Acknowledge anomaly
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
