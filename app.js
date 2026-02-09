@@ -3522,7 +3522,7 @@ function deriveTitleFromCode(content = '') {
   }
   const lines = trimmed.split('\n');
   for (const line of lines) {
-    const match = line.match(/^\s*(?:\/\/|#|<!--|\/\*+|\*+)\s*(.+?)\s*(?:-->|\\*\\/)?\s*$/);
+    const match = line.match(/^\s*(?:\/\/|#|<!--|\/\*+|\*+)\s*(.+?)\s*(?:-->|\/\*+|\*+\/)?\s*$/);
     if (match?.[1]) {
       return match[1].trim();
     }
@@ -6343,7 +6343,7 @@ function resetSandboxFrame() {
   previewFrameHost.innerHTML = '';
   const nextFrame = document.createElement('iframe');
   nextFrame.id = 'sandbox';
-  nextFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  nextFrame.setAttribute('sandbox', 'allow-scripts');
   nextFrame.style.width = '100%';
   nextFrame.style.height = '100%';
   previewFrameHost.appendChild(nextFrame);
