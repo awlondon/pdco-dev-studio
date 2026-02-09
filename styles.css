@@ -2657,6 +2657,28 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.gallery-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.gallery-search {
+  flex: 1;
+  min-width: 220px;
+}
+
+.gallery-search input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--text);
+}
+
 .gallery-muted {
   color: var(--muted);
   font-size: 0.9rem;
@@ -2666,9 +2688,42 @@ button:disabled {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
-.gallery-sort .ghost-button.is-active {
+.gallery-sort select {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.gallery-tags-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.gallery-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-chip {
+  border: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.tag-chip.is-active {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.2);
 }
@@ -2716,6 +2771,21 @@ button:disabled {
   justify-content: center;
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.85rem;
+}
+
+.artifact-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.artifact-tag {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
 }
 
 .artifact-visibility {
@@ -3176,6 +3246,12 @@ button:disabled {
 .artifact-chat-history summary {
   cursor: pointer;
   font-weight: 600;
+}
+
+.comment-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 .artifact-chat-body {

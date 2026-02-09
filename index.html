@@ -522,12 +522,22 @@
         </div>
       </div>
       <div class="gallery-filters">
-        <span class="gallery-muted">Public artifacts</span>
-        <div class="gallery-sort" role="group" aria-label="Sort public gallery">
-          <button class="ghost-button small is-active" type="button" data-sort="likes">Most liked</button>
-          <button class="ghost-button small" type="button" data-sort="comments">Most commented</button>
-          <button class="ghost-button small" type="button" data-sort="new">Newest</button>
-          <button class="ghost-button small" type="button" data-sort="updated">Recently updated</button>
+        <div class="gallery-filter-row">
+          <label class="gallery-search" for="publicGallerySearch">
+            <span class="sr-only">Search public artifacts</span>
+            <input id="publicGallerySearch" type="search" placeholder="Search titles or descriptions..." />
+          </label>
+          <label class="gallery-sort" for="publicGallerySort">
+            <span>Sort</span>
+            <select id="publicGallerySort">
+              <option value="recent">Recent</option>
+              <option value="forked">Most forked</option>
+            </select>
+          </label>
+        </div>
+        <div class="gallery-tags-row">
+          <span class="gallery-muted">Tags</span>
+          <div id="publicGalleryTagChips" class="gallery-tags"></div>
         </div>
       </div>
       <div id="publicGalleryGrid" class="gallery-grid"></div>

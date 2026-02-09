@@ -259,7 +259,9 @@ const galleryEmpty = document.getElementById('galleryEmpty');
 const publicGalleryEmpty = document.getElementById('publicGalleryEmpty');
 const galleryBackButton = document.getElementById('galleryBackButton');
 const publicGalleryBackButton = document.getElementById('publicGalleryBackButton');
-const publicGallerySortButtons = document.querySelectorAll('#public-gallery-page [data-sort]');
+const publicGallerySearchInput = document.getElementById('publicGallerySearch');
+const publicGallerySortSelect = document.getElementById('publicGallerySort');
+const publicGalleryTagChips = document.getElementById('publicGalleryTagChips');
 const usageScopeLabel = document.getElementById('usage-scope-label');
 const usageFilters = document.getElementById('usage-filters');
 const usageUserFilter = document.getElementById('usage-user-filter');
@@ -3141,6 +3143,17 @@ function getArtifactStats(artifact) {
   };
 }
 
+function parseTagsInput(value) {
+  if (!value) {
+    return [];
+  }
+  const rawTags = String(value)
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  return Array.from(new Set(rawTags)).slice(0, 20);
+}
+
 function normalizeHandle(value) {
   return value.toLowerCase().replace(/[^a-z0-9_]/g, '');
 }
@@ -3240,6 +3253,14 @@ function renderGalleryCards(artifacts, { mode }) {
     const ownerHandle = getArtifactOwnerHandle(artifact);
     const canBrowseVersions = mode === 'private'
       || (artifact.visibility === 'public' && artifact.versioning?.enabled);
+    const tags = Array.isArray(artifact.tags) ? artifact.tags : [];
+    const tagsMarkup = tags.length
+      ? `
+        <div class="artifact-tags">
+          ${tags.map((tag) => `<span class="artifact-tag">#${escapeHtml(tag)}</span>`).join('')}
+        </div>
+      `
+      : '';
     return `
       <article class="artifact-card" id="artifact-${artifact.artifact_id}" data-artifact-id="${artifact.artifact_id}">
         <div class="artifact-thumb">
@@ -3250,6 +3271,7 @@ function renderGalleryCards(artifacts, { mode }) {
           <h3>${artifact.title || 'Untitled artifact'}</h3>
           ${mode !== 'private' ? `<div class="artifact-author"><a href="/u/${ownerHandle}" data-route>${getArtifactOwnerDisplay(artifact)}</a></div>` : ''}
           <p>${artifact.description || 'No description provided.'}</p>
+          ${tagsMarkup}
           ${forkLabel ? `<div class="artifact-fork-label">${forkLabel}</div>` : ''}
           <div class="artifact-meta">
             <span>${artifact.code?.language || 'code'}</span>
@@ -3320,29 +3342,78 @@ async function loadPrivateGallery() {
   galleryEmpty?.classList.toggle('hidden', hasItems);
 }
 
-function getPublicGalleryPath(sort) {
+function getPublicGalleryPath({ sort, query, tag } = {}) {
   const params = new URLSearchParams();
   if (sort) {
     params.set('sort', sort);
   }
-  const query = params.toString();
-  return `/api/artifacts/public${query ? `?${query}` : ''}`;
+  if (query) {
+    params.set('query', query);
+  }
+  if (tag) {
+    params.set('tag', tag);
+  }
+  const queryString = params.toString();
+  return `/api/artifacts/public${queryString ? `?${queryString}` : ''}`;
+}
+
+function buildPublicGalleryTags(artifacts = []) {
+  const tagSet = new Set();
+  artifacts.forEach((artifact) => {
+    if (Array.isArray(artifact.tags)) {
+      artifact.tags.forEach((tag) => tagSet.add(tag));
+    }
+  });
+  return Array.from(tagSet).sort();
+}
+
+function renderPublicGalleryTagChips(tags) {
+  if (!publicGalleryTagChips) {
+    return;
+  }
+  const tagList = tags.slice();
+  if (galleryState.publicTag && !tagList.includes(galleryState.publicTag)) {
+    tagList.unshift(galleryState.publicTag);
+  }
+  const allTags = ['all', ...tagList];
+  publicGalleryTagChips.innerHTML = allTags.map((tag) => {
+    const label = tag === 'all' ? 'All tags' : `#${escapeHtml(tag)}`;
+    const isActive = (tag === 'all' && !galleryState.publicTag)
+      || tag === galleryState.publicTag;
+    return `
+      <button type="button" class="tag-chip ${isActive ? 'is-active' : ''}" data-tag="${tag === 'all' ? '' : tag}">
+        ${label}
+      </button>
+    `;
+  }).join('');
 }
 
 async function loadPublicGallery() {
-  if (publicGallerySortButtons.length) {
-    publicGallerySortButtons.forEach((button) => {
-      button.classList.toggle('is-active', button.dataset.sort === galleryState.publicSort);
-    });
+  if (publicGallerySortSelect) {
+    publicGallerySortSelect.value = galleryState.publicSort;
   }
-  const artifacts = await fetchArtifacts(getPublicGalleryPath(galleryState.publicSort));
+  if (publicGallerySearchInput) {
+    publicGallerySearchInput.value = galleryState.publicQuery;
+  }
+  const artifacts = await fetchArtifacts(getPublicGalleryPath({
+    sort: galleryState.publicSort,
+    query: galleryState.publicQuery,
+    tag: galleryState.publicTag
+  }));
   galleryState.publicArtifacts = artifacts;
   if (publicGalleryGrid) {
     publicGalleryGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'public' });
   }
+  renderPublicGalleryTagChips(buildPublicGalleryTags(artifacts));
   const hasItems = artifacts.length > 0;
   publicGalleryEmpty?.classList.toggle('hidden', hasItems);
 }
+
+const requestPublicGalleryRefresh = debounce(() => {
+  loadPublicGallery().catch((error) => {
+    console.warn('Failed to load public gallery.', error);
+  });
+}, 300);
 
 async function loadAccountArtifactSummary() {
   const artifacts = await fetchArtifacts('/api/artifacts/private');
@@ -3382,6 +3453,12 @@ async function fetchPublicArtifactsByHandle(handle) {
   if (galleryState.publicSort) {
     params.set('sort', galleryState.publicSort);
   }
+  if (galleryState.publicQuery) {
+    params.set('query', galleryState.publicQuery);
+  }
+  if (galleryState.publicTag) {
+    params.set('tag', galleryState.publicTag);
+  }
   if (handle) {
     params.set('handle', handle);
   }
@@ -3394,7 +3471,11 @@ async function fetchPublicArtifactsByHandle(handle) {
   } catch (error) {
     console.warn('Failed to load filtered public artifacts.', error);
   }
-  const all = await fetchArtifacts(getPublicGalleryPath(galleryState.publicSort));
+  const all = await fetchArtifacts(getPublicGalleryPath({
+    sort: galleryState.publicSort,
+    query: galleryState.publicQuery,
+    tag: galleryState.publicTag
+  }));
   return all.filter((artifact) => getArtifactOwnerHandle(artifact) === handle);
 }
 
@@ -3834,6 +3915,10 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
       <textarea id="artifactDescriptionInput" rows="3">${description}</textarea>
     </label>
     <label class="modal-field">
+      <span>Tags</span>
+      <input id="artifactTagsInput" type="text" placeholder="ui, animation, dashboard" />
+    </label>
+    <label class="modal-field">
       <span>Visibility</span>
       <select id="artifactVisibilityInput">
         <option value="private" selected>Private</option>
@@ -3850,11 +3935,13 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
   document.getElementById('artifactConfirmButton')?.addEventListener('click', () => {
     const titleInput = document.getElementById('artifactTitleInput');
     const descriptionInput = document.getElementById('artifactDescriptionInput');
+    const tagsInput = document.getElementById('artifactTagsInput');
     const visibilityInput = document.getElementById('artifactVisibilityInput');
     onConfirm({
       title: titleInput?.value.trim() || '',
       description: descriptionInput?.value.trim() || '',
-      visibility: visibilityInput?.value === 'public' ? 'public' : 'private'
+      visibility: visibilityInput?.value === 'public' ? 'public' : 'private',
+      tags: parseTagsInput(tagsInput?.value || '')
     });
   });
 
@@ -3915,7 +4002,7 @@ async function handleSaveCodeArtifact() {
     title: '',
     description: '',
     codePreview: resolvedContent,
-    onConfirm: async ({ title, description, visibility }) => {
+    onConfirm: async ({ title, description, visibility, tags }) => {
       const tempId = generateArtifactTempId();
       try {
         const inferred = await metadataPromise;
@@ -3933,6 +4020,7 @@ async function handleSaveCodeArtifact() {
           title: normalizedTitle,
           description: normalizedDescription,
           visibility,
+          tags,
           code: { language: resolvedLanguage, content: resolvedContent, versions: codeVersions },
           artifact: {
             code_version_id: activeVersionId,
@@ -4055,6 +4143,10 @@ async function handleArtifactEdit(artifactId) {
       <span>Description</span>
       <textarea id="artifactEditDescription" rows="3">${currentArtifact.description || ''}</textarea>
     </label>
+    <label class="modal-field">
+      <span>Tags</span>
+      <input id="artifactEditTags" type="text" value="${(currentArtifact.tags || []).join(', ')}" />
+    </label>
     <div class="modal-actions">
       <button id="artifactEditSave" type="button">Save</button>
       <button id="artifactEditCancel" class="secondary" type="button">Cancel</button>
@@ -4064,6 +4156,7 @@ async function handleArtifactEdit(artifactId) {
   document.getElementById('artifactEditSave')?.addEventListener('click', async () => {
     const titleInput = document.getElementById('artifactEditTitle');
     const descriptionInput = document.getElementById('artifactEditDescription');
+    const tagsInput = document.getElementById('artifactEditTags');
     try {
       await fetch(`${API_BASE}/api/artifacts/${artifactId}`, {
         method: 'PATCH',
@@ -4071,7 +4164,8 @@ async function handleArtifactEdit(artifactId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: titleInput?.value.trim() || currentArtifact.title,
-          description: descriptionInput?.value.trim() || currentArtifact.description
+          description: descriptionInput?.value.trim() || currentArtifact.description,
+          tags: parseTagsInput(tagsInput?.value || '')
         })
       });
       ModalManager.close();
@@ -4408,6 +4502,53 @@ async function deleteArtifactComment(commentId) {
   }
 }
 
+async function postArtifactReport(artifactId, reason) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/report`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason })
+  });
+  if (!res.ok) {
+    throw new Error('Artifact report failed');
+  }
+  return res.json();
+}
+
+function openReportModal(artifact) {
+  const html = `
+    <h2>Report artifact</h2>
+    <p>${artifact.title || 'Artifact'}</p>
+    <label class="modal-field">
+      <span>Reason</span>
+      <textarea id="artifactReportReason" rows="4" placeholder="Describe the issue..."></textarea>
+    </label>
+    <div class="modal-actions">
+      <button id="artifactReportSubmit" class="danger" type="button">Submit report</button>
+      <button id="artifactReportCancel" class="secondary" type="button">Cancel</button>
+    </div>
+  `;
+  ModalManager.open(html, { dismissible: true, onClose: () => {} });
+  document.getElementById('artifactReportSubmit')?.addEventListener('click', async () => {
+    const reason = document.getElementById('artifactReportReason')?.value.trim();
+    if (!reason) {
+      showToast('Please add a reason before submitting.');
+      return;
+    }
+    try {
+      await postArtifactReport(artifact.artifact_id, reason);
+      ModalManager.close();
+      showToast('Report submitted. Thanks for letting us know.', { variant: 'success', duration: 2500 });
+    } catch (error) {
+      console.error('Report submission failed.', error);
+      showToast('Unable to submit report.');
+    }
+  });
+  document.getElementById('artifactReportCancel')?.addEventListener('click', () => {
+    ModalManager.close();
+  });
+}
+
 async function openCommentsModal(artifactId) {
   const currentArtifact = findArtifactInState(artifactId);
   if (!currentArtifact) {
@@ -4425,6 +4566,9 @@ function renderCommentsModal(artifact, comments) {
   const html = `
     <h2>Comments</h2>
     <p>${artifact.title || 'Artifact'}</p>
+    <div class="comment-toolbar">
+      <button id="artifactReportButton" class="ghost-button small danger" type="button">Report</button>
+    </div>
     <div class="comment-list">
       ${renderCommentsThread(comments)}
     </div>
@@ -4443,6 +4587,10 @@ function renderCommentsModal(artifact, comments) {
     commentState.replyTo = null;
     commentState.artifactId = null;
   } });
+
+  document.getElementById('artifactReportButton')?.addEventListener('click', () => {
+    openReportModal(artifact);
+  });
 
   document.querySelectorAll('[data-action="reply"]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -6495,7 +6643,9 @@ const chatState = {
 const galleryState = {
   privateArtifacts: [],
   publicArtifacts: [],
-  publicSort: 'likes'
+  publicSort: 'recent',
+  publicQuery: '',
+  publicTag: ''
 };
 const profileState = {
   handle: null,
@@ -8594,21 +8744,36 @@ if (publicGalleryBackButton) {
   });
 }
 
-if (publicGallerySortButtons.length) {
-  publicGallerySortButtons.forEach((button) => {
-    button.addEventListener('click', () => {
-      const sort = button.dataset.sort;
-      if (!sort || sort === galleryState.publicSort) {
-        return;
-      }
-      galleryState.publicSort = sort;
-      publicGallerySortButtons.forEach((item) => {
-        item.classList.toggle('is-active', item.dataset.sort === sort);
-      });
-      loadPublicGallery().catch((error) => {
-        console.warn('Failed to load sorted public gallery.', error);
-      });
-    });
+if (publicGallerySortSelect) {
+  publicGallerySortSelect.addEventListener('change', () => {
+    const sort = publicGallerySortSelect.value;
+    if (!sort || sort === galleryState.publicSort) {
+      return;
+    }
+    galleryState.publicSort = sort;
+    requestPublicGalleryRefresh();
+  });
+}
+
+if (publicGallerySearchInput) {
+  publicGallerySearchInput.addEventListener('input', () => {
+    galleryState.publicQuery = publicGallerySearchInput.value.trim();
+    requestPublicGalleryRefresh();
+  });
+}
+
+if (publicGalleryTagChips) {
+  publicGalleryTagChips.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-tag]');
+    if (!chip) {
+      return;
+    }
+    const tag = chip.getAttribute('data-tag') || '';
+    if (tag === galleryState.publicTag) {
+      return;
+    }
+    galleryState.publicTag = tag;
+    requestPublicGalleryRefresh();
   });
 }
 

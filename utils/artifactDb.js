@@ -16,6 +16,21 @@ function toIsoString(value) {
   return new Date(value).toISOString();
 }
 
+export function normalizeTagsInput(tags) {
+  if (!tags) {
+    return [];
+  }
+  const rawTags = Array.isArray(tags)
+    ? tags
+    : String(tags)
+      .split(',')
+      .map((tag) => tag.trim());
+  const normalized = rawTags
+    .map((tag) => String(tag || '').trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(normalized)).slice(0, 20);
+}
+
 export function mapArtifactRow(row) {
   if (!row) return null;
   return {
@@ -43,6 +58,7 @@ export function mapArtifactRow(row) {
       enabled: Boolean(row.versioning_enabled),
       chat_history_public: Boolean(row.chat_history_public)
     },
+    tags: Array.isArray(row.tags) ? row.tags : [],
     stats: {
       forks: Number(row.forks_count || 0),
       imports: Number(row.imports_count || 0),
@@ -102,10 +118,16 @@ async function fetchArtifactRows({ whereClause = '', params = [] } = {}) {
       v.code_content,
       v.code_versions,
       v.chat,
-      v.stats
+      v.stats,
+      tag_data.tags
      FROM artifacts a
      LEFT JOIN artifact_media m ON m.artifact_id = a.id
      LEFT JOIN artifact_versions v ON v.id = a.current_version_id
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(array_agg(DISTINCT tag ORDER BY tag), '{}') AS tags
+       FROM artifact_tags
+       WHERE artifact_id = a.id
+     ) tag_data ON true
      ${whereClause}`,
     params
   );
@@ -128,9 +150,45 @@ export async function fetchArtifactsByOwner(ownerUserId) {
   return rows.map(mapArtifactRow);
 }
 
-export async function fetchPublicArtifacts() {
+export async function fetchPublicArtifacts({ query, tag, sort } = {}) {
+  const params = [];
+  const where = ["a.visibility = 'public'"];
+  const normalizedQuery = query ? String(query).trim() : '';
+  const normalizedTag = tag ? String(tag).trim().toLowerCase() : '';
+
+  if (normalizedQuery) {
+    params.push(`%${normalizedQuery}%`);
+    where.push(`(a.title ILIKE $${params.length} OR a.description ILIKE $${params.length})`);
+  }
+
+  if (normalizedTag) {
+    params.push(normalizedTag);
+    where.push(`EXISTS (\n      SELECT 1 FROM artifact_tags t\n      WHERE t.artifact_id = a.id AND t.tag = $${params.length}\n    )`);
+  }
+
+  let orderClause = 'ORDER BY a.created_at DESC';
+  switch (sort) {
+    case 'forked':
+    case 'most_forked':
+      orderClause = 'ORDER BY a.forks_count DESC, a.updated_at DESC';
+      break;
+    case 'updated':
+      orderClause = 'ORDER BY a.updated_at DESC';
+      break;
+    case 'likes':
+      orderClause = 'ORDER BY a.likes_count DESC, a.updated_at DESC';
+      break;
+    case 'comments':
+      orderClause = 'ORDER BY a.comments_count DESC, a.updated_at DESC';
+      break;
+    case 'recent':
+    default:
+      orderClause = 'ORDER BY a.created_at DESC';
+  }
+
   const rows = await fetchArtifactRows({
-    whereClause: "WHERE a.visibility = 'public' ORDER BY a.updated_at DESC"
+    whereClause: `WHERE ${where.join(' AND ')} ${orderClause}`,
+    params
   });
   return rows.map(mapArtifactRow);
 }
@@ -170,7 +228,8 @@ export async function createArtifact({
   chat,
   sourceSession,
   derivedFrom,
-  screenshotUrl
+  screenshotUrl,
+  tags = []
 }) {
   const pool = getArtifactsDbPool();
   const client = await pool.connect();
@@ -239,6 +298,14 @@ export async function createArtifact({
          ON CONFLICT (artifact_id)
          DO UPDATE SET screenshot_url = EXCLUDED.screenshot_url, updated_at = EXCLUDED.updated_at`,
         [artifactId, screenshotUrl, now]
+      );
+    }
+    const normalizedTags = normalizeTagsInput(tags);
+    if (normalizedTags.length) {
+      await client.query(
+        `INSERT INTO artifact_tags (artifact_id, tag)
+         SELECT $1, UNNEST($2::text[])`,
+        [artifactId, normalizedTags]
       );
     }
     await client.query('COMMIT');
@@ -377,18 +444,43 @@ export async function updateArtifactVisibility({ artifactId, ownerUserId, visibi
   return result.rowCount > 0;
 }
 
-export async function updateArtifactMetadata({ artifactId, ownerUserId, title, description }) {
+export async function updateArtifactMetadata({ artifactId, ownerUserId, title, description, tags }) {
   const pool = getArtifactsDbPool();
-  const result = await pool.query(
-    `UPDATE artifacts
-     SET title = $1,
-         description = $2,
-         updated_at = NOW()
-     WHERE id = $3 AND owner_user_id = $4
-     RETURNING id`,
-    [title, description, artifactId, ownerUserId]
-  );
-  return result.rowCount > 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE artifacts
+       SET title = $1,
+           description = $2,
+           updated_at = NOW()
+       WHERE id = $3 AND owner_user_id = $4
+       RETURNING id`,
+      [title, description, artifactId, ownerUserId]
+    );
+    if (result.rowCount > 0 && tags !== undefined) {
+      const normalizedTags = normalizeTagsInput(tags);
+      await client.query(
+        `DELETE FROM artifact_tags
+         WHERE artifact_id = $1`,
+        [artifactId]
+      );
+      if (normalizedTags.length) {
+        await client.query(
+          `INSERT INTO artifact_tags (artifact_id, tag)
+           SELECT $1, UNNEST($2::text[])`,
+          [artifactId, normalizedTags]
+        );
+      }
+    }
+    await client.query('COMMIT');
+    return result.rowCount > 0;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteArtifact({ artifactId, ownerUserId }) {
@@ -565,4 +657,15 @@ export async function forkArtifact({
     artifactId: newId,
     versionId
   };
+}
+
+export async function createArtifactReport({ artifactId, reporterUserId, reason }) {
+  const pool = getArtifactsDbPool();
+  const reportId = crypto.randomUUID();
+  await pool.query(
+    `INSERT INTO artifact_reports (id, artifact_id, reporter_user_id, reason)
+     VALUES ($1, $2, $3, $4)`,
+    [reportId, artifactId, reporterUserId, reason]
+  );
+  return reportId;
 }

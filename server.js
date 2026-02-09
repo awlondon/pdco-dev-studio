@@ -34,6 +34,7 @@ import {
 import {
   createArtifact,
   createArtifactVersion,
+  createArtifactReport,
   deleteArtifact,
   deletePrivateArtifactsForUser,
   fetchArtifactById,
@@ -41,6 +42,7 @@ import {
   fetchArtifactsByOwner,
   fetchPublicArtifacts,
   forkArtifact,
+  normalizeTagsInput,
   unpublishPublicArtifactsForUser,
   updateArtifactMetadata,
   updateArtifactPublishSettings,
@@ -431,6 +433,7 @@ app.post('/api/artifacts', async (req, res) => {
     const resolvedCode = resolveArtifactCode(req.body) || { language: 'html', content: '' };
     const codeVersions = resolveArtifactCodeVersions(req.body);
     const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
+    const tags = normalizeTagsInput(req.body?.tags);
     const validation = validateArtifactPayload({
       code: resolvedCode,
       codeVersions,
@@ -474,7 +477,8 @@ app.post('/api/artifacts', async (req, res) => {
         version_id: derivedFrom?.version_id || null,
         version_label: derivedFrom?.version_label || null
       },
-      screenshotUrl
+      screenshotUrl,
+      tags
     });
 
     const artifact = await fetchArtifactById(artifactId);
@@ -810,7 +814,11 @@ app.get('/api/artifacts/private', async (req, res) => {
 
 app.get('/api/artifacts/public', async (req, res) => {
   try {
-    const publicArtifacts = await fetchPublicArtifacts();
+    const publicArtifacts = await fetchPublicArtifacts({
+      query: req.query?.query,
+      tag: req.query?.tag,
+      sort: req.query?.sort
+    });
     return res.json({ ok: true, artifacts: publicArtifacts });
   } catch (error) {
     console.error('Failed to load public artifacts.', error);
@@ -953,11 +961,13 @@ app.patch('/api/artifacts/:id', async (req, res) => {
     if (artifact.visibility === 'public') {
       return res.status(400).json({ ok: false, error: 'Public artifacts are immutable' });
     }
+    const shouldUpdateTags = Object.prototype.hasOwnProperty.call(req.body || {}, 'tags');
     await updateArtifactMetadata({
       artifactId: artifact.artifact_id,
       ownerUserId: artifact.owner_user_id,
       title: String(req.body?.title || artifact.title),
-      description: String(req.body?.description || artifact.description)
+      description: String(req.body?.description || artifact.description),
+      tags: shouldUpdateTags ? normalizeTagsInput(req.body?.tags) : undefined
     });
     const updated = await fetchArtifactById(artifact.artifact_id);
     return res.json({ ok: true, artifact: updated });
@@ -986,6 +996,39 @@ app.delete('/api/artifacts/:id', async (req, res) => {
     console.error('Failed to delete artifact.', error);
     return res.status(500).json({ ok: false, error: 'Failed to delete artifact' });
   }
+});
+
+app.post('/api/artifacts/:id/report', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const artifact = await fetchArtifactById(req.params.id);
+    if (!artifact) {
+      return res.status(404).json({ ok: false, error: 'Artifact not found' });
+    }
+    if (artifact.visibility !== 'public' && artifact.owner_user_id !== session.sub) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) {
+      return res.status(400).json({ ok: false, error: 'Reason is required' });
+    }
+    const reportId = await createArtifactReport({
+      artifactId: artifact.artifact_id,
+      reporterUserId: session.sub,
+      reason
+    });
+    return res.json({ ok: true, report_id: reportId });
+  } catch (error) {
+    console.error('Failed to report artifact.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to report artifact' });
+  }
+});
+
+app.get('/api/admin/artifact_reports', async (_req, res) => {
+  res.json({ ok: true, reports: [] });
 });
 
 app.get('/api/usage/overview', async (req, res) => {
