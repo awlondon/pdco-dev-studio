@@ -84,7 +84,20 @@
     <main id="workspace">
       <div id="left-pane" class="left-pane">
         <section id="chat-panel" class="panel">
-          <div class="panel-header">Chat</div>
+          <div class="panel-header">
+            <span>Chat</span>
+            <div class="panel-header-actions">
+              <button
+                id="clearChatButton"
+                class="icon-button"
+                type="button"
+                title="Clear chat"
+                aria-label="Clear chat"
+              >
+                🧹
+              </button>
+            </div>
+          </div>
           <div id="chat-messages" class="panel-body"></div>
           <form id="chat-form" class="panel-footer">
             <div id="credit-banner" class="credit-banner hidden"></div>
@@ -562,6 +575,7 @@
         </div>
       </div>
     </div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
