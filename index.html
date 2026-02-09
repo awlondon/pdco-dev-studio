@@ -8,7 +8,25 @@
     rel="stylesheet"
     href="https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs/editor/editor.main.css"
   />
-  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs/loader.js"></script>
+<!-- Monaco AMD loader -->
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs/loader.js"></script>
+
+<script>
+  require.config({
+    paths: {
+      vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs"
+    }
+  });
+
+  require(["vs/editor/editor.main"], function () {
+    monaco.editor.create(document.getElementById("editor"), {
+      value: "// hello",
+      language: "javascript",
+      theme: "vs-dark"
+    });
+  });
+</script>
+
 </head>
 <body>
   <div id="modal-root" class="modal-root hidden" role="dialog" aria-modal="true" aria-hidden="true"></div>
