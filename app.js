@@ -2533,8 +2533,8 @@ function renderArtifactChatHistory(messages = []) {
 }
 
 function openArtifactVersionsModal(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     showToast('Artifact not found.');
     return;
   }
@@ -2591,7 +2591,7 @@ function openArtifactVersionsModal(artifactId) {
             return;
           }
           applyArtifactToEditor({
-            ...artifact,
+            ...currentArtifact,
             code: version.code
           });
           ModalManager.close();
@@ -2721,13 +2721,13 @@ async function handleSaveCodeArtifact() {
             credits_used_estimate: sessionStats.creditsUsedEstimate || 0
           }
         };
-        const artifact = activeArtifactId
+        const currentArtifact = activeArtifactId
           ? await createArtifactVersion(activeArtifactId, payload)
           : await createArtifact(payload);
-        activeArtifactId = artifact?.artifact_id || activeArtifactId;
+        activeArtifactId = currentArtifact?.artifact_id || activeArtifactId;
         showToast('Artifact saved.', { variant: 'success', duration: 2500 });
         ModalManager.close();
-        if (artifact?.visibility === 'public') {
+        if (currentArtifact?.visibility === 'public') {
           await loadPublicGallery();
         }
         await loadPrivateGallery();
@@ -2761,28 +2761,28 @@ function findArtifactInState(id) {
 }
 
 async function handleArtifactOpen(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     return;
   }
-  applyArtifactToEditor(artifact);
+  applyArtifactToEditor(currentArtifact);
   setRoute('/');
 }
 
 async function handleArtifactEdit(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     return;
   }
   const html = `
     <h2>Edit artifact metadata</h2>
     <label class="modal-field">
       <span>Title</span>
-      <input id="artifactEditTitle" type="text" value="${(artifact.title || '').replace(/"/g, '&quot;')}" />
+      <input id="artifactEditTitle" type="text" value="${(currentArtifact.title || '').replace(/"/g, '&quot;')}" />
     </label>
     <label class="modal-field">
       <span>Description</span>
-      <textarea id="artifactEditDescription" rows="3">${artifact.description || ''}</textarea>
+      <textarea id="artifactEditDescription" rows="3">${currentArtifact.description || ''}</textarea>
     </label>
     <div class="modal-actions">
       <button id="artifactEditSave" type="button">Save</button>
@@ -2799,8 +2799,8 @@ async function handleArtifactEdit(artifactId) {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: titleInput?.value.trim() || artifact.title,
-          description: descriptionInput?.value.trim() || artifact.description
+          title: titleInput?.value.trim() || currentArtifact.title,
+          description: descriptionInput?.value.trim() || currentArtifact.description
         })
       });
       ModalManager.close();
@@ -2848,13 +2848,13 @@ async function handleArtifactDelete(artifactId) {
 }
 
 async function handleArtifactVisibilityToggle(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     return;
   }
-  const makePublic = artifact.visibility !== 'public';
-  const versioningEnabled = Boolean(artifact.versioning?.enabled);
-  const chatHistoryPublic = Boolean(artifact.versioning?.chat_history_public);
+  const makePublic = currentArtifact.visibility !== 'public';
+  const versioningEnabled = Boolean(currentArtifact.versioning?.enabled);
+  const chatHistoryPublic = Boolean(currentArtifact.versioning?.chat_history_public);
   const html = `
     <h2>${makePublic ? 'Publish' : 'Make private'}?</h2>
     <p>${makePublic ? 'Public artifacts cannot have their metadata edited later.' : 'Only you will be able to view this artifact.'}</p>
@@ -2927,7 +2927,7 @@ async function handleArtifactVisibilityToggle(artifactId) {
 
 async function handleArtifactDuplicate(artifactId) {
   try {
-    const artifact = findArtifactInState(artifactId);
+    const currentArtifact = findArtifactInState(artifactId);
     const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/fork`, {
       method: 'POST',
       credentials: 'include',
@@ -2935,7 +2935,7 @@ async function handleArtifactDuplicate(artifactId) {
       body: JSON.stringify({
         session_id: sessionId,
         credits_used_estimate: sessionStats.creditsUsedEstimate || 0,
-        version_id: artifact?.current_version_id || null
+        version_id: currentArtifact?.current_version_id || null
       })
     });
     if (!res.ok) {
@@ -3005,11 +3005,11 @@ function refreshArtifactViews() {
 }
 
 async function handleArtifactLikeToggle(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     return;
   }
-  const isLiked = Boolean(artifact.viewer_has_liked || artifact.has_liked);
+  const isLiked = Boolean(currentArtifact.viewer_has_liked || currentArtifact.has_liked);
   updateArtifactState(artifactId, (item) => {
     const stats = getArtifactStats(item);
     const nextLikes = Math.max(0, stats.likes + (isLiked ? -1 : 1));
@@ -3138,14 +3138,14 @@ async function deleteArtifactComment(commentId) {
 }
 
 async function openCommentsModal(artifactId) {
-  const artifact = findArtifactInState(artifactId);
-  if (!artifact) {
+  const currentArtifact = findArtifactInState(artifactId);
+  if (!currentArtifact) {
     return;
   }
   commentState.artifactId = artifactId;
   commentState.replyTo = null;
   const comments = await loadArtifactComments(artifactId);
-  renderCommentsModal(artifact, comments);
+  renderCommentsModal(currentArtifact, comments);
 }
 
 function renderCommentsModal(artifact, comments) {
