@@ -5,6 +5,8 @@ export function createSandboxController({
   iframe: initialIframe,
   statusEl,
   maxFiniteMs = 4000,
+  iframeId = "sandbox",
+  containerId = "previewFrameContainer",
 } = {}) {
   let iframe = initialIframe;
   let mode = "idle"; // idle | finite | animation
@@ -74,7 +76,8 @@ export function createSandboxController({
   }
 
   function inject(code) {
-    if (!iframe) {
+    const activeFrame = getSandboxFrame();
+    if (!activeFrame) {
       stop("missing iframe");
       return;
     }
@@ -86,10 +89,14 @@ export function createSandboxController({
 
     logStatus(`▶ executing (${mode})`);
 
-    const doc = iframe.contentDocument;
-    doc.open();
-    doc.write(code);
-    doc.close();
+    const win = activeFrame.contentWindow;
+    if (!win) {
+      stop("sandbox iframe not ready");
+      throw new Error("Sandbox iframe not ready");
+    }
+    win.open();
+    win.document.write(code);
+    win.document.close();
 
     if (mode === "finite") {
       timeoutId = setTimeout(() => {
@@ -100,6 +107,34 @@ export function createSandboxController({
     if (mode === "animation") {
       requestFrameLoop();
     }
+  }
+
+  function getSandboxFrame() {
+    if (iframe && iframe.isConnected) {
+      return iframe;
+    }
+
+    let nextFrame = document.getElementById(iframeId);
+    if (!nextFrame) {
+      nextFrame = document.createElement("iframe");
+      nextFrame.id = iframeId;
+      nextFrame.className = "sandbox-frame";
+      nextFrame.setAttribute("sandbox", "allow-scripts");
+      nextFrame.src = "about:blank";
+      nextFrame.style.width = "100%";
+      nextFrame.style.height = "100%";
+
+      const container =
+        document.getElementById(containerId) ||
+        document.getElementById("consoleOutput");
+      if (!container) {
+        return null;
+      }
+      container.appendChild(nextFrame);
+    }
+
+    iframe = nextFrame;
+    return nextFrame;
   }
 
   return {
