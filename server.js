@@ -8,7 +8,6 @@ import {
   fetchCheapestAllowedModel,
   fetchModelPricing,
   fetchFirstNonPremiumModel,
-  fetchCreditsUsedToday,
   fetchMonthlyQuota,
   fetchPlanNormalizationFactor,
   fetchPlanPolicy,
@@ -29,6 +28,7 @@ import {
   findOrCreateUser,
   findUserByStripeCustomer,
   getUserById,
+  resetUserCreditsIfNeeded,
   updateUser
 } from './utils/userDb.js';
 import {
@@ -1178,7 +1178,8 @@ app.post('/api/chat', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
 
-    user = await getUserById(session.sub);
+    const resetState = await resetUserCreditsIfNeeded({ userId: session.sub });
+    user = resetState.user;
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
@@ -1202,7 +1203,7 @@ app.post('/api/chat', async (req, res) => {
     const inputTokensEstimate = estimateTokensFromChars(inputChars);
     const dailyLimit = resolveDailyCreditLimit(user);
     const creditsUsedToday = Number.isFinite(dailyLimit)
-      ? await fetchCreditsUsedTodayForUser(user.user_id)
+      ? Number(resetState.daily_used || 0)
       : 0;
 
     if (Number.isFinite(dailyLimit) && creditsUsedToday >= dailyLimit) {
@@ -2169,19 +2170,6 @@ function parseCSV(text) {
     });
     return entry;
   });
-}
-
-async function fetchCreditsUsedTodayForUser(userId) {
-  const pool = getUsageAnalyticsPool();
-  if (pool) {
-    return fetchCreditsUsedToday({ userId });
-  }
-
-  const usageRows = await loadUsageLogRows();
-  const todayKey = new Date().toISOString().slice(0, 10);
-  return usageRows
-    .filter((row) => row.user_id === userId && row.timestamp_utc?.startsWith(todayKey))
-    .reduce((sum, row) => sum + Number(row.credits_charged || row.credits_used || 0), 0);
 }
 
 async function loadUsageLogRows() {

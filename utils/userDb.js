@@ -34,6 +34,25 @@ function getUserDbPool() {
   return pool;
 }
 
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+function addMonthsUtc(date, months) {
+  const next = new Date(date.getTime());
+  next.setUTCMonth(next.getUTCMonth() + months);
+  return next;
+}
+
+function shouldResetDaily(lastResetAt, now) {
+  if (!lastResetAt) return true;
+  return now.getTime() - lastResetAt.getTime() >= DAY_IN_MS;
+}
+
+function shouldResetMonthly(lastResetAt, now) {
+  if (!lastResetAt) return true;
+  const nextResetAt = addMonthsUtc(lastResetAt, 1);
+  return now.getTime() >= nextResetAt.getTime();
+}
+
 function toIsoString(value) {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -90,6 +109,54 @@ function mapUserRow(row) {
     stripe_subscription_id: row.stripe_subscription_id || '',
     auth_provider: primaryProvider,
     auth_providers: providerNames.length ? providerNames : null
+  };
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+}
+
+function computeResetState({ row, now }) {
+  const nowValue = now instanceof Date ? now : new Date(now);
+  const lastDailyResetAt = parseDate(row.last_daily_reset_at);
+  const lastMonthlyResetAt = parseDate(row.last_monthly_reset_at);
+  const dailyReset = shouldResetDaily(lastDailyResetAt, nowValue);
+  const monthlyReset = shouldResetMonthly(lastMonthlyResetAt, nowValue);
+  return {
+    now: nowValue,
+    dailyReset,
+    monthlyReset,
+    lastDailyResetAt,
+    lastMonthlyResetAt
+  };
+}
+
+function buildCreditRowUpdate({
+  balance,
+  dailyUsed,
+  lastDailyResetAt,
+  lastMonthlyResetAt,
+  userId
+}) {
+  return {
+    text: `UPDATE credits
+      SET balance = $1,
+          daily_used = $2,
+          last_daily_reset_at = $3,
+          last_monthly_reset_at = $4
+      WHERE user_id = $5`,
+    params: [
+      Number(balance ?? 0),
+      Number(dailyUsed ?? 0),
+      lastDailyResetAt,
+      lastMonthlyResetAt,
+      userId
+    ]
   };
 }
 
@@ -202,6 +269,84 @@ export async function getUserById(userId, { pool } = {}) {
   const activePool = pool || getUserDbPool();
   const row = await fetchUserRowById(activePool, userId);
   return mapUserRow(row);
+}
+
+export async function resetUserCreditsIfNeeded({ userId, now = new Date(), pool } = {}) {
+  const activePool = pool || getUserDbPool();
+  const client = await activePool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const creditResult = await client.query(
+      `SELECT
+        c.balance,
+        c.monthly_quota,
+        c.daily_used,
+        c.last_daily_reset_at,
+        c.last_monthly_reset_at,
+        b.plan_tier
+       FROM credits c
+       JOIN billing b ON b.user_id = c.user_id
+       WHERE c.user_id = $1
+       FOR UPDATE OF c`,
+      [userId]
+    );
+    const row = creditResult.rows[0];
+    if (!row) {
+      throw new Error(`Credits row missing for user ${userId}`);
+    }
+
+    const resetState = computeResetState({ row, now });
+    const planTier = row.plan_tier || 'free';
+    const shouldResetMonthlyForPlan = planTier === 'free' && resetState.monthlyReset;
+    let nextBalance = Number(row.balance ?? 0);
+    let nextDailyUsed = Number(row.daily_used ?? 0);
+    let nextLastDailyResetAt = resetState.lastDailyResetAt;
+    let nextLastMonthlyResetAt = resetState.lastMonthlyResetAt;
+
+    if (resetState.dailyReset) {
+      nextDailyUsed = 0;
+      nextLastDailyResetAt = resetState.now;
+    }
+    if (shouldResetMonthlyForPlan) {
+      nextBalance = Number(row.monthly_quota ?? 0);
+      nextLastMonthlyResetAt = resetState.now;
+    }
+
+    if (resetState.dailyReset || shouldResetMonthlyForPlan) {
+      const update = buildCreditRowUpdate({
+        balance: nextBalance,
+        dailyUsed: nextDailyUsed,
+        lastDailyResetAt: nextLastDailyResetAt,
+        lastMonthlyResetAt: nextLastMonthlyResetAt,
+        userId
+      });
+      await client.query(update.text, update.params);
+
+      if (shouldResetMonthlyForPlan) {
+        const nextPeriodEnd = addMonthsUtc(resetState.now, 1);
+        await client.query(
+          `UPDATE billing
+           SET current_period_start = $1,
+               current_period_end = $2
+           WHERE user_id = $3`,
+          [resetState.now, nextPeriodEnd, userId]
+        );
+      }
+    }
+
+    const updatedRow = await fetchUserRowById(client, userId);
+    await client.query('COMMIT');
+    return {
+      user: mapUserRow(updatedRow),
+      daily_used: nextDailyUsed
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function findOrCreateUser({
@@ -449,6 +594,42 @@ export async function applyCreditDeduction({
   try {
     await client.query('BEGIN');
 
+    const creditsResult = await client.query(
+      `SELECT
+        c.balance,
+        c.monthly_quota,
+        c.daily_used,
+        c.last_daily_reset_at,
+        c.last_monthly_reset_at,
+        b.plan_tier
+       FROM credits c
+       JOIN billing b ON b.user_id = c.user_id
+       WHERE c.user_id = $1
+       FOR UPDATE OF c`,
+      [userId]
+    );
+    const creditsRow = creditsResult.rows[0];
+    if (!creditsRow) {
+      throw new Error(`Credits row missing for user ${userId}`);
+    }
+
+    const resetState = computeResetState({ row: creditsRow, now: new Date() });
+    const planTier = creditsRow.plan_tier || 'free';
+    const monthlyResetApplied = planTier === 'free' && resetState.monthlyReset;
+    let currentBalance = Number(creditsRow.balance ?? 0);
+    let dailyUsed = Number(creditsRow.daily_used ?? 0);
+    let lastDailyResetAt = resetState.lastDailyResetAt;
+    let lastMonthlyResetAt = resetState.lastMonthlyResetAt;
+
+    if (resetState.dailyReset) {
+      dailyUsed = 0;
+      lastDailyResetAt = resetState.now;
+    }
+    if (monthlyResetApplied) {
+      currentBalance = Number(creditsRow.monthly_quota ?? 0);
+      lastMonthlyResetAt = resetState.now;
+    }
+
     if (turnId) {
       const ledgerResult = await client.query(
         `SELECT balance_after
@@ -461,29 +642,33 @@ export async function applyCreditDeduction({
       if (existing) {
         const balanceAfter = Number(existing.balance_after);
         if (Number.isFinite(balanceAfter)) {
-          await client.query(
-            `UPDATE credits SET balance = $1 WHERE user_id = $2`,
-            [balanceAfter, userId]
-          );
+          const update = buildCreditRowUpdate({
+            balance: monthlyResetApplied ? currentBalance : balanceAfter,
+            dailyUsed,
+            lastDailyResetAt,
+            lastMonthlyResetAt,
+            userId
+          });
+          await client.query(update.text, update.params);
+          if (monthlyResetApplied) {
+            const nextPeriodEnd = addMonthsUtc(resetState.now, 1);
+            await client.query(
+              `UPDATE billing
+               SET current_period_start = $1,
+                   current_period_end = $2
+               WHERE user_id = $3`,
+              [resetState.now, nextPeriodEnd, userId]
+            );
+          }
           await client.query('COMMIT');
-          return { nextBalance: balanceAfter, alreadyCharged: true };
+          return {
+            nextBalance: monthlyResetApplied ? currentBalance : balanceAfter,
+            alreadyCharged: true
+          };
         }
       }
     }
 
-    const creditsResult = await client.query(
-      `SELECT balance, monthly_quota
-       FROM credits
-       WHERE user_id = $1
-       FOR UPDATE`,
-      [userId]
-    );
-    const creditsRow = creditsResult.rows[0];
-    if (!creditsRow) {
-      throw new Error(`Credits row missing for user ${userId}`);
-    }
-
-    const currentBalance = Number(creditsRow.balance ?? 0);
     const quota = Number.isFinite(creditsTotal)
       ? creditsTotal
       : Number(creditsRow.monthly_quota ?? 0);
@@ -493,11 +678,26 @@ export async function applyCreditDeduction({
     }
 
     const nextBalance = Math.max(0, Math.min(currentBalance - creditsToCharge, quota));
+    const nextDailyUsed = dailyUsed + creditsToCharge;
+    const update = buildCreditRowUpdate({
+      balance: nextBalance,
+      dailyUsed: nextDailyUsed,
+      lastDailyResetAt,
+      lastMonthlyResetAt,
+      userId
+    });
+    await client.query(update.text, update.params);
 
-    await client.query(
-      `UPDATE credits SET balance = $1 WHERE user_id = $2`,
-      [nextBalance, userId]
-    );
+    if (monthlyResetApplied) {
+      const nextPeriodEnd = addMonthsUtc(resetState.now, 1);
+      await client.query(
+        `UPDATE billing
+         SET current_period_start = $1,
+             current_period_end = $2
+         WHERE user_id = $3`,
+        [resetState.now, nextPeriodEnd, userId]
+      );
+    }
 
     await client.query(
       `INSERT INTO credit_ledger
