@@ -13,6 +13,12 @@ const LLM_PROXY_URL =
   || 'https://text-code.primarydesigncompany.workers.dev';
 const SESSION_COOKIE_NAME = 'maya_session';
 const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
+const PLAN_DAILY_CAPS = {
+  free: 100,
+  starter: 500,
+  pro: 2000,
+  power: 10000
+};
 const REQUIRED_USER_HEADERS = [
   'user_id',
   'email',
@@ -62,22 +68,15 @@ const PROFILE_UPLOADS_DIR = path.join(DATA_DIR, 'profile_uploads');
 const PROFILES_FILE = path.join(DATA_DIR, 'profiles.json');
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
 
-const CHAT_SYSTEM_PROMPT = `You are Maya, an AI assistant embedded in a real-time creative and technical workspace.
+const CHAT_SYSTEM_PROMPT = `You are a serious, capable engineering assistant.
+Be concise, direct, and practical.
+Avoid whimsical, playful, or anthropomorphic language.
+Demonstrate capability through action (code, structure), not tone.
 
 Default behavior:
 - Be proactive and demonstrate capability when possible.
 - If the user input is underspecified, choose a reasonable, concrete task and execute it.
 - Prefer generating working code, UI components, or functional examples over discussion.
-
-Tone constraints:
-- Use a grounded, professional, and direct tone.
-- Avoid whimsical, mystical, or anthropomorphic language.
-- Avoid filler phrases, metaphors, or performative enthusiasm.
-- Do not narrate your own process or intent.
-
-Creativity guidelines:
-- Be creative in *solutions*, structure, and execution.
-- Do not be creative in *tone* unless explicitly requested.
 
 Assume the user is evaluating capability unless stated otherwise.
 
@@ -935,6 +934,79 @@ app.delete('/api/artifacts/:id', async (req, res) => {
   }
 });
 
+app.get('/api/usage/overview', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    const usageRows = await loadUsageLogRows();
+    const userRows = usageRows.filter((row) => row.user_id === session.sub);
+    const monthRows = filterUsageRowsByMonth(userRows);
+    const overview = buildUsageOverview(monthRows);
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const creditsUsedToday = userRows
+      .filter((row) => row.timestamp_utc?.startsWith(todayKey))
+      .reduce((sum, row) => sum + Number(row.credits_charged || row.credits_used || 0), 0);
+    const dailyLimit = PLAN_DAILY_CAPS[user.plan_tier] ?? null;
+    return res.json({
+      ok: true,
+      overview,
+      credits_used_today: creditsUsedToday,
+      daily_limit: dailyLimit
+    });
+  } catch (error) {
+    console.error('Failed to load usage overview.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load usage overview' });
+  }
+});
+
+app.get('/api/usage/daily', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const usageRows = await loadUsageLogRows();
+    const filtered = filterUsageRowsByRange({
+      rows: usageRows,
+      userId: session.sub,
+      days
+    });
+    const daily = buildDailyUsageSummaries(filtered, { includeEntries: false });
+    return res.json({ ok: true, range_days: days, daily });
+  } catch (error) {
+    console.error('Failed to load usage daily.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load usage daily' });
+  }
+});
+
+app.get('/api/usage/history', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const days = parseRangeDays(req.query.range) ?? Number(req.query.days) || 14;
+    const usageRows = await loadUsageLogRows();
+    const filtered = filterUsageRowsByRange({
+      rows: usageRows,
+      userId: session.sub,
+      days
+    });
+    const daily = buildDailyUsageSummaries(filtered, { includeEntries: true });
+    return res.json({ ok: true, range_days: days, daily });
+  } catch (error) {
+    console.error('Failed to load usage history.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load usage history' });
+  }
+});
+
 app.get('/api/usage/summary', async (req, res) => {
   try {
     const session = await getSessionFromRequest(req);
@@ -1023,18 +1095,21 @@ app.get('/billing/portal', async (req, res) => {
  * CHAT (FULL IMPLEMENTATION — DO NOT STUB)
  */
 app.post('/api/chat', async (req, res) => {
+  const requestStartedAt = Date.now();
+  const requestId = crypto.randomUUID();
+  const intentType = req.body?.intentType || 'chat';
+  let user = null;
   try {
     const session = await getSessionFromRequest(req);
     if (!session) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
 
-    const user = await getUserById(session.sub);
+    user = await getUserById(session.sub);
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
-    const intentType = req.body?.intentType || 'chat';
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     const inputChars = messages
       .map((entry) => (entry?.content ? String(entry.content) : ''))
@@ -1045,8 +1120,28 @@ app.post('/api/chat', async (req, res) => {
       intentType
     });
     const creditsRemaining = Number(user.credits_remaining || 0);
+    const creditsTotal = Number(user.credits_total || 0);
+    const inputTokensEstimate = estimateTokensFromChars(inputChars);
 
     if (!Number.isFinite(creditsRemaining) || creditsRemaining <= 0) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_rejected',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
       return res.status(402).json({
         ok: false,
         error: 'Out of credits',
@@ -1055,6 +1150,24 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (estimatedCredits > creditsRemaining) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_rejected',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
       return res.status(402).json({
         ok: false,
         error: 'Insufficient credits for this request',
@@ -1073,6 +1186,24 @@ app.post('/api/chat', async (req, res) => {
 
     const responseText = await workerRes.text();
     if (!workerRes.ok) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_error',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
       res.status(workerRes.status);
       res.setHeader('Content-Type', 'application/json');
       res.send(responseText);
@@ -1087,6 +1218,24 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (!data) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_error',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
       res.status(502).json({ ok: false, error: 'Invalid LLM response' });
       return;
     }
@@ -1095,10 +1244,9 @@ app.post('/api/chat', async (req, res) => {
     const totalTokens = Number(usage?.total_tokens);
     const usageInputTokens = Number(usage?.prompt_tokens ?? usage?.input_tokens);
     const usageOutputTokens = Number(usage?.completion_tokens ?? usage?.output_tokens);
-    const estimatedInputTokens = estimateTokensFromChars(inputChars);
     const resolvedInputTokens = Number.isFinite(usageInputTokens)
       ? usageInputTokens
-      : estimatedInputTokens;
+      : inputTokensEstimate;
     const resolvedOutputTokens = Number.isFinite(usageOutputTokens)
       ? usageOutputTokens
       : Number.isFinite(totalTokens)
@@ -1116,7 +1264,7 @@ app.post('/api/chat', async (req, res) => {
       intentType,
       totalTokens
     });
-    const nextRemaining = Math.max(0, creditsRemaining - actualCredits);
+    const nextRemaining = clampCredits(creditsRemaining - actualCredits, creditsTotal);
 
     await updateUser(user.user_id, {
       credits_remaining: String(nextRemaining)
@@ -1124,7 +1272,7 @@ app.post('/api/chat', async (req, res) => {
 
     await appendUsageEntry({
       user,
-      requestId: crypto.randomUUID(),
+      requestId,
       sessionId: req.body?.sessionId || '',
       eventType: intentType === 'code' ? 'code_gen' : 'chat_turn',
       intentType,
@@ -1137,6 +1285,7 @@ app.post('/api/chat', async (req, res) => {
       reservedCredits: estimatedCredits,
       actualCredits,
       creditsCharged: actualCredits,
+      latencyMs: Date.now() - requestStartedAt,
       status: 'success'
     });
 
@@ -1154,6 +1303,40 @@ app.post('/api/chat', async (req, res) => {
     res.send(JSON.stringify(data));
   } catch (err) {
     console.error('Worker proxy error:', err);
+    if (user) {
+      const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+      const inputChars = messages
+        .map((entry) => (entry?.content ? String(entry.content) : ''))
+        .join('').length;
+      const inputTokens = estimateTokensFromChars(inputChars);
+      const estimatedCredits = calculateCreditsUsed({
+        inputChars,
+        outputChars: 0,
+        intentType
+      });
+      try {
+        await appendUsageEntry({
+          user,
+          requestId,
+          sessionId: req.body?.sessionId || '',
+          eventType: 'chat_error',
+          intentType,
+          model: req.body?.model || OPENAI_MODEL,
+          inputTokens,
+          outputTokens: 0,
+          inputChars,
+          outputChars: 0,
+          totalTokens: inputTokens,
+          reservedCredits: estimatedCredits,
+          actualCredits: 0,
+          creditsCharged: 0,
+          latencyMs: Date.now() - requestStartedAt,
+          status: 'failure'
+        });
+      } catch (logError) {
+        console.warn('Failed to log usage for error.', logError);
+      }
+    }
     res.status(500).json({ error: 'LLM proxy failed' });
   }
 });
@@ -1194,6 +1377,7 @@ app.post('/api/session/close', async (req, res) => {
       reservedCredits: creditsUsed,
       actualCredits: creditsUsed,
       creditsCharged: creditsUsed,
+      latencyMs: 0,
       status: 'success',
       timestamp: endedAt
     });
@@ -1611,8 +1795,9 @@ function parseCookie(cookieHeader, name) {
 }
 
 function mapUserForClient(user) {
-  const creditsRemaining = Number(user.credits_remaining ?? 0);
+  const creditsRemainingRaw = Number(user.credits_remaining ?? 0);
   const creditsTotal = Number(user.credits_total ?? 0);
+  const creditsRemaining = clampCredits(creditsRemainingRaw, creditsTotal);
   return {
     id: user.user_id,
     user_id: user.user_id,
@@ -1632,6 +1817,13 @@ function mapUserForClient(user) {
     creditsRemaining: creditsRemaining,
     creditsTotal: creditsTotal
   };
+}
+
+function clampCredits(remaining, total) {
+  if (Number.isFinite(total) && total > 0) {
+    return Math.max(0, Math.min(remaining, total));
+  }
+  return Math.max(0, remaining);
 }
 
 function estimateTokensFromChars(chars) {
@@ -2061,6 +2253,104 @@ function filterUsageRowsByRange({ rows, userId, days, startDate, endDate }) {
   });
 }
 
+function parseRangeDays(value) {
+  if (!value) return null;
+  const match = String(value).match(/(\d+)/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function filterUsageRowsByMonth(rows, reference = new Date()) {
+  const monthKey = `${reference.getFullYear()}-${String(reference.getMonth() + 1).padStart(2, '0')}`;
+  return rows.filter((row) => row.timestamp_utc?.startsWith(monthKey));
+}
+
+function normalizeUsageRow(row) {
+  return {
+    timestamp_utc: row.timestamp_utc,
+    session_id: row.session_id,
+    request_id: row.request_id,
+    intent_type: row.intent_type,
+    model: row.model,
+    input_tokens: Number(row.input_tokens || 0) || 0,
+    output_tokens: Number(row.output_tokens || 0) || 0,
+    credits_charged: Number(row.credits_charged || row.credits_used || 0) || 0,
+    latency_ms: Number(row.latency_ms || 0) || 0,
+    status: row.status || 'unknown'
+  };
+}
+
+function buildUsageOverview(rows) {
+  const totals = rows.reduce((acc, row) => {
+    acc.totalRequests += 1;
+    acc.totalCredits += Number(row.credits_charged || row.credits_used || 0) || 0;
+    acc.totalLatency += Number(row.latency_ms || 0) || 0;
+    acc.tokensIn += Number(row.input_tokens || 0) || 0;
+    acc.tokensOut += Number(row.output_tokens || 0) || 0;
+    if (row.status === 'success') {
+      acc.successCount += 1;
+    }
+    return acc;
+  }, {
+    totalRequests: 0,
+    totalCredits: 0,
+    totalLatency: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    successCount: 0
+  });
+  return {
+    total_requests: totals.totalRequests,
+    total_credits: totals.totalCredits,
+    avg_latency_ms: totals.totalRequests ? totals.totalLatency / totals.totalRequests : 0,
+    success_rate: totals.totalRequests ? totals.successCount / totals.totalRequests : 0,
+    tokens_in: totals.tokensIn,
+    tokens_out: totals.tokensOut
+  };
+}
+
+function buildDailyUsageSummaries(rows, { includeEntries = false } = {}) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const date = row.timestamp_utc?.slice(0, 10);
+    if (!date) {
+      return;
+    }
+    if (!map.has(date)) {
+      map.set(date, {
+        date,
+        total_requests: 0,
+        total_credits: 0,
+        avg_latency_ms: 0,
+        success_rate: 0,
+        by_intent: { code: 0, text: 0 },
+        entries: []
+      });
+    }
+    const daily = map.get(date);
+    const intent = row.intent_type || 'text';
+    daily.total_requests += 1;
+    daily.total_credits += Number(row.credits_charged || row.credits_used || 0) || 0;
+    daily.avg_latency_ms += Number(row.latency_ms || 0) || 0;
+    daily.by_intent[intent] = (daily.by_intent[intent] || 0) + 1;
+    if (row.status === 'success') {
+      daily.success_rate += 1;
+    }
+    if (includeEntries) {
+      daily.entries.push(normalizeUsageRow(row));
+    }
+  });
+
+  return Array.from(map.values())
+    .map((daily) => ({
+      ...daily,
+      avg_latency_ms: daily.total_requests ? daily.avg_latency_ms / daily.total_requests : 0,
+      success_rate: daily.total_requests ? daily.success_rate / daily.total_requests : 0
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function buildSessionSummariesFromUsage(rows) {
   const map = new Map();
   rows.forEach((row) => {
@@ -2189,6 +2479,7 @@ async function appendUsageEntry({
   reservedCredits,
   actualCredits,
   creditsCharged,
+  latencyMs,
   status,
   timestamp
 }) {
@@ -2219,7 +2510,7 @@ async function appendUsageEntry({
     refunded_credits: 0,
     credits_charged: creditsCharged,
     credits_used: creditsCharged,
-    latency_ms: '',
+    latency_ms: latencyMs ?? '',
     status
   };
 
