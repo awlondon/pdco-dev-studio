@@ -1186,13 +1186,33 @@ function clearChatState() {
 
 const SESSION_STATE_SCHEMA_VERSION = '1.2';
 const SESSION_STATE_STORAGE_KEY_PREFIX = 'maya_session_state:';
-const SESSION_STATE_DB_NAME = 'mayaSessionState';
+const SESSION_STATE_DB_NAME = 'maya_dev_ui';
+const SESSION_STATE_DB_VERSION = 3;
 const SESSION_STATE_STORE_NAME = 'sessions';
+const SESSION_MESSAGES_STORE_NAME = 'messages';
+const SESSION_CODE_STORE_NAME = 'code_versions';
+const SESSION_EDITOR_STORE_NAME = 'editor_state';
+const SESSION_ARTIFACTS_STORE_NAME = 'artifacts';
+const SESSION_KV_STORE_NAME = 'local_kv';
 const SESSION_STATE_PERSIST_DEBOUNCE_MS = 500;
 
 let sessionState = null;
 let sessionStatePersistTimer = null;
 let sessionStateDbPromise = null;
+
+function requestToPromise(request, fallback = null) {
+  return new Promise((resolve) => {
+    request.onsuccess = () => resolve(request.result ?? fallback);
+    request.onerror = () => resolve(fallback);
+  });
+}
+
+function getSessionIndexRange(sessionId, value) {
+  if (!window.IDBKeyRange) {
+    return null;
+  }
+  return window.IDBKeyRange.bound([sessionId, value], [sessionId, '\uffff']);
+}
 
 function getVersionStorageKey(id = sessionId) {
   return `maya_code_versions:${id || 'default'}`;
@@ -1237,11 +1257,37 @@ function openSessionStateDb() {
     return sessionStateDbPromise;
   }
   sessionStateDbPromise = new Promise((resolve) => {
-    const request = window.indexedDB.open(SESSION_STATE_DB_NAME, 1);
+    const request = window.indexedDB.open(SESSION_STATE_DB_NAME, SESSION_STATE_DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(SESSION_STATE_STORE_NAME)) {
-        db.createObjectStore(SESSION_STATE_STORE_NAME);
+        const sessions = db.createObjectStore(SESSION_STATE_STORE_NAME, { keyPath: 'session_id' });
+        sessions.createIndex('active', 'active');
+        sessions.createIndex('started_at', 'started_at');
+      }
+      if (!db.objectStoreNames.contains(SESSION_MESSAGES_STORE_NAME)) {
+        const messages = db.createObjectStore(SESSION_MESSAGES_STORE_NAME, { keyPath: 'id' });
+        messages.createIndex('session_id', 'session_id');
+        messages.createIndex('timestamp', 'timestamp');
+        messages.createIndex('session_time', ['session_id', 'timestamp']);
+      }
+      if (!db.objectStoreNames.contains(SESSION_CODE_STORE_NAME)) {
+        const code = db.createObjectStore(SESSION_CODE_STORE_NAME, { keyPath: 'id' });
+        code.createIndex('session_id', 'session_id');
+        code.createIndex('created_at', 'created_at');
+        code.createIndex('session_time', ['session_id', 'created_at']);
+      }
+      if (!db.objectStoreNames.contains(SESSION_EDITOR_STORE_NAME)) {
+        db.createObjectStore(SESSION_EDITOR_STORE_NAME, { keyPath: 'session_id' });
+      }
+      if (!db.objectStoreNames.contains(SESSION_ARTIFACTS_STORE_NAME)) {
+        const artifacts = db.createObjectStore(SESSION_ARTIFACTS_STORE_NAME, { keyPath: 'artifact_id' });
+        artifacts.createIndex('user_id', 'user_id');
+        artifacts.createIndex('visibility', 'visibility');
+        artifacts.createIndex('created_at', 'created_at');
+      }
+      if (!db.objectStoreNames.contains(SESSION_KV_STORE_NAME)) {
+        db.createObjectStore(SESSION_KV_STORE_NAME, { keyPath: 'key' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -1250,27 +1296,174 @@ function openSessionStateDb() {
   return sessionStateDbPromise;
 }
 
-async function loadSessionStateFromIndexedDb(key) {
+async function getSessionMessagesFromIndexedDb(db, id) {
+  const tx = db.transaction(SESSION_MESSAGES_STORE_NAME, 'readonly');
+  const store = tx.objectStore(SESSION_MESSAGES_STORE_NAME);
+  if (store.indexNames.contains('session_time')) {
+    const range = getSessionIndexRange(id, '');
+    if (range) {
+      return requestToPromise(store.index('session_time').getAll(range), []);
+    }
+  }
+  if (store.indexNames.contains('session_id')) {
+    const records = await requestToPromise(store.index('session_id').getAll(id), []);
+    return records.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  }
+  return [];
+}
+
+async function getSessionCodeVersionsFromIndexedDb(db, id) {
+  const tx = db.transaction(SESSION_CODE_STORE_NAME, 'readonly');
+  const store = tx.objectStore(SESSION_CODE_STORE_NAME);
+  if (store.indexNames.contains('session_time')) {
+    const range = getSessionIndexRange(id, '');
+    if (range) {
+      return requestToPromise(store.index('session_time').getAll(range), []);
+    }
+  }
+  if (store.indexNames.contains('session_id')) {
+    const records = await requestToPromise(store.index('session_id').getAll(id), []);
+    return records.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  }
+  return [];
+}
+
+async function loadLastOpenSessionId(db) {
+  const tx = db.transaction(SESSION_KV_STORE_NAME, 'readonly');
+  const store = tx.objectStore(SESSION_KV_STORE_NAME);
+  const record = await requestToPromise(store.get('last_open_session'), null);
+  return record?.value || null;
+}
+
+async function findActiveSessionId(db) {
+  const tx = db.transaction(SESSION_STATE_STORE_NAME, 'readonly');
+  const store = tx.objectStore(SESSION_STATE_STORE_NAME);
+  if (!store.indexNames.contains('active')) {
+    return null;
+  }
+  const activeSessions = await requestToPromise(store.index('active').getAll(true), []);
+  if (!activeSessions.length) {
+    return null;
+  }
+  activeSessions.sort((a, b) => new Date(b.started_at) - new Date(a.started_at));
+  return activeSessions[0]?.session_id || null;
+}
+
+async function loadSessionStateFromIndexedDb(id) {
   const db = await openSessionStateDb();
   if (!db) {
     return null;
   }
-  return new Promise((resolve) => {
-    const tx = db.transaction(SESSION_STATE_STORE_NAME, 'readonly');
-    const store = tx.objectStore(SESSION_STATE_STORE_NAME);
-    const request = store.get(key);
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => resolve(null);
-  });
+  const tx = db.transaction([
+    SESSION_STATE_STORE_NAME,
+    SESSION_EDITOR_STORE_NAME
+  ], 'readonly');
+  const sessionStore = tx.objectStore(SESSION_STATE_STORE_NAME);
+  const editorStore = tx.objectStore(SESSION_EDITOR_STORE_NAME);
+  const sessionRecord = await requestToPromise(sessionStore.get(id), null);
+  if (!sessionRecord) {
+    return null;
+  }
+  const [messages, codeVersions, editorState] = await Promise.all([
+    getSessionMessagesFromIndexedDb(db, id),
+    getSessionCodeVersionsFromIndexedDb(db, id),
+    requestToPromise(editorStore.get(id), null)
+  ]);
+  const activeVersionId = editorState?.active_version_id || '';
+  const activeIndex = activeVersionId
+    ? codeVersions.findIndex((entry) => entry.id === activeVersionId)
+    : -1;
+  const latestVersion = codeVersions.at(-1);
+  return {
+    session_id: sessionRecord.session_id,
+    started_at: sessionRecord.started_at,
+    current_editor: {
+      language: editorState?.language || latestVersion?.language || 'html',
+      content: latestVersion?.content ?? (codeEditor?.value ?? defaultInterfaceCode),
+      version_id: activeVersionId
+    },
+    messages,
+    code_versions: codeVersions,
+    active_version_index: activeIndex
+  };
 }
 
-async function saveSessionStateToIndexedDb(key, payload) {
+async function saveSessionSnapshotToIndexedDb(state) {
   const db = await openSessionStateDb();
   if (!db) {
     return;
   }
-  const tx = db.transaction(SESSION_STATE_STORE_NAME, 'readwrite');
-  tx.objectStore(SESSION_STATE_STORE_NAME).put(payload, key);
+  const sessionRecord = {
+    session_id: state.session_id,
+    user_id: getUserContext().id || null,
+    started_at: state.started_at || new Date().toISOString(),
+    ended_at: null,
+    model: DEFAULT_MODEL,
+    plan: currentUser?.plan || currentUser?.planTier || null,
+    turns: sessionStats.turns,
+    credits_used_estimate: sessionStats.creditsUsedEstimate,
+    token_input_estimate: sessionStats.tokensIn,
+    token_output_estimate: sessionStats.tokensOut,
+    active: true
+  };
+  const editorState = {
+    session_id: state.session_id,
+    active_version_id: state.current_editor?.version_id || '',
+    language: state.current_editor?.language || 'html'
+  };
+  const tx = db.transaction([
+    SESSION_STATE_STORE_NAME,
+    SESSION_EDITOR_STORE_NAME,
+    SESSION_KV_STORE_NAME
+  ], 'readwrite');
+  tx.objectStore(SESSION_STATE_STORE_NAME).put(sessionRecord);
+  tx.objectStore(SESSION_EDITOR_STORE_NAME).put(editorState);
+  tx.objectStore(SESSION_KV_STORE_NAME).put({
+    key: 'last_open_session',
+    value: state.session_id,
+    updated_at: new Date().toISOString()
+  });
+}
+
+async function appendMessageToIndexedDb(message) {
+  const db = await openSessionStateDb();
+  if (!db) {
+    return;
+  }
+  const tx = db.transaction(SESSION_MESSAGES_STORE_NAME, 'readwrite');
+  const store = tx.objectStore(SESSION_MESSAGES_STORE_NAME);
+  try {
+    store.add(message);
+  } catch {
+    // Ignore duplicate inserts to honor append-only constraints.
+  }
+}
+
+async function appendCodeVersionToIndexedDb(version) {
+  const db = await openSessionStateDb();
+  if (!db) {
+    return;
+  }
+  const tx = db.transaction(SESSION_CODE_STORE_NAME, 'readwrite');
+  const store = tx.objectStore(SESSION_CODE_STORE_NAME);
+  try {
+    store.add(version);
+  } catch {
+    // Ignore duplicate inserts to honor append-only constraints.
+  }
+}
+
+async function saveEditorStateToIndexedDb(state) {
+  const db = await openSessionStateDb();
+  if (!db) {
+    return;
+  }
+  const tx = db.transaction(SESSION_EDITOR_STORE_NAME, 'readwrite');
+  tx.objectStore(SESSION_EDITOR_STORE_NAME).put({
+    session_id: state.session_id,
+    active_version_id: state.current_editor?.version_id || '',
+    language: state.current_editor?.language || 'html'
+  });
 }
 
 function normalizeSessionState(raw) {
@@ -1310,7 +1503,7 @@ function persistSessionStateNow() {
   };
   const key = getSessionStateStorageKey();
   window.localStorage.setItem(key, JSON.stringify(payload));
-  saveSessionStateToIndexedDb(key, payload);
+  saveSessionSnapshotToIndexedDb(sessionState);
 }
 
 function scheduleSessionStatePersist() {
@@ -1341,12 +1534,28 @@ async function initializeSessionState() {
     sessionState = localState;
     return;
   }
-  const indexed = await loadSessionStateFromIndexedDb(getSessionStateStorageKey());
+  const indexed = await loadSessionStateFromIndexedDb(sessionId);
   const normalized = normalizeSessionState(indexed);
   if (normalized) {
     sessionState = normalized;
     persistSessionStateNow();
     return;
+  }
+  const db = await openSessionStateDb();
+  if (db) {
+    const lastOpenId = await loadLastOpenSessionId(db);
+    const activeId = lastOpenId || await findActiveSessionId(db);
+    if (activeId && activeId !== sessionId) {
+      const recovered = await loadSessionStateFromIndexedDb(activeId);
+      const recoveredNormalized = normalizeSessionState(recovered);
+      if (recoveredNormalized) {
+        sessionId = activeId;
+        window.sessionStorage?.setItem('mayaSessionId', sessionId);
+        sessionState = recoveredNormalized;
+        persistSessionStateNow();
+        return;
+      }
+    }
   }
   sessionState = createInitialSessionState();
   persistSessionStateNow();
@@ -1365,11 +1574,15 @@ function normalizeStoredVersion(entry) {
     return null;
   }
   if (typeof entry.content === 'string') {
-    return entry;
+    return {
+      session_id: entry.session_id || sessionId,
+      ...entry
+    };
   }
   if (typeof entry.code === 'string') {
     return {
       id: entry.id || generateVersionId(),
+      session_id: entry.session_id || sessionId,
       created_at: entry.createdAt || new Date().toISOString(),
       source: entry.source || 'user',
       message_id: entry.message_id || null,
@@ -1411,6 +1624,7 @@ function setActiveVersionByIndex(index) {
     content: version.content,
     version_id: version.id
   };
+  saveEditorStateToIndexedDb(sessionState);
   scheduleSessionStatePersist();
 }
 
@@ -1430,6 +1644,7 @@ function upsertMessageEvent({
     : undefined;
   const next = {
     id: messageId,
+    session_id: sessionId,
     role,
     timestamp: timestamp || new Date().toISOString(),
     content_text: contentText || '',
@@ -1441,6 +1656,7 @@ function upsertMessageEvent({
     Object.assign(existing, next);
   } else {
     sessionState.messages.push(next);
+    appendMessageToIndexedDb(next);
   }
   scheduleSessionStatePersist();
 }
@@ -1469,6 +1685,7 @@ function addCodeVersion({
   }
   const version = {
     id: generateVersionId(),
+    session_id: sessionId,
     created_at: new Date().toISOString(),
     source,
     message_id: messageId || undefined,
@@ -1482,6 +1699,7 @@ function addCodeVersion({
   if (sessionState) {
     sessionState.code_versions = codeVersionStack;
   }
+  appendCodeVersionToIndexedDb(version);
   setActiveVersionByIndex(codeVersionStack.length - 1);
   persistVersionStack();
   if (messageId) {
