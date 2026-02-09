@@ -1455,6 +1455,7 @@ function startNewSession() {
   resetExecutionPreparation();
   updateGenerationIndicator();
   updateSessionAnalyticsPanel();
+  activeArtifactId = null;
   chatInput?.focus();
 }
 
@@ -1927,27 +1928,40 @@ async function loadHtml2Canvas() {
 }
 
 async function captureArtifactScreenshot() {
-  const target = document.getElementById('right-pane') || workspace;
+  const target = document.querySelector('[data-artifact-screenshot="true"]') || consolePane;
   if (!target) {
     return '';
   }
-  const html2canvas = await loadHtml2Canvas();
-  const canvas = await html2canvas(target, {
-    backgroundColor: '#0f1115',
-    scale: 2,
-    useCORS: true
-  });
-  const maxWidth = 1600;
-  if (canvas.width <= maxWidth) {
-    return canvas.toDataURL('image/png');
+  const shouldResume = sandboxMode === 'animation' && sandboxAnimationState === 'running';
+  if (shouldResume) {
+    pauseSandbox();
   }
-  const ratio = maxWidth / canvas.width;
-  const scaledCanvas = document.createElement('canvas');
-  scaledCanvas.width = maxWidth;
-  scaledCanvas.height = Math.round(canvas.height * ratio);
-  const ctx = scaledCanvas.getContext('2d');
-  ctx?.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
-  return scaledCanvas.toDataURL('image/png');
+  try {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const html2canvas = await loadHtml2Canvas();
+    const canvas = await html2canvas(target, {
+      backgroundColor: '#0b0d12',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+    const maxWidth = 1600;
+    if (canvas.width <= maxWidth) {
+      return canvas.toDataURL('image/png');
+    }
+    const ratio = maxWidth / canvas.width;
+    const scaledCanvas = document.createElement('canvas');
+    scaledCanvas.width = maxWidth;
+    scaledCanvas.height = Math.round(canvas.height * ratio);
+    const ctx = scaledCanvas.getContext('2d');
+    ctx?.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+    return scaledCanvas.toDataURL('image/png');
+  } finally {
+    if (shouldResume) {
+      resumeSandbox();
+    }
+  }
 }
 
 function formatArtifactDate(dateValue) {
@@ -2079,14 +2093,17 @@ function renderGalleryCards(artifacts, { mode }) {
       || artifact.derived_from?.owner_handle
       || artifact.derived_from?.owner_user_id
       || 'unknown';
+    const derivedVersionLabel = artifact.derived_from?.version_label;
     const forkLabel = derived
-      ? `Forked from <a href="/gallery/public#artifact-${derived}" data-route>@${sourceHandle} / ${sourceTitle}</a>`
+      ? `Forked from ${derivedVersionLabel ? `${derivedVersionLabel} of ` : ''}<a href="/gallery/public#artifact-${derived}" data-route>@${sourceHandle} / ${sourceTitle}</a>`
       : '';
     const stats = getArtifactStats(artifact);
     const visibilityBadge = artifact.visibility === 'public' ? 'Public' : 'Private';
     const showEngagement = mode === 'public' || mode === 'profile';
     const isLiked = Boolean(artifact.viewer_has_liked || artifact.has_liked);
     const ownerHandle = getArtifactOwnerHandle(artifact);
+    const canBrowseVersions = mode === 'private'
+      || (artifact.visibility === 'public' && artifact.versioning?.enabled);
     return `
       <article class="artifact-card" id="artifact-${artifact.artifact_id}" data-artifact-id="${artifact.artifact_id}">
         <div class="artifact-thumb">
@@ -2115,6 +2132,7 @@ function renderGalleryCards(artifacts, { mode }) {
           ` : ''}
           <div class="artifact-actions">
             <button class="ghost-button small" data-action="open">Open</button>
+            ${canBrowseVersions ? '<button class="ghost-button small" data-action="versions">Versions</button>' : ''}
             ${mode === 'private' ? `
               <button class="ghost-button small" data-action="edit">Edit metadata</button>
               <button class="ghost-button small" data-action="toggle-visibility">
@@ -2142,6 +2160,7 @@ function applyArtifactToEditor(artifact) {
   lastLLMCode = artifact.code.content;
   userHasEditedCode = false;
   lastCodeSource = 'artifact';
+  activeArtifactId = artifact.artifact_id || null;
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
@@ -2413,14 +2432,14 @@ async function openOwnProfile() {
   }
 }
 
-async function inferArtifactMetadata({ transcript, code }) {
+async function inferArtifactMetadata({ chat, code }) {
   try {
     const res = await fetch(`${API_BASE}/api/artifacts/metadata`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        transcript,
+        chat,
         code
       })
     });
@@ -2430,13 +2449,13 @@ async function inferArtifactMetadata({ transcript, code }) {
     const data = await res.json();
     return {
       title: data?.title || 'Untitled artifact',
-      description: data?.description || 'Saved code artifact.'
+      description: data?.description || ''
     };
   } catch (error) {
     console.warn('Metadata inference failed.', error);
     return {
       title: 'Untitled artifact',
-      description: 'Saved code artifact.'
+      description: ''
     };
   }
 }
@@ -2453,6 +2472,135 @@ async function createArtifact(payload) {
   }
   const data = await res.json();
   return data?.artifact;
+}
+
+async function createArtifactVersion(artifactId, payload) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/versions`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    throw new Error('Artifact version save failed');
+  }
+  const data = await res.json();
+  return data?.artifact;
+}
+
+async function fetchArtifactVersions(artifactId) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/versions`, { credentials: 'include' });
+  if (!res.ok) {
+    throw new Error('Failed to load versions');
+  }
+  const data = await res.json();
+  return data?.versions || [];
+}
+
+async function fetchArtifactVersion(artifactId, versionId) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/versions/${versionId}`, { credentials: 'include' });
+  if (!res.ok) {
+    throw new Error('Failed to load version');
+  }
+  const data = await res.json();
+  return data?.version;
+}
+
+function renderMarkdownLite(text = '') {
+  const escaped = escapeHtml(text);
+  return escaped
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br />');
+}
+
+function renderArtifactChatHistory(messages = []) {
+  const filtered = messages.filter((entry) => entry?.role === 'user' || entry?.role === 'assistant');
+  if (!filtered.length) {
+    return '<div class="artifact-chat-empty">No chat history available.</div>';
+  }
+  return filtered.map((entry) => `
+    <div class="artifact-chat-message ${entry.role}">
+      <span class="artifact-chat-role">${entry.role}</span>
+      <div class="artifact-chat-content">${renderMarkdownLite(entry.content || '')}</div>
+    </div>
+  `).join('');
+}
+
+function openArtifactVersionsModal(artifactId) {
+  const artifact = findArtifactInState(artifactId);
+  if (!artifact) {
+    showToast('Artifact not found.');
+    return;
+  }
+  fetchArtifactVersions(artifactId).then((versions) => {
+    const versionRows = versions.map((version) => {
+      const label = version.label || `v${version.version_number || 1}`;
+      const chatHtml = version.chat?.included
+        ? `
+          <details class="artifact-chat-history">
+            <summary>Chat history</summary>
+            <div class="artifact-chat-body">${renderArtifactChatHistory(version.chat.messages || [])}</div>
+          </details>
+        `
+        : '';
+      return `
+        <div class="artifact-version-row" data-version-id="${version.version_id}">
+          <div class="artifact-version-meta">
+            <div class="artifact-version-title">${label}</div>
+            <div class="artifact-version-date">${formatArtifactDate(version.created_at)}</div>
+          </div>
+          <div class="artifact-version-actions">
+            <button class="ghost-button small" data-version-action="open">Open version</button>
+          </div>
+          ${chatHtml}
+        </div>
+      `;
+    }).join('');
+
+    const html = `
+      <h2>Artifact versions</h2>
+      <p>Browse saved sessions for this artifact.</p>
+      <div class="artifact-version-list">
+        ${versionRows || '<div class="artifact-version-empty">No versions saved yet.</div>'}
+      </div>
+      <div class="modal-actions">
+        <button id="artifactVersionsClose" class="secondary" type="button">Close</button>
+      </div>
+    `;
+    ModalManager.open(html, { dismissible: true });
+
+    document.getElementById('artifactVersionsClose')?.addEventListener('click', () => {
+      ModalManager.close();
+    });
+
+    document.querySelectorAll('.artifact-version-row [data-version-action="open"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const row = button.closest('.artifact-version-row');
+        const versionId = row?.dataset.versionId;
+        if (!versionId) {
+          return;
+        }
+        fetchArtifactVersion(artifactId, versionId).then((version) => {
+          if (!version) {
+            return;
+          }
+          applyArtifactToEditor({
+            ...artifact,
+            code: version.code
+          });
+          ModalManager.close();
+        }).catch((error) => {
+          console.error('Failed to load version.', error);
+          showToast('Unable to load version.');
+        });
+      });
+    });
+  }).catch((error) => {
+    console.error('Failed to load artifact versions.', error);
+    showToast('Unable to load versions.');
+  });
 }
 
 function openArtifactModal({ title, description, screenshotDataUrl, onConfirm, onCancel }) {
@@ -2521,17 +2669,23 @@ async function handleSaveCodeArtifact() {
     console.warn('Screenshot capture failed.', error);
   }
 
-  const transcript = getChatExportMessages().map((entry) => ({
+  const chat = getChatExportMessages().map((entry) => ({
     role: entry.role,
     content: entry.content
   }));
-  const metadata = await inferArtifactMetadata({
-    transcript,
-    code: {
-      language: 'html',
-      content
-    }
-  });
+  let metadata = { title: 'Untitled artifact', description: '' };
+  try {
+    startLoading('Inferring details…');
+    metadata = await inferArtifactMetadata({
+      chat,
+      code: {
+        language: 'html',
+        content
+      }
+    });
+  } finally {
+    stopLoading();
+  }
 
   openArtifactModal({
     title: metadata.title,
@@ -2539,17 +2693,22 @@ async function handleSaveCodeArtifact() {
     screenshotDataUrl,
     onConfirm: async ({ title, description, visibility }) => {
       try {
-        const artifact = await createArtifact({
+        const payload = {
           title,
           description,
           visibility,
           code: { language: 'html', content },
           screenshot_data_url: screenshotDataUrl,
+          chat,
           source_session: {
             session_id: sessionId,
             credits_used_estimate: sessionStats.creditsUsedEstimate || 0
           }
-        });
+        };
+        const artifact = activeArtifactId
+          ? await createArtifactVersion(activeArtifactId, payload)
+          : await createArtifact(payload);
+        activeArtifactId = artifact?.artifact_id || activeArtifactId;
         showToast('Artifact saved.', { variant: 'success', duration: 2500 });
         ModalManager.close();
         if (artifact?.visibility === 'public') {
@@ -2678,17 +2837,52 @@ async function handleArtifactVisibilityToggle(artifactId) {
     return;
   }
   const makePublic = artifact.visibility !== 'public';
+  const versioningEnabled = Boolean(artifact.versioning?.enabled);
+  const chatHistoryPublic = Boolean(artifact.versioning?.chat_history_public);
   const html = `
     <h2>${makePublic ? 'Publish' : 'Make private'}?</h2>
     <p>${makePublic ? 'Public artifacts cannot have their metadata edited later.' : 'Only you will be able to view this artifact.'}</p>
+    ${makePublic ? `
+      <label class="modal-field checkbox">
+        <input id="artifactVersioningToggle" type="checkbox" ${versioningEnabled ? 'checked' : ''} />
+        <span>Make version history public</span>
+      </label>
+      <label class="modal-field checkbox">
+        <input id="artifactChatHistoryToggle" type="checkbox" ${chatHistoryPublic ? 'checked' : ''} ${versioningEnabled ? '' : 'disabled'} />
+        <span>Include chat history in versions</span>
+      </label>
+      <p class="modal-helper">Version history shows how this code evolved over time. Chat history may include prompts and reasoning.</p>
+    ` : ''}
     <div class="modal-actions">
       <button id="artifactVisibilityConfirm" type="button">${makePublic ? 'Publish' : 'Make private'}</button>
       <button id="artifactVisibilityCancel" class="secondary" type="button">Cancel</button>
     </div>
   `;
   ModalManager.open(html, { dismissible: true, onClose: () => {} });
+  const versioningToggle = document.getElementById('artifactVersioningToggle');
+  const chatToggle = document.getElementById('artifactChatHistoryToggle');
+  versioningToggle?.addEventListener('change', () => {
+    if (!chatToggle) {
+      return;
+    }
+    chatToggle.disabled = !versioningToggle.checked;
+    if (!versioningToggle.checked) {
+      chatToggle.checked = false;
+    }
+  });
   document.getElementById('artifactVisibilityConfirm')?.addEventListener('click', async () => {
     try {
+      if (makePublic) {
+        await fetch(`${API_BASE}/api/artifacts/${artifactId}/publish_settings`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: Boolean(versioningToggle?.checked),
+            chat_history_public: Boolean(chatToggle?.checked)
+          })
+        });
+      }
       await fetch(`${API_BASE}/api/artifacts/${artifactId}/visibility`, {
         method: 'PATCH',
         credentials: 'include',
@@ -2717,13 +2911,15 @@ async function handleArtifactVisibilityToggle(artifactId) {
 
 async function handleArtifactDuplicate(artifactId) {
   try {
+    const artifact = findArtifactInState(artifactId);
     const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/fork`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        credits_used_estimate: sessionStats.creditsUsedEstimate || 0
+        credits_used_estimate: sessionStats.creditsUsedEstimate || 0,
+        version_id: artifact?.current_version_id || null
       })
     });
     if (!res.ok) {
@@ -2740,13 +2936,15 @@ async function handleArtifactDuplicate(artifactId) {
 
 async function handleArtifactImport(artifactId) {
   try {
+    const artifact = findArtifactInState(artifactId);
     const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/fork`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        credits_used_estimate: sessionStats.creditsUsedEstimate || 0
+        credits_used_estimate: sessionStats.creditsUsedEstimate || 0,
+        version_id: artifact?.current_version_id || null
       })
     });
     if (!res.ok) {
@@ -5095,6 +5293,7 @@ let sandboxAnimationState = 'idle';
 let lastRunCode = null;
 let lastRunSource = null;
 let lastCodeSource = null;
+let activeArtifactId = null;
 let chatFinalized = false;
 let currentTurnMessageId = null;
 let pendingAssistantProposal = null;
@@ -6306,7 +6505,7 @@ function simpleLineDiff(oldCode, newCode) {
     .join('\n');
 }
 
-function startLoading() {
+function startLoading(message = '') {
   if (!loadingIndicator) {
     return;
   }
@@ -6318,6 +6517,7 @@ function startLoading() {
     );
   }
   const timerEl = loadingIndicator.querySelector('.timer');
+  const labelEl = loadingIndicator.querySelector('.loading-label');
   if (!timerEl) {
     return;
   }
@@ -6328,6 +6528,9 @@ function startLoading() {
 
   loadingStartTime = performance.now();
   loadingIndicator.classList.remove('hidden');
+  if (labelEl) {
+    labelEl.textContent = message;
+  }
   timerEl.textContent = '0.0s';
 
   loadingInterval = setInterval(() => {
@@ -6342,6 +6545,10 @@ function stopLoading() {
   }
   isGenerating = false;
   loadingIndicator.classList.add('hidden');
+  const labelEl = loadingIndicator.querySelector('.loading-label');
+  if (labelEl) {
+    labelEl.textContent = '';
+  }
 
   if (loadingInterval) {
     clearInterval(loadingInterval);
@@ -7069,6 +7276,8 @@ if (galleryGrid) {
     const action = button.dataset.action;
     if (action === 'open') {
       handleArtifactOpen(artifactId);
+    } else if (action === 'versions') {
+      openArtifactVersionsModal(artifactId);
     } else if (action === 'edit') {
       handleArtifactEdit(artifactId);
     } else if (action === 'delete') {
@@ -7095,6 +7304,8 @@ if (publicGalleryGrid) {
     const action = button.dataset.action;
     if (action === 'open') {
       handleArtifactOpen(artifactId);
+    } else if (action === 'versions') {
+      openArtifactVersionsModal(artifactId);
     } else if (action === 'import') {
       handleArtifactImport(artifactId);
     } else if (action === 'like') {
@@ -7121,6 +7332,8 @@ if (profileArtifactsGrid) {
     const action = button.dataset.action;
     if (action === 'open') {
       handleArtifactOpen(artifactId);
+    } else if (action === 'versions') {
+      openArtifactVersionsModal(artifactId);
     } else if (action === 'import') {
       handleArtifactImport(artifactId);
     } else if (action === 'like') {
@@ -7147,6 +7360,8 @@ if (profileForksGrid) {
     const action = button.dataset.action;
     if (action === 'open') {
       handleArtifactOpen(artifactId);
+    } else if (action === 'versions') {
+      openArtifactVersionsModal(artifactId);
     } else if (action === 'import') {
       handleArtifactImport(artifactId);
     } else if (action === 'like') {

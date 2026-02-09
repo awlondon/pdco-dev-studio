@@ -56,6 +56,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const ARTIFACTS_FILE = path.join(DATA_DIR, 'artifacts.json');
+const ARTIFACT_VERSIONS_FILE = path.join(DATA_DIR, 'artifact_versions.json');
 const ARTIFACT_UPLOADS_DIR = path.join(DATA_DIR, 'artifact_uploads');
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
 
@@ -145,20 +146,37 @@ app.post('/api/artifacts/metadata', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
+    const chat = Array.isArray(req.body?.chat) ? req.body.chat : transcript;
     const code = req.body?.code || {};
     const prompt = [
       {
         role: 'system',
-        content: `Given this chat transcript and final code, infer:
-1. A concise, human-readable title (≤ 60 chars)
-2. A 1–2 sentence description explaining what the code does
+        content: `You are generating metadata for a saved code artifact.
 
-Return JSON only.`
+Given:
+1. A chat transcript that led to this code
+2. The final code output
+
+Return:
+- A concise, human-readable title (≤ 60 characters)
+- A clear 1–2 sentence description of what the code does
+
+Rules:
+- Do NOT mention “artifact”
+- Do NOT mention “chat”
+- Assume this will be shown publicly
+- Be specific, not generic
+
+Return JSON only:
+{
+  "title": "...",
+  "description": "..."
+}`
       },
       {
         role: 'user',
         content: JSON.stringify({
-          transcript,
+          chat,
           code
         })
       }
@@ -168,7 +186,7 @@ Return JSON only.`
       return res.json({
         ok: true,
         title: 'Untitled artifact',
-        description: 'Saved code artifact.'
+        description: ''
       });
     }
 
@@ -188,7 +206,7 @@ Return JSON only.`
       return res.json({
         ok: true,
         title: 'Untitled artifact',
-        description: 'Saved code artifact.'
+        description: ''
       });
     }
 
@@ -214,14 +232,14 @@ Return JSON only.`
     res.json({
       ok: true,
       title: parsed?.title || 'Untitled artifact',
-      description: parsed?.description || 'Saved code artifact.'
+      description: parsed?.description || ''
     });
   } catch (error) {
     console.error('Failed to infer artifact metadata.', error);
     res.json({
       ok: true,
       title: 'Untitled artifact',
-      description: 'Saved code artifact.'
+      description: ''
     });
   }
 });
@@ -245,7 +263,14 @@ app.post('/api/artifacts', async (req, res) => {
     const screenshotUrl = await persistArtifactScreenshot(req.body?.screenshot_data_url, artifactId);
     const derivedFrom = req.body?.derived_from || { artifact_id: null, owner_user_id: null };
     const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
+    const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
 
+    const version = buildArtifactVersion({
+      artifactId,
+      code,
+      chat,
+      sourceSession
+    });
     const artifact = {
       artifact_id: artifactId,
       owner_user_id: user.user_id,
@@ -261,11 +286,18 @@ app.post('/api/artifacts', async (req, res) => {
       screenshot_url: screenshotUrl,
       derived_from: {
         artifact_id: derivedFrom?.artifact_id || null,
-        owner_user_id: derivedFrom?.owner_user_id || null
+        owner_user_id: derivedFrom?.owner_user_id || null,
+        version_id: derivedFrom?.version_id || null,
+        version_label: derivedFrom?.version_label || null
       },
       source_session: {
         session_id: String(sourceSession?.session_id || ''),
         credits_used_estimate: Number(sourceSession?.credits_used_estimate || 0) || 0
+      },
+      current_version_id: version.version_id,
+      versioning: {
+        enabled: false,
+        chat_history_public: false
       },
       stats: {
         forks: 0,
@@ -277,8 +309,19 @@ app.post('/api/artifacts', async (req, res) => {
     artifacts.push(artifact);
     await saveArtifacts(artifacts);
 
+    const versions = await loadArtifactVersions();
+    versions.push(version);
+    await saveArtifactVersions(versions);
+
     await appendArtifactEvent({
       eventType: 'artifact_created',
+      userId: user.user_id,
+      artifactId,
+      sourceArtifactId: artifact.derived_from.artifact_id || '',
+      sessionId: artifact.source_session.session_id || ''
+    });
+    await appendArtifactEvent({
+      eventType: 'artifact_version_created',
       userId: user.user_id,
       artifactId,
       sourceArtifactId: artifact.derived_from.artifact_id || '',
@@ -302,6 +345,177 @@ app.post('/api/artifacts', async (req, res) => {
   }
 });
 
+app.post('/api/artifacts/:id/versions', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const artifacts = await loadArtifacts();
+    const index = artifacts.findIndex((item) => item.artifact_id === req.params.id);
+    if (index === -1) {
+      return res.status(404).json({ ok: false, error: 'Artifact not found' });
+    }
+    const artifact = applyArtifactDefaults(artifacts[index]);
+    if (artifact.owner_user_id !== session.sub) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+    const now = new Date().toISOString();
+    const code = req.body?.code || artifact.code;
+    const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
+    const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
+    const version = buildArtifactVersion({
+      artifactId: artifact.artifact_id,
+      code,
+      chat,
+      sourceSession,
+      label: req.body?.label
+    });
+    const screenshotUrl = await persistArtifactScreenshot(req.body?.screenshot_data_url, artifact.artifact_id);
+    artifact.current_version_id = version.version_id;
+    artifact.updated_at = now;
+    artifact.code = {
+      language: String(code?.language || artifact.code?.language || 'html'),
+      content: String(code?.content || artifact.code?.content || '')
+    };
+    if (screenshotUrl) {
+      artifact.screenshot_url = screenshotUrl;
+    }
+    if (artifact.visibility !== 'public') {
+      artifact.title = String(req.body?.title || artifact.title);
+      artifact.description = String(req.body?.description || artifact.description);
+    }
+    artifacts[index] = artifact;
+    await saveArtifacts(artifacts);
+
+    const versions = await loadArtifactVersions();
+    versions.push(version);
+    await saveArtifactVersions(versions);
+
+    await appendArtifactEvent({
+      eventType: 'artifact_version_created',
+      userId: artifact.owner_user_id,
+      artifactId: artifact.artifact_id,
+      sourceArtifactId: artifact.derived_from?.artifact_id || '',
+      sessionId: version.session_id || ''
+    });
+
+    return res.json({ ok: true, artifact });
+  } catch (error) {
+    console.error('Failed to create artifact version.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to create artifact version' });
+  }
+});
+
+app.get('/api/artifacts/:id/versions', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    const artifacts = await loadArtifacts();
+    const artifact = applyArtifactDefaults(artifacts.find((item) => item.artifact_id === req.params.id));
+    if (!artifact) {
+      return res.status(404).json({ ok: false, error: 'Artifact not found' });
+    }
+    const isOwner = session && artifact.owner_user_id === session.sub;
+    const canView = artifact.visibility === 'public'
+      ? Boolean(artifact.versioning?.enabled) || isOwner
+      : isOwner;
+    if (!canView) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+    const versions = await loadArtifactVersions();
+    const filtered = versions
+      .filter((version) => version.artifact_id === artifact.artifact_id)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const allowChat = isOwner || artifact.versioning?.chat_history_public;
+    const formatted = filtered.map((version, index) => ({
+      ...version,
+      version_number: index + 1,
+      label: version.label || `v${index + 1}`,
+      chat: allowChat ? version.chat : { included: false, messages: null }
+    })).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return res.json({ ok: true, versions: formatted });
+  } catch (error) {
+    console.error('Failed to load artifact versions.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load artifact versions' });
+  }
+});
+
+app.get('/api/artifacts/:id/versions/:versionId', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    const artifacts = await loadArtifacts();
+    const artifact = applyArtifactDefaults(artifacts.find((item) => item.artifact_id === req.params.id));
+    if (!artifact) {
+      return res.status(404).json({ ok: false, error: 'Artifact not found' });
+    }
+    const isOwner = session && artifact.owner_user_id === session.sub;
+    const canView = artifact.visibility === 'public'
+      ? Boolean(artifact.versioning?.enabled) || isOwner
+      : isOwner;
+    if (!canView) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+    const versions = await loadArtifactVersions();
+    const filtered = versions
+      .filter((version) => version.artifact_id === artifact.artifact_id)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const version = filtered.find((entry) => entry.version_id === req.params.versionId);
+    if (!version) {
+      return res.status(404).json({ ok: false, error: 'Version not found' });
+    }
+    const versionNumber = filtered.findIndex((entry) => entry.version_id === version.version_id) + 1;
+    const allowChat = isOwner || artifact.versioning?.chat_history_public;
+    const responseVersion = {
+      ...version,
+      version_number: versionNumber,
+      label: version.label || `v${versionNumber}`,
+      chat: allowChat ? version.chat : { included: false, messages: null }
+    };
+    await appendArtifactEvent({
+      eventType: 'artifact_version_viewed',
+      userId: isOwner ? artifact.owner_user_id : '',
+      artifactId: artifact.artifact_id,
+      sourceArtifactId: artifact.derived_from?.artifact_id || '',
+      sessionId: version.session_id || ''
+    });
+    return res.json({ ok: true, version: responseVersion });
+  } catch (error) {
+    console.error('Failed to load artifact version.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load artifact version' });
+  }
+});
+
+app.patch('/api/artifacts/:id/publish_settings', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const artifacts = await loadArtifacts();
+    const index = artifacts.findIndex((item) => item.artifact_id === req.params.id);
+    if (index === -1) {
+      return res.status(404).json({ ok: false, error: 'Artifact not found' });
+    }
+    const artifact = applyArtifactDefaults(artifacts[index]);
+    if (artifact.owner_user_id !== session.sub) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+    const enabled = Boolean(req.body?.enabled);
+    const chatHistoryPublic = Boolean(req.body?.chat_history_public);
+    artifact.versioning = {
+      enabled,
+      chat_history_public: enabled ? chatHistoryPublic : false
+    };
+    artifact.updated_at = new Date().toISOString();
+    artifacts[index] = artifact;
+    await saveArtifacts(artifacts);
+    return res.json({ ok: true, artifact });
+  } catch (error) {
+    console.error('Failed to update publish settings.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to update publish settings' });
+  }
+});
+
 app.get('/api/artifacts/private', async (req, res) => {
   try {
     const session = await getSessionFromRequest(req);
@@ -309,7 +523,9 @@ app.get('/api/artifacts/private', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const artifacts = await loadArtifacts();
-    const owned = artifacts.filter((artifact) => artifact.owner_user_id === session.sub);
+    const owned = artifacts
+      .filter((artifact) => artifact.owner_user_id === session.sub)
+      .map((artifact) => applyArtifactDefaults(artifact));
     owned.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
     return res.json({ ok: true, artifacts: owned });
   } catch (error) {
@@ -321,7 +537,9 @@ app.get('/api/artifacts/private', async (req, res) => {
 app.get('/api/artifacts/public', async (req, res) => {
   try {
     const artifacts = await loadArtifacts();
-    const publicArtifacts = artifacts.filter((artifact) => artifact.visibility === 'public');
+    const publicArtifacts = artifacts
+      .filter((artifact) => artifact.visibility === 'public')
+      .map((artifact) => applyArtifactDefaults(artifact));
     publicArtifacts.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
     return res.json({ ok: true, artifacts: publicArtifacts });
   } catch (error) {
@@ -334,7 +552,7 @@ app.get('/api/artifacts/:id', async (req, res) => {
   try {
     const session = await getSessionFromRequest(req);
     const artifacts = await loadArtifacts();
-    const artifact = artifacts.find((item) => item.artifact_id === req.params.id);
+    const artifact = applyArtifactDefaults(artifacts.find((item) => item.artifact_id === req.params.id));
     if (!artifact) {
       return res.status(404).json({ ok: false, error: 'Artifact not found' });
     }
@@ -359,7 +577,7 @@ app.post('/api/artifacts/:id/fork', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
     const artifacts = await loadArtifacts();
-    const source = artifacts.find((item) => item.artifact_id === req.params.id);
+    const source = applyArtifactDefaults(artifacts.find((item) => item.artifact_id === req.params.id));
     if (!source) {
       return res.status(404).json({ ok: false, error: 'Artifact not found' });
     }
@@ -368,6 +586,26 @@ app.post('/api/artifacts/:id/fork', async (req, res) => {
     }
     const now = new Date().toISOString();
     const newId = crypto.randomUUID();
+    const allVersions = await loadArtifactVersions();
+    const sourceVersions = allVersions
+      .filter((version) => version.artifact_id === source.artifact_id)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const requestedVersionId = req.body?.version_id;
+    const resolvedVersion = sourceVersions.find((version) => version.version_id === requestedVersionId)
+      || sourceVersions.find((version) => version.version_id === source.current_version_id)
+      || sourceVersions[sourceVersions.length - 1];
+    const versionNumber = resolvedVersion
+      ? sourceVersions.findIndex((version) => version.version_id === resolvedVersion.version_id) + 1
+      : null;
+    const forkVersion = buildArtifactVersion({
+      artifactId: newId,
+      code: resolvedVersion?.code || source.code,
+      chat: null,
+      sourceSession: {
+        session_id: String(req.body?.session_id || ''),
+        credits_used_estimate: Number(req.body?.credits_used_estimate || 0) || 0
+      }
+    });
     const forked = {
       artifact_id: newId,
       owner_user_id: user.user_id,
@@ -376,15 +614,22 @@ app.post('/api/artifacts/:id/fork', async (req, res) => {
       updated_at: now,
       title: `Fork of ${source.title || 'artifact'}`,
       description: source.description || '',
-      code: { ...source.code },
+      code: { ...(resolvedVersion?.code || source.code) },
       screenshot_url: source.screenshot_url,
       derived_from: {
         artifact_id: source.artifact_id,
-        owner_user_id: source.owner_user_id
+        owner_user_id: source.owner_user_id,
+        version_id: resolvedVersion?.version_id || source.current_version_id || null,
+        version_label: versionNumber ? `v${versionNumber}` : null
       },
       source_session: {
         session_id: String(req.body?.session_id || ''),
         credits_used_estimate: Number(req.body?.credits_used_estimate || 0) || 0
+      },
+      current_version_id: forkVersion.version_id,
+      versioning: {
+        enabled: false,
+        chat_history_public: false
       },
       stats: {
         forks: 0,
@@ -397,9 +642,26 @@ app.post('/api/artifacts/:id/fork', async (req, res) => {
     source.updated_at = now;
     artifacts.push(forked);
     await saveArtifacts(artifacts);
+    const versions = await loadArtifactVersions();
+    versions.push(forkVersion);
+    await saveArtifactVersions(versions);
 
     await appendArtifactEvent({
       eventType: 'artifact_forked',
+      userId: source.owner_user_id,
+      artifactId: source.artifact_id,
+      sourceArtifactId: source.artifact_id,
+      sessionId: forked.source_session.session_id || ''
+    });
+    await appendArtifactEvent({
+      eventType: 'artifact_version_created',
+      userId: user.user_id,
+      artifactId: forked.artifact_id,
+      sourceArtifactId: source.artifact_id,
+      sessionId: forked.source_session.session_id || ''
+    });
+    await appendArtifactEvent({
+      eventType: 'artifact_version_forked',
       userId: source.owner_user_id,
       artifactId: source.artifact_id,
       sourceArtifactId: source.artifact_id,
@@ -428,10 +690,11 @@ app.patch('/api/artifacts/:id/visibility', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const artifacts = await loadArtifacts();
-    const artifact = artifacts.find((item) => item.artifact_id === req.params.id);
-    if (!artifact) {
+    const index = artifacts.findIndex((item) => item.artifact_id === req.params.id);
+    if (index === -1) {
       return res.status(404).json({ ok: false, error: 'Artifact not found' });
     }
+    const artifact = applyArtifactDefaults(artifacts[index]);
     if (artifact.owner_user_id !== session.sub) {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
@@ -439,6 +702,7 @@ app.patch('/api/artifacts/:id/visibility', async (req, res) => {
     const wasPublic = artifact.visibility === 'public';
     artifact.visibility = nextVisibility;
     artifact.updated_at = new Date().toISOString();
+    artifacts[index] = artifact;
     await saveArtifacts(artifacts);
 
     if (!wasPublic && nextVisibility === 'public') {
@@ -465,10 +729,11 @@ app.patch('/api/artifacts/:id', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     const artifacts = await loadArtifacts();
-    const artifact = artifacts.find((item) => item.artifact_id === req.params.id);
-    if (!artifact) {
+    const index = artifacts.findIndex((item) => item.artifact_id === req.params.id);
+    if (index === -1) {
       return res.status(404).json({ ok: false, error: 'Artifact not found' });
     }
+    const artifact = applyArtifactDefaults(artifacts[index]);
     if (artifact.owner_user_id !== session.sub) {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
@@ -478,6 +743,7 @@ app.patch('/api/artifacts/:id', async (req, res) => {
     artifact.title = String(req.body?.title || artifact.title);
     artifact.description = String(req.body?.description || artifact.description);
     artifact.updated_at = new Date().toISOString();
+    artifacts[index] = artifact;
     await saveArtifacts(artifacts);
     return res.json({ ok: true, artifact });
   } catch (error) {
@@ -1307,6 +1573,66 @@ async function loadArtifacts() {
 async function saveArtifacts(rows) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.writeFile(ARTIFACTS_FILE, JSON.stringify(rows, null, 2));
+}
+
+async function loadArtifactVersions() {
+  try {
+    const text = await fs.readFile(ARTIFACT_VERSIONS_FILE, 'utf8');
+    const data = JSON.parse(text);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveArtifactVersions(rows) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(ARTIFACT_VERSIONS_FILE, JSON.stringify(rows, null, 2));
+}
+
+function applyArtifactDefaults(artifact) {
+  if (!artifact) {
+    return artifact;
+  }
+  const versioning = artifact.versioning || {
+    enabled: false,
+    chat_history_public: false
+  };
+  return {
+    ...artifact,
+    current_version_id: artifact.current_version_id || null,
+    versioning,
+    derived_from: {
+      artifact_id: artifact?.derived_from?.artifact_id || null,
+      owner_user_id: artifact?.derived_from?.owner_user_id || null,
+      version_id: artifact?.derived_from?.version_id || null,
+      version_label: artifact?.derived_from?.version_label || null
+    }
+  };
+}
+
+function buildArtifactVersion({ artifactId, code, chat, sourceSession, label }) {
+  const versionId = crypto.randomUUID();
+  const messages = Array.isArray(chat) && chat.length ? chat : null;
+  return {
+    version_id: versionId,
+    artifact_id: artifactId,
+    session_id: String(sourceSession?.session_id || ''),
+    created_at: new Date().toISOString(),
+    label: label || null,
+    code: {
+      language: String(code?.language || 'html'),
+      content: String(code?.content || '')
+    },
+    chat: {
+      included: Boolean(messages),
+      messages
+    },
+    stats: {
+      turns: Array.isArray(messages) ? messages.length : 0,
+      credits_used_estimate: Number(sourceSession?.credits_used_estimate || 0) || 0
+    }
+  };
 }
 
 async function persistArtifactScreenshot(dataUrl, artifactId) {
