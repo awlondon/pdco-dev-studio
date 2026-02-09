@@ -47,6 +47,10 @@ If you host the UI on a static site, keep the API key on the server (for example
 - **Code editor**: Write or modify JavaScript snippets.
 - **Console output**: Run code with `eval()` and inspect results or errors.
 
+## Documentation
+
+- [Glyph schema v1](docs/glyph-schema.md)
+
 ## Next steps
 
 Consider swapping in a richer editor (CodeMirror/Monaco), capturing `console.error`/`console.warn`, or adding a server-side sandbox for safer code execution.
