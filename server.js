@@ -177,25 +177,14 @@ app.post('/api/artifacts/metadata', async (req, res) => {
   try {
     const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : transcript;
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : chat;
     const code = req.body?.code || {};
+    const filteredMessages = selectMetadataMessages(messages);
     const prompt = [
       {
         role: 'system',
-        content: `You are generating public-facing metadata for a code artifact.
-
-Constraints:
-- Tone must be neutral, technical, and professional.
-- Do not use conversational language.
-- Do not use filler phrases.
-- Do not mention the process, assistant, or chat.
-- Do not sound friendly or promotional.
-- Avoid these phrases: “Here’s”, “Let’s”, “You can”, “This helps”, “In this example”, “We”.
-- Do not mention “artifact” or “chat”.
-
-Output requirements:
-- Title: concise, specific, ≤ 60 characters.
-- Description: 1–2 sentences, factual, concrete.
-- Assume this will be shown publicly.
+        content: `Generate a concise title (max 60 chars) and a 1–2 sentence description
+for a saved code artifact. Be factual, not promotional.
 
 Return JSON only:
 {
@@ -206,7 +195,7 @@ Return JSON only:
       {
         role: 'user',
         content: JSON.stringify({
-          chat,
+          messages: filteredMessages,
           code
         })
       }
@@ -283,10 +272,11 @@ app.post('/api/artifacts', async (req, res) => {
     }
 
     const screenshotDataUrl = resolveScreenshotDataUrl(req.body);
+    const resolvedCode = resolveArtifactCode(req.body) || { language: 'html', content: '' };
     const validation = validateArtifactPayload({
       title: req.body?.title,
       description: req.body?.description,
-      code: req.body?.code,
+      code: resolvedCode,
       screenshotDataUrl
     });
     if (!validation.ok) {
@@ -300,17 +290,19 @@ app.post('/api/artifacts', async (req, res) => {
     const now = new Date().toISOString();
     const artifactId = crypto.randomUUID();
     const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
-    const code = req.body?.code || { language: 'html', content: '' };
+    const code = resolvedCode;
     const screenshotUrl = await persistArtifactScreenshot(screenshotDataUrl, artifactId);
     const derivedFrom = req.body?.derived_from || { artifact_id: null, owner_user_id: null };
-    const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
+    const sourceSession = req.body?.source_session || { session_id: req.body?.session_id || '', credits_used_estimate: 0 };
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
+    const codeVersions = Array.isArray(req.body?.code_versions) ? req.body.code_versions : null;
 
     const version = buildArtifactVersion({
       artifactId,
       code,
       chat,
-      sourceSession
+      sourceSession,
+      codeVersions
     });
     const artifact = {
       artifact_id: artifactId,
@@ -380,6 +372,8 @@ app.post('/api/artifacts', async (req, res) => {
     }
 
     return res.json({
+      ok: true,
+      artifact: applyArtifactDefaults(artifact),
       artifact_id: artifact.artifact_id,
       screenshot_url: artifact.screenshot_url || ''
     });
@@ -404,10 +398,11 @@ app.post('/api/artifacts/:id/versions', async (req, res) => {
     if (artifact.owner_user_id !== session.sub) {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
+    const resolvedCode = resolveArtifactCode(req.body) || artifact.code;
     const validation = validateArtifactPayload({
       title: req.body?.title ?? artifact.title,
       description: req.body?.description ?? artifact.description,
-      code: req.body?.code || artifact.code,
+      code: resolvedCode || artifact.code,
       screenshotDataUrl: req.body?.screenshot_data_url
     });
     if (!validation.ok) {
@@ -419,15 +414,17 @@ app.post('/api/artifacts/:id/versions', async (req, res) => {
       return res.status(400).json({ ok: false, error: validation.errors.join(' ') });
     }
     const now = new Date().toISOString();
-    const code = req.body?.code || artifact.code;
+    const code = resolvedCode || artifact.code;
     const chat = Array.isArray(req.body?.chat) ? req.body.chat : null;
     const sourceSession = req.body?.source_session || { session_id: '', credits_used_estimate: 0 };
+    const codeVersions = Array.isArray(req.body?.code_versions) ? req.body.code_versions : null;
     const version = buildArtifactVersion({
       artifactId: artifact.artifact_id,
       code,
       chat,
       sourceSession,
-      label: req.body?.label
+      label: req.body?.label,
+      codeVersions
     });
     const screenshotUrl = await persistArtifactScreenshot(req.body?.screenshot_data_url, artifact.artifact_id);
     artifact.current_version_id = version.version_id;
@@ -2126,9 +2123,10 @@ function applyArtifactDefaults(artifact) {
   };
 }
 
-function buildArtifactVersion({ artifactId, code, chat, sourceSession, label }) {
+function buildArtifactVersion({ artifactId, code, chat, sourceSession, label, codeVersions }) {
   const versionId = crypto.randomUUID();
   const messages = Array.isArray(chat) && chat.length ? chat : null;
+  const versions = Array.isArray(codeVersions) && codeVersions.length ? codeVersions : null;
   return {
     version_id: versionId,
     artifact_id: artifactId,
@@ -2139,6 +2137,7 @@ function buildArtifactVersion({ artifactId, code, chat, sourceSession, label }) 
       language: String(code?.language || 'html'),
       content: String(code?.content || '')
     },
+    code_versions: versions,
     chat: {
       included: Boolean(messages),
       messages
@@ -2190,9 +2189,11 @@ function validateArtifactPayload({ title, description, code, screenshotDataUrl }
   if (!code || !String(code.language || '').trim()) {
     errors.push('Code language is required.');
   }
-  if (!screenshotDataUrl || typeof screenshotDataUrl !== 'string') {
-    errors.push('Screenshot is required.');
-  } else if (!screenshotDataUrl.startsWith('data:image/png;base64,')) {
+  if (screenshotDataUrl && typeof screenshotDataUrl === 'string') {
+    if (!screenshotDataUrl.startsWith('data:image/png;base64,')) {
+      errors.push('Screenshot must be a PNG data URL.');
+    }
+  } else if (screenshotDataUrl) {
     errors.push('Screenshot must be a PNG data URL.');
   }
   return { ok: errors.length === 0, errors };
@@ -2210,6 +2211,65 @@ function resolveScreenshotDataUrl(body) {
     return '';
   }
   return `data:image/png;base64,${screenshot.base64}`;
+}
+
+function resolveArtifactCode(body) {
+  if (body?.code && typeof body.code === 'object') {
+    return {
+      language: String(body.code.language || 'html'),
+      content: String(body.code.content || '')
+    };
+  }
+  const artifact = body?.artifact;
+  if (artifact && typeof artifact === 'object') {
+    return {
+      language: String(artifact.language || 'html'),
+      content: String(artifact.content || '')
+    };
+  }
+  return null;
+}
+
+function selectMetadataMessages(messages = []) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+  const normalized = messages
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => ({
+      role: entry.role,
+      content: String(entry.content || '')
+    }))
+    .filter((entry) => (entry.role === 'user' || entry.role === 'assistant') && entry.content.trim());
+  if (!normalized.length) {
+    return [];
+  }
+  const userIndices = [];
+  for (let i = normalized.length - 1; i >= 0; i -= 1) {
+    if (normalized[i].role === 'user') {
+      userIndices.push(i);
+    }
+    if (userIndices.length >= 5) {
+      break;
+    }
+  }
+  let assistantIndex = -1;
+  for (let i = normalized.length - 1; i >= 0; i -= 1) {
+    if (normalized[i].role === 'assistant') {
+      assistantIndex = i;
+      break;
+    }
+  }
+  const indices = new Set(userIndices);
+  if (assistantIndex >= 0) {
+    indices.add(assistantIndex);
+  }
+  if (!indices.size) {
+    return normalized.slice(-5);
+  }
+  return Array.from(indices)
+    .sort((a, b) => a - b)
+    .map((index) => normalized[index]);
 }
 
 async function persistArtifactScreenshot(dataUrl, artifactId) {

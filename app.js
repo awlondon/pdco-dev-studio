@@ -3132,14 +3132,15 @@ async function openOwnProfile() {
   }
 }
 
-async function inferArtifactMetadata({ chat, code }) {
+async function inferArtifactMetadata({ messages, code }) {
   try {
     const res = await fetch(`${API_BASE}/api/artifacts/metadata`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat,
+        session_id: sessionId,
+        messages,
         code
       })
     });
@@ -3148,16 +3149,29 @@ async function inferArtifactMetadata({ chat, code }) {
     }
     const data = await res.json();
     return {
+      ok: true,
       title: data?.title || 'Untitled artifact',
       description: data?.description || 'Description unavailable.'
     };
   } catch (error) {
     console.warn('Metadata inference failed.', error);
     return {
+      ok: false,
       title: 'Untitled artifact',
       description: 'Description unavailable.'
     };
   }
+}
+
+async function loadArtifactCodeVersions() {
+  const db = await openSessionStateDb();
+  if (db) {
+    const versions = await getSessionCodeVersionsFromIndexedDb(db, sessionId);
+    if (versions.length) {
+      return versions;
+    }
+  }
+  return Array.isArray(sessionState?.code_versions) ? sessionState.code_versions : [];
 }
 
 async function createArtifact(payload) {
@@ -3172,7 +3186,11 @@ async function createArtifact(payload) {
     throw new Error(data?.error || 'Artifact save failed');
   }
   const data = await res.json();
-  return data?.artifact;
+  return data?.artifact || {
+    artifact_id: data?.artifact_id,
+    screenshot_url: data?.screenshot_url || '',
+    visibility: payload?.visibility || 'private'
+  };
 }
 
 async function createArtifactVersion(artifactId, payload) {
@@ -3379,7 +3397,7 @@ async function handleSaveCodeArtifact() {
   try {
     startLoading('Inferring details…');
     metadata = await inferArtifactMetadata({
-      chat,
+      messages: chat,
       code: {
         language: 'html',
         content
@@ -3388,6 +3406,16 @@ async function handleSaveCodeArtifact() {
   } finally {
     stopLoading();
   }
+  if (!metadata.ok) {
+    showToast('Metadata inference failed. Please try again.');
+    saveArtifactInProgress = false;
+    updateSaveCodeButtonState();
+    unlockChat();
+    unlockEditor();
+    return;
+  }
+
+  const codeVersions = await loadArtifactCodeVersions();
 
   openArtifactModal({
     title: metadata.title,
@@ -3403,17 +3431,20 @@ async function handleSaveCodeArtifact() {
           showToast('Description is required.');
           return;
         }
-        if (!screenshotDataUrl) {
-          showToast('Screenshot capture failed. Please try again.');
-          return;
-        }
         const payload = {
+          session_id: sessionId,
           title,
           description,
           visibility,
           code: { language: 'html', content },
+          artifact: {
+            code_version_id: sessionState?.current_editor?.version_id || '',
+            language: 'html',
+            content
+          },
           screenshot_data_url: screenshotDataUrl,
           chat,
+          code_versions: codeVersions,
           source_session: {
             session_id: sessionId,
             credits_used_estimate: sessionStats.creditsUsedEstimate || 0
