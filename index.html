@@ -50,6 +50,9 @@
             <button class="menu-item" id="accountLink">
               Account
             </button>
+            <button class="menu-item" id="profileEditLink">
+              Edit profile
+            </button>
 
             <button class="menu-item" id="galleryLink">
               My Gallery
@@ -112,7 +115,10 @@
           <h2>Account</h2>
           <p class="account-subtitle">Operational details about your identity, plan, and usage.</p>
         </div>
-        <button id="accountBack" class="ghost-button" type="button">Back to workspace</button>
+        <div class="account-header-actions">
+          <button id="accountProfileEdit" class="ghost-button subtle" type="button">Edit profile</button>
+          <button id="accountBack" class="ghost-button" type="button">Back to workspace</button>
+        </div>
       </div>
 
       <section class="account-section">
@@ -244,13 +250,14 @@
             </div>
             <div class="account-field">
               <span class="account-label">Public profile</span>
-              <span class="account-value">Coming soon.</span>
+              <span class="account-value">Share your artifacts with a public handle.</span>
             </div>
           </div>
         </div>
         <div class="account-action-row">
           <button id="accountViewGallery" class="ghost-button" type="button">View Gallery</button>
           <button id="accountViewPublicGallery" class="ghost-button subtle" type="button">View Public Gallery</button>
+          <button id="accountViewProfile" class="ghost-button subtle" type="button">View public profile</button>
         </div>
       </section>
 
@@ -487,11 +494,147 @@
       </div>
       <div class="gallery-filters">
         <span class="gallery-muted">Public artifacts</span>
+        <div class="gallery-sort" role="group" aria-label="Sort public gallery">
+          <button class="ghost-button small is-active" type="button" data-sort="likes">Most liked</button>
+          <button class="ghost-button small" type="button" data-sort="comments">Most commented</button>
+          <button class="ghost-button small" type="button" data-sort="new">Newest</button>
+          <button class="ghost-button small" type="button" data-sort="updated">Recently updated</button>
+        </div>
       </div>
       <div id="publicGalleryGrid" class="gallery-grid"></div>
       <div id="publicGalleryEmpty" class="gallery-empty hidden">
         No public artifacts yet.
       </div>
+    </main>
+
+    <main id="public-profile-page" class="profile-page hidden" aria-label="Public profile">
+      <div class="profile-header">
+        <div class="profile-identity">
+          <div class="profile-avatar">
+            <img id="profileAvatar" alt="Profile avatar" />
+          </div>
+          <div class="profile-meta">
+            <h2 id="profileDisplayName">—</h2>
+            <div id="profileHandle" class="profile-handle">@handle</div>
+            <p id="profileBio" class="profile-bio">—</p>
+            <div id="profileLocation" class="profile-location hidden"></div>
+          </div>
+        </div>
+        <div class="profile-actions">
+          <button id="profileBackButton" class="ghost-button" type="button">Back</button>
+        </div>
+      </div>
+      <div class="profile-stats">
+        <div>
+          <span id="profileStatArtifacts" class="profile-stat-value">0</span>
+          <span class="profile-stat-label">Artifacts</span>
+        </div>
+        <div>
+          <span id="profileStatLikes" class="profile-stat-value">0</span>
+          <span class="profile-stat-label">Likes</span>
+        </div>
+        <div>
+          <span id="profileStatComments" class="profile-stat-value">0</span>
+          <span class="profile-stat-label">Comments</span>
+        </div>
+        <div>
+          <span id="profileStatForks" class="profile-stat-value">0</span>
+          <span class="profile-stat-label">Forks</span>
+        </div>
+      </div>
+      <div class="profile-tabs" role="tablist">
+        <button class="ghost-button small is-active" type="button" data-profile-tab="artifacts">Public artifacts</button>
+        <button class="ghost-button small" type="button" data-profile-tab="forks">Forks</button>
+        <button class="ghost-button small" type="button" data-profile-tab="about">About</button>
+      </div>
+      <section id="profileTabArtifacts" class="profile-tab-panel">
+        <div id="profileArtifactsGrid" class="gallery-grid"></div>
+        <div id="profileArtifactsEmpty" class="gallery-empty hidden">No public artifacts yet.</div>
+      </section>
+      <section id="profileTabForks" class="profile-tab-panel hidden">
+        <div id="profileForksGrid" class="gallery-grid"></div>
+        <div id="profileForksEmpty" class="gallery-empty hidden">No forks shared yet.</div>
+      </section>
+      <section id="profileTabAbout" class="profile-tab-panel hidden">
+        <div class="profile-about">
+          <div>
+            <span class="profile-about-label">Bio</span>
+            <p id="profileAboutBio" class="profile-about-value">—</p>
+          </div>
+          <div>
+            <span class="profile-about-label">Demographics</span>
+            <p id="profileAboutDemographics" class="profile-about-value">—</p>
+          </div>
+          <div>
+            <span class="profile-about-label">Member since</span>
+            <p id="profileAboutCreated" class="profile-about-value">—</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main id="profile-edit-page" class="profile-page hidden" aria-label="Edit profile">
+      <div class="profile-header">
+        <div>
+          <h2>Edit profile</h2>
+          <p class="profile-subtitle">Manage your public identity, handle, and optional demographics.</p>
+        </div>
+        <div class="profile-actions">
+          <button id="profileEditBackButton" class="ghost-button" type="button">Back</button>
+        </div>
+      </div>
+      <form id="profileEditForm" class="profile-edit-form">
+        <div class="profile-edit-grid">
+          <div class="profile-avatar-editor">
+            <div class="profile-avatar large">
+              <img id="profileEditAvatarPreview" alt="Profile avatar preview" />
+            </div>
+            <label class="ghost-button small">
+              Upload avatar
+              <input id="profileAvatarInput" type="file" accept="image/*" hidden />
+            </label>
+            <p class="profile-helper">Square images look best. Optional.</p>
+          </div>
+          <div class="profile-edit-fields">
+            <label class="modal-field">
+              <span>Handle</span>
+              <input id="profileHandleInput" type="text" placeholder="your_handle" />
+              <span id="profileHandleStatus" class="profile-helper"></span>
+            </label>
+            <label class="modal-field">
+              <span>Display name</span>
+              <input id="profileDisplayNameInput" type="text" placeholder="Name shown on your profile" />
+            </label>
+            <label class="modal-field">
+              <span>Bio</span>
+              <textarea id="profileBioInput" rows="3" maxlength="280" placeholder="What are you building?"></textarea>
+              <span id="profileBioCount" class="profile-helper">0 / 280</span>
+            </label>
+            <div class="profile-demographics">
+              <label class="modal-field">
+                <span>Age</span>
+                <input id="profileAgeInput" type="number" min="0" placeholder="Optional" />
+              </label>
+              <label class="modal-field">
+                <span>Gender</span>
+                <input id="profileGenderInput" type="text" placeholder="Optional" />
+              </label>
+              <label class="modal-field">
+                <span>City</span>
+                <input id="profileCityInput" type="text" placeholder="Optional" />
+              </label>
+              <label class="modal-field">
+                <span>Country</span>
+                <input id="profileCountryInput" type="text" placeholder="Optional" />
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="profile-edit-actions">
+          <button id="profileSaveButton" type="submit">Save profile</button>
+          <button id="profileCancelButton" class="ghost-button subtle" type="button">Cancel</button>
+        </div>
+      </form>
     </main>
 
     <div id="pricing-modal" class="pricing-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pricing-title">

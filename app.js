@@ -1,4 +1,5 @@
 import { createSandboxController } from './sandboxController.js';
+import { formatNumber } from './utils/formatNumber.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -158,6 +159,7 @@ const galleryLink = document.getElementById('galleryLink');
 const publicGalleryButton = document.getElementById('publicGalleryButton');
 const accountPage = document.getElementById('account-page');
 const accountBackButton = document.getElementById('accountBack');
+const accountProfileEditButton = document.getElementById('accountProfileEdit');
 const accountEmailEl = document.getElementById('accountEmail');
 const accountAuthMethodsEl = document.getElementById('accountAuthMethods');
 const accountCreatedDateEl = document.getElementById('accountCreatedDate');
@@ -182,6 +184,7 @@ const accountArtifactsPrivateEl = document.getElementById('accountArtifactsPriva
 const accountArtifactsPublicEl = document.getElementById('accountArtifactsPublic');
 const accountViewGalleryButton = document.getElementById('accountViewGallery');
 const accountViewPublicGalleryButton = document.getElementById('accountViewPublicGallery');
+const accountViewProfileButton = document.getElementById('accountViewProfile');
 const accountSessionHistoryBody = document.getElementById('accountSessionHistoryBody');
 const accountSessionHistoryEmpty = document.getElementById('accountSessionHistoryEmpty');
 const accountHistoryRangeLabel = document.getElementById('accountHistoryRange');
@@ -193,6 +196,45 @@ const accountDownloadLatestButton = document.getElementById('accountDownloadLate
 const accountSignOutButton = document.getElementById('accountSignOut');
 const accountDeleteButton = document.getElementById('accountDelete');
 const upgradePlanButton = document.getElementById('upgradePlan');
+const profileEditLink = document.getElementById('profileEditLink');
+const publicProfilePage = document.getElementById('public-profile-page');
+const profileEditPage = document.getElementById('profile-edit-page');
+const profileBackButton = document.getElementById('profileBackButton');
+const profileEditBackButton = document.getElementById('profileEditBackButton');
+const profileAvatar = document.getElementById('profileAvatar');
+const profileDisplayName = document.getElementById('profileDisplayName');
+const profileHandle = document.getElementById('profileHandle');
+const profileBio = document.getElementById('profileBio');
+const profileLocation = document.getElementById('profileLocation');
+const profileStatArtifacts = document.getElementById('profileStatArtifacts');
+const profileStatLikes = document.getElementById('profileStatLikes');
+const profileStatComments = document.getElementById('profileStatComments');
+const profileStatForks = document.getElementById('profileStatForks');
+const profileTabs = document.querySelectorAll('[data-profile-tab]');
+const profileTabArtifacts = document.getElementById('profileTabArtifacts');
+const profileTabForks = document.getElementById('profileTabForks');
+const profileTabAbout = document.getElementById('profileTabAbout');
+const profileArtifactsGrid = document.getElementById('profileArtifactsGrid');
+const profileForksGrid = document.getElementById('profileForksGrid');
+const profileArtifactsEmpty = document.getElementById('profileArtifactsEmpty');
+const profileForksEmpty = document.getElementById('profileForksEmpty');
+const profileAboutBio = document.getElementById('profileAboutBio');
+const profileAboutDemographics = document.getElementById('profileAboutDemographics');
+const profileAboutCreated = document.getElementById('profileAboutCreated');
+const profileEditForm = document.getElementById('profileEditForm');
+const profileAvatarInput = document.getElementById('profileAvatarInput');
+const profileEditAvatarPreview = document.getElementById('profileEditAvatarPreview');
+const profileHandleInput = document.getElementById('profileHandleInput');
+const profileHandleStatus = document.getElementById('profileHandleStatus');
+const profileDisplayNameInput = document.getElementById('profileDisplayNameInput');
+const profileBioInput = document.getElementById('profileBioInput');
+const profileBioCount = document.getElementById('profileBioCount');
+const profileAgeInput = document.getElementById('profileAgeInput');
+const profileGenderInput = document.getElementById('profileGenderInput');
+const profileCityInput = document.getElementById('profileCityInput');
+const profileCountryInput = document.getElementById('profileCountryInput');
+const profileSaveButton = document.getElementById('profileSaveButton');
+const profileCancelButton = document.getElementById('profileCancelButton');
 const pricingModal = document.getElementById('pricing-modal');
 const pricingModalBody = document.getElementById('pricing-modal-body');
 const pricingCloseButton = document.getElementById('pricing-close');
@@ -213,6 +255,7 @@ const galleryEmpty = document.getElementById('galleryEmpty');
 const publicGalleryEmpty = document.getElementById('publicGalleryEmpty');
 const galleryBackButton = document.getElementById('galleryBackButton');
 const publicGalleryBackButton = document.getElementById('publicGalleryBackButton');
+const publicGallerySortButtons = document.querySelectorAll('#public-gallery-page [data-sort]');
 const usageScopeLabel = document.getElementById('usage-scope-label');
 const usageFilters = document.getElementById('usage-filters');
 const usageUserFilter = document.getElementById('usage-user-filter');
@@ -1574,21 +1617,40 @@ function isPublicGalleryRoute() {
   return window.location.pathname === '/gallery/public';
 }
 
+function isProfileEditRoute() {
+  return window.location.pathname === '/account/profile';
+}
+
+function isPublicProfileRoute() {
+  return /^\/u\/[^/]+$/.test(window.location.pathname);
+}
+
 function updateRouteView() {
   const showAccount = isAccountRoute();
   const showGallery = isGalleryRoute();
   const showPublicGallery = isPublicGalleryRoute();
+  const showProfileEdit = isProfileEditRoute();
+  const showPublicProfile = isPublicProfileRoute();
   if (accountPage) {
     accountPage.classList.toggle('hidden', !showAccount);
   }
   if (workspace) {
-    workspace.classList.toggle('hidden', showAccount || showGallery || showPublicGallery);
+    workspace.classList.toggle(
+      'hidden',
+      showAccount || showGallery || showPublicGallery || showProfileEdit || showPublicProfile
+    );
   }
   if (galleryPage) {
     galleryPage.classList.toggle('hidden', !showGallery);
   }
   if (publicGalleryPage) {
     publicGalleryPage.classList.toggle('hidden', !showPublicGallery);
+  }
+  if (profileEditPage) {
+    profileEditPage.classList.toggle('hidden', !showProfileEdit);
+  }
+  if (publicProfilePage) {
+    publicProfilePage.classList.toggle('hidden', !showPublicProfile);
   }
   if (showAccount) {
     updateAccountOverview();
@@ -1609,6 +1671,17 @@ function updateRouteView() {
   if (showPublicGallery) {
     loadPublicGallery().catch((error) => {
       console.warn('Failed to load public gallery.', error);
+    });
+  }
+  if (showProfileEdit) {
+    loadProfileEditor().catch((error) => {
+      console.warn('Failed to load profile editor.', error);
+    });
+  }
+  if (showPublicProfile) {
+    const handle = window.location.pathname.replace('/u/', '');
+    loadPublicProfile(handle).catch((error) => {
+      console.warn('Failed to load public profile.', error);
     });
   }
 }
@@ -1892,6 +1965,98 @@ function formatArtifactDate(dateValue) {
   });
 }
 
+function getArtifactOwnerHandle(artifact) {
+  if (!artifact) {
+    return 'unknown';
+  }
+  return (
+    artifact.owner_handle
+    || artifact.owner?.handle
+    || artifact.owner_user_id
+    || 'unknown'
+  );
+}
+
+function getArtifactOwnerDisplay(artifact) {
+  const handle = getArtifactOwnerHandle(artifact);
+  return handle.startsWith('@') ? handle : `@${handle}`;
+}
+
+function getArtifactStats(artifact) {
+  const stats = artifact?.stats || {};
+  return {
+    likes: Number.isFinite(stats.likes) ? stats.likes : 0,
+    comments: Number.isFinite(stats.comments) ? stats.comments : 0,
+    forks: Number.isFinite(stats.forks) ? stats.forks : 0
+  };
+}
+
+function normalizeHandle(value) {
+  return value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+
+function isValidHandle(handle) {
+  return /^[a-z0-9_]{3,}$/.test(handle);
+}
+
+const RESERVED_HANDLES = new Set(['admin', 'system', 'maya', 'support', 'staff']);
+
+function isReservedHandle(handle) {
+  return RESERVED_HANDLES.has(handle);
+}
+
+function formatLocation(city, country) {
+  if (city && country) {
+    return `${city}, ${country}`;
+  }
+  return city || country || '';
+}
+
+function formatDisplayAge(age) {
+  if (!Number.isFinite(age) || age < 18) {
+    return null;
+  }
+  return `Age ${age}`;
+}
+
+function formatDemographics(profile) {
+  if (!profile) {
+    return 'Not shared';
+  }
+  const ageValue = formatDisplayAge(profile?.demographics?.age);
+  const genderValue = profile?.demographics?.gender?.trim() || null;
+  const locationValue = formatLocation(
+    profile?.demographics?.city?.trim() || '',
+    profile?.demographics?.country?.trim() || ''
+  );
+  const parts = [ageValue, genderValue, locationValue].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'Not shared';
+}
+
+function getInitials(name, handle) {
+  const source = (name || handle || '').trim();
+  if (!source) {
+    return '??';
+  }
+  const words = source.replace('@', '').split(/\s+/);
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+function buildAvatarPlaceholder(initials) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+      <rect width="100%" height="100%" fill="#202534" />
+      <text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" font-size="42" fill="#fff" font-family="Inter, Arial, sans-serif">
+        ${initials}
+      </text>
+    </svg>
+  `;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 async function fetchArtifacts(path) {
   const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
   if (!res.ok) {
@@ -1909,26 +2074,45 @@ function renderGalleryCards(artifacts, { mode }) {
   return artifacts.map((artifact) => {
     const derived = artifact.derived_from?.artifact_id;
     const source = derived ? publicArtifactMap.get(derived) : null;
+    const sourceTitle = source?.title || artifact.derived_from?.title || 'Artifact';
+    const sourceHandle = source?.owner_handle
+      || artifact.derived_from?.owner_handle
+      || artifact.derived_from?.owner_user_id
+      || 'unknown';
     const forkLabel = derived
-      ? `Forked from ${source?.title || 'Artifact'} by ${source?.owner_user_id || artifact.derived_from?.owner_user_id || 'Unknown'}`
+      ? `Forked from <a href="/gallery/public#artifact-${derived}" data-route>@${sourceHandle} / ${sourceTitle}</a>`
       : '';
-    const stats = artifact.stats || { forks: 0 };
+    const stats = getArtifactStats(artifact);
     const visibilityBadge = artifact.visibility === 'public' ? 'Public' : 'Private';
+    const showEngagement = mode === 'public' || mode === 'profile';
+    const isLiked = Boolean(artifact.viewer_has_liked || artifact.has_liked);
+    const ownerHandle = getArtifactOwnerHandle(artifact);
     return `
-      <article class="artifact-card" data-artifact-id="${artifact.artifact_id}">
+      <article class="artifact-card" id="artifact-${artifact.artifact_id}" data-artifact-id="${artifact.artifact_id}">
         <div class="artifact-thumb">
           ${artifact.screenshot_url ? `<img src="${artifact.screenshot_url}" alt="${artifact.title || 'Artifact'} screenshot" />` : '<div class="artifact-placeholder">No screenshot</div>'}
-          <span class="artifact-visibility">${visibilityBadge}</span>
+          ${mode === 'private' ? `<span class="artifact-visibility">${visibilityBadge}</span>` : ''}
         </div>
         <div class="artifact-body">
           <h3>${artifact.title || 'Untitled artifact'}</h3>
+          ${mode !== 'private' ? `<div class="artifact-author"><a href="/u/${ownerHandle}" data-route>${getArtifactOwnerDisplay(artifact)}</a></div>` : ''}
           <p>${artifact.description || 'No description provided.'}</p>
           ${forkLabel ? `<div class="artifact-fork-label">${forkLabel}</div>` : ''}
           <div class="artifact-meta">
             <span>${artifact.code?.language || 'code'}</span>
             <span>${formatArtifactDate(artifact.created_at)}</span>
-            ${mode === 'public' ? `<span>${stats.forks || 0} forks</span>` : ''}
+            ${mode !== 'private' ? `<span>${formatNumber(stats.forks)} forks</span>` : ''}
           </div>
+          ${showEngagement ? `
+            <div class="artifact-engagement">
+              <button type="button" data-action="like" class="${isLiked ? 'is-liked' : ''}">
+                ♥ ${formatNumber(stats.likes)}
+              </button>
+              <button type="button" data-action="comments">
+                💬 ${formatNumber(stats.comments)}
+              </button>
+            </div>
+          ` : ''}
           <div class="artifact-actions">
             <button class="ghost-button small" data-action="open">Open</button>
             ${mode === 'private' ? `
@@ -1976,8 +2160,22 @@ async function loadPrivateGallery() {
   galleryEmpty?.classList.toggle('hidden', hasItems);
 }
 
+function getPublicGalleryPath(sort) {
+  const params = new URLSearchParams();
+  if (sort) {
+    params.set('sort', sort);
+  }
+  const query = params.toString();
+  return `/api/artifacts/public${query ? `?${query}` : ''}`;
+}
+
 async function loadPublicGallery() {
-  const artifacts = await fetchArtifacts('/api/artifacts/public');
+  if (publicGallerySortButtons.length) {
+    publicGallerySortButtons.forEach((button) => {
+      button.classList.toggle('is-active', button.dataset.sort === galleryState.publicSort);
+    });
+  }
+  const artifacts = await fetchArtifacts(getPublicGalleryPath(galleryState.publicSort));
   galleryState.publicArtifacts = artifacts;
   if (publicGalleryGrid) {
     publicGalleryGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'public' });
@@ -1995,6 +2193,223 @@ async function loadAccountArtifactSummary() {
   }
   if (accountArtifactsPublicEl) {
     accountArtifactsPublicEl.textContent = String(publicCount);
+  }
+}
+
+async function fetchPublicProfile(handle) {
+  const res = await fetch(`${API_BASE}/api/profile/${handle}`, { credentials: 'include' });
+  if (!res.ok) {
+    throw new Error('Profile fetch failed');
+  }
+  const data = await res.json();
+  return data?.profile || data;
+}
+
+async function fetchCurrentProfile() {
+  const res = await fetch(`${API_BASE}/api/profile`, { credentials: 'include' });
+  if (res.ok) {
+    const data = await res.json();
+    return data?.profile || data;
+  }
+  if (res.status === 404) {
+    return null;
+  }
+  throw new Error('Profile fetch failed');
+}
+
+async function fetchPublicArtifactsByHandle(handle) {
+  const params = new URLSearchParams();
+  if (galleryState.publicSort) {
+    params.set('sort', galleryState.publicSort);
+  }
+  if (handle) {
+    params.set('handle', handle);
+  }
+  const path = `/api/artifacts/public${params.toString() ? `?${params}` : ''}`;
+  try {
+    const artifacts = await fetchArtifacts(path);
+    if (artifacts.length) {
+      return artifacts;
+    }
+  } catch (error) {
+    console.warn('Failed to load filtered public artifacts.', error);
+  }
+  const all = await fetchArtifacts(getPublicGalleryPath(galleryState.publicSort));
+  return all.filter((artifact) => getArtifactOwnerHandle(artifact) === handle);
+}
+
+function setProfileTab(tab) {
+  profileState.activeTab = tab;
+  profileTabs.forEach((button) => {
+    button.classList.toggle('is-active', button.dataset.profileTab === tab);
+  });
+  profileTabArtifacts?.classList.toggle('hidden', tab !== 'artifacts');
+  profileTabForks?.classList.toggle('hidden', tab !== 'forks');
+  profileTabAbout?.classList.toggle('hidden', tab !== 'about');
+}
+
+function renderProfileArtifacts(artifacts) {
+  if (!profileArtifactsGrid || !profileArtifactsEmpty) {
+    return;
+  }
+  profileArtifactsGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'profile' });
+  profileArtifactsEmpty.classList.toggle('hidden', artifacts.length > 0);
+}
+
+function renderProfileForks(artifacts) {
+  if (!profileForksGrid || !profileForksEmpty) {
+    return;
+  }
+  profileForksGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'profile' });
+  profileForksEmpty.classList.toggle('hidden', artifacts.length > 0);
+}
+
+function updateProfileOverview(profile) {
+  if (!profile) {
+    return;
+  }
+  const handle = profile.handle || 'unknown';
+  const displayName = profile.display_name || handle;
+  const bio = profile.bio || 'No bio yet.';
+  const location = formatLocation(
+    profile?.demographics?.city?.trim() || '',
+    profile?.demographics?.country?.trim() || ''
+  );
+  if (profileDisplayName) {
+    profileDisplayName.textContent = displayName;
+  }
+  if (profileHandle) {
+    profileHandle.textContent = handle.startsWith('@') ? handle : `@${handle}`;
+  }
+  if (profileBio) {
+    profileBio.textContent = bio;
+  }
+  if (profileLocation) {
+    profileLocation.textContent = location;
+    profileLocation.classList.toggle('hidden', !location);
+  }
+  if (profileAvatar) {
+    const initials = getInitials(displayName, handle);
+    profileAvatar.src = profile.avatar_url || buildAvatarPlaceholder(initials);
+  }
+  if (profileStatArtifacts) {
+    profileStatArtifacts.textContent = formatNumber(profile?.stats?.public_artifacts || 0);
+  }
+  if (profileStatLikes) {
+    profileStatLikes.textContent = formatNumber(profile?.stats?.total_likes || 0);
+  }
+  if (profileStatComments) {
+    profileStatComments.textContent = formatNumber(profile?.stats?.total_comments || 0);
+  }
+  if (profileStatForks) {
+    profileStatForks.textContent = formatNumber(profile?.stats?.forks_received || 0);
+  }
+  if (profileAboutBio) {
+    profileAboutBio.textContent = bio;
+  }
+  if (profileAboutDemographics) {
+    profileAboutDemographics.textContent = formatDemographics(profile);
+  }
+  if (profileAboutCreated) {
+    profileAboutCreated.textContent = formatArtifactDate(profile.created_at);
+  }
+}
+
+async function loadPublicProfile(handle) {
+  if (!handle) {
+    return;
+  }
+  profileState.handle = handle;
+  const profile = await fetchPublicProfile(handle);
+  profileState.profile = profile;
+  updateProfileOverview(profile);
+  const artifacts = await fetchPublicArtifactsByHandle(handle);
+  profileState.artifacts = artifacts;
+  profileState.forks = artifacts.filter((artifact) => artifact.derived_from?.artifact_id);
+  renderProfileArtifacts(profileState.artifacts);
+  renderProfileForks(profileState.forks);
+  profileState.activeTab = 'artifacts';
+  setProfileTab(profileState.activeTab);
+}
+
+function updateProfileHandleStatus({ message, isError }) {
+  if (!profileHandleStatus) {
+    return;
+  }
+  profileHandleStatus.textContent = message;
+  profileHandleStatus.classList.toggle('is-error', Boolean(isError));
+}
+
+async function checkHandleAvailability(handle, currentHandle) {
+  if (!handle || handle === currentHandle) {
+    return { available: true, message: handle ? 'Handle is unchanged.' : '' };
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/profile/${handle}`, { credentials: 'include' });
+    if (res.status === 404) {
+      return { available: true, message: 'Handle is available.' };
+    }
+    if (res.ok) {
+      return { available: false, message: 'Handle is already taken.' };
+    }
+  } catch (error) {
+    console.warn('Handle availability check failed.', error);
+  }
+  return { available: true, message: 'Handle availability could not be confirmed.' };
+}
+
+async function loadProfileEditor() {
+  if (!profileEditForm) {
+    return;
+  }
+  const profile = await fetchCurrentProfile();
+  profileState.profile = profile;
+  const handle = profile?.handle || '';
+  const displayName = profile?.display_name || '';
+  const bio = profile?.bio || '';
+  if (profileHandleInput) {
+    profileHandleInput.value = handle;
+  }
+  if (profileDisplayNameInput) {
+    profileDisplayNameInput.value = displayName;
+  }
+  if (profileBioInput) {
+    profileBioInput.value = bio;
+  }
+  if (profileBioCount) {
+    profileBioCount.textContent = `${bio.length} / 280`;
+  }
+  if (profileAgeInput) {
+    profileAgeInput.value = profile?.demographics?.age ?? '';
+  }
+  if (profileGenderInput) {
+    profileGenderInput.value = profile?.demographics?.gender ?? '';
+  }
+  if (profileCityInput) {
+    profileCityInput.value = profile?.demographics?.city ?? '';
+  }
+  if (profileCountryInput) {
+    profileCountryInput.value = profile?.demographics?.country ?? '';
+  }
+  if (profileEditAvatarPreview) {
+    const initials = getInitials(displayName, handle);
+    profileEditAvatarPreview.src = profile?.avatar_url || buildAvatarPlaceholder(initials);
+  }
+  updateProfileHandleStatus({ message: 'Handles are lowercase and use letters, numbers, or _.', isError: false });
+}
+
+async function openOwnProfile() {
+  try {
+    const profile = profileState.profile || await fetchCurrentProfile();
+    const handle = profile?.handle;
+    if (!handle) {
+      showToast('Set a public handle first.', { variant: 'warning', duration: 2500 });
+      return;
+    }
+    setRoute(`/u/${handle}`);
+  } catch (error) {
+    console.error('Failed to open public profile.', error);
+    showToast('Unable to open public profile.');
   }
 }
 
@@ -2165,6 +2580,8 @@ function findArtifactInState(id) {
   return (
     galleryState.privateArtifacts.find((artifact) => artifact.artifact_id === id)
     || galleryState.publicArtifacts.find((artifact) => artifact.artifact_id === id)
+    || profileState.artifacts.find((artifact) => artifact.artifact_id === id)
+    || profileState.forks.find((artifact) => artifact.artifact_id === id)
   );
 }
 
@@ -2345,6 +2762,266 @@ async function handleArtifactImport(artifactId) {
     console.error('Artifact import failed.', error);
     showToast('Unable to import artifact.');
   }
+}
+
+function updateArtifactState(artifactId, updater) {
+  const updateList = (list) => {
+    const index = list.findIndex((artifact) => artifact.artifact_id === artifactId);
+    if (index === -1) {
+      return;
+    }
+    list[index] = updater(list[index]);
+  };
+  updateList(galleryState.privateArtifacts);
+  updateList(galleryState.publicArtifacts);
+  updateList(profileState.artifacts);
+  updateList(profileState.forks);
+}
+
+function refreshArtifactViews() {
+  if (publicGalleryGrid) {
+    publicGalleryGrid.innerHTML = renderGalleryCards(galleryState.publicArtifacts, { mode: 'public' });
+  }
+  if (profileArtifactsGrid) {
+    profileArtifactsGrid.innerHTML = renderGalleryCards(profileState.artifacts, { mode: 'profile' });
+  }
+  if (profileForksGrid) {
+    profileForksGrid.innerHTML = renderGalleryCards(profileState.forks, { mode: 'profile' });
+  }
+}
+
+async function handleArtifactLikeToggle(artifactId) {
+  const artifact = findArtifactInState(artifactId);
+  if (!artifact) {
+    return;
+  }
+  const isLiked = Boolean(artifact.viewer_has_liked || artifact.has_liked);
+  updateArtifactState(artifactId, (item) => {
+    const stats = getArtifactStats(item);
+    const nextLikes = Math.max(0, stats.likes + (isLiked ? -1 : 1));
+    return {
+      ...item,
+      stats: { ...item.stats, likes: nextLikes },
+      viewer_has_liked: !isLiked
+    };
+  });
+  refreshArtifactViews();
+  try {
+    const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/like`, {
+      method: isLiked ? 'DELETE' : 'POST',
+      credentials: 'include'
+    });
+    if (!res.ok) {
+      throw new Error('Like toggle failed');
+    }
+  } catch (error) {
+    console.error('Artifact like toggle failed.', error);
+    updateArtifactState(artifactId, (item) => ({
+      ...item,
+      stats: { ...item.stats, likes: getArtifactStats(item).likes + (isLiked ? 1 : -1) },
+      viewer_has_liked: isLiked
+    }));
+    refreshArtifactViews();
+    showToast('Unable to update like.', { variant: 'warning', duration: 2000 });
+  }
+}
+
+function buildCommentTree(comments) {
+  const topLevel = comments.filter((comment) => !comment.parent_comment_id);
+  const replies = new Map();
+  comments.forEach((comment) => {
+    if (comment.parent_comment_id) {
+      if (!replies.has(comment.parent_comment_id)) {
+        replies.set(comment.parent_comment_id, []);
+      }
+      replies.get(comment.parent_comment_id).push(comment);
+    }
+  });
+  topLevel.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  replies.forEach((items) => {
+    items.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  });
+  return { topLevel, replies };
+}
+
+function renderCommentItem(comment, { isReply = false } = {}) {
+  const author = comment.user_handle || comment.user_id || 'user';
+  const likes = formatNumber(comment?.stats?.likes || 0);
+  const canDelete = comment.can_delete ? `<button type="button" data-action="delete" data-comment-id="${comment.comment_id}">Delete</button>` : '';
+  const replyButton = !isReply
+    ? `<button type="button" data-action="reply" data-comment-id="${comment.comment_id}">Reply</button>`
+    : '';
+  return `
+    <div class="comment-item ${isReply ? 'is-reply' : ''}" data-comment-id="${comment.comment_id}">
+      <div class="comment-meta">
+        <span class="comment-author">@${author}</span>
+        <span class="comment-date">${formatArtifactDate(comment.created_at)}</span>
+      </div>
+      <p class="comment-content">${comment.content}</p>
+      <div class="comment-actions">
+        <span>♥ ${likes}</span>
+        ${replyButton}
+        ${canDelete}
+      </div>
+    </div>
+  `;
+}
+
+function renderCommentsThread(comments) {
+  if (!comments.length) {
+    return '<p class="comment-empty">No comments yet.</p>';
+  }
+  const { topLevel, replies } = buildCommentTree(comments);
+  return topLevel.map((comment) => {
+    const replyItems = replies.get(comment.comment_id) || [];
+    return `
+      <div class="comment-thread">
+        ${renderCommentItem(comment)}
+        <div class="comment-replies">
+          ${replyItems.map((reply) => renderCommentItem(reply, { isReply: true })).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadArtifactComments(artifactId) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/comments`, {
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    throw new Error('Comments fetch failed');
+  }
+  const data = await res.json();
+  return data?.comments || [];
+}
+
+async function postArtifactComment({ artifactId, content, parentCommentId }) {
+  const res = await fetch(`${API_BASE}/api/artifacts/${artifactId}/comments`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content,
+      parent_comment_id: parentCommentId || null
+    })
+  });
+  if (!res.ok) {
+    throw new Error('Comment post failed');
+  }
+  const data = await res.json();
+  return data?.comment;
+}
+
+async function deleteArtifactComment(commentId) {
+  const res = await fetch(`${API_BASE}/api/comments/${commentId}`, {
+    method: 'DELETE',
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    throw new Error('Comment delete failed');
+  }
+}
+
+async function openCommentsModal(artifactId) {
+  const artifact = findArtifactInState(artifactId);
+  if (!artifact) {
+    return;
+  }
+  commentState.artifactId = artifactId;
+  commentState.replyTo = null;
+  const comments = await loadArtifactComments(artifactId);
+  renderCommentsModal(artifact, comments);
+}
+
+function renderCommentsModal(artifact, comments) {
+  const replyTarget = commentState.replyTo;
+  const replyLabel = replyTarget ? 'Replying to comment' : 'Add a comment';
+  const html = `
+    <h2>Comments</h2>
+    <p>${artifact.title || 'Artifact'}</p>
+    <div class="comment-list">
+      ${renderCommentsThread(comments)}
+    </div>
+    <form id="commentForm" class="comment-form">
+      <label class="modal-field">
+        <span>${replyLabel}</span>
+        <textarea id="commentInput" rows="3" placeholder="Write a comment..."></textarea>
+      </label>
+      <div class="comment-actions-row">
+        <button type="submit">Post comment</button>
+        ${replyTarget ? '<button type="button" id="commentCancelReply" class="secondary">Cancel reply</button>' : ''}
+      </div>
+    </form>
+  `;
+  ModalManager.open(html, { dismissible: true, onClose: () => {
+    commentState.replyTo = null;
+    commentState.artifactId = null;
+  } });
+
+  document.querySelectorAll('[data-action="reply"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      commentState.replyTo = button.getAttribute('data-comment-id');
+      renderCommentsModal(artifact, comments);
+    });
+  });
+
+  document.querySelectorAll('[data-action="delete"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const commentId = button.getAttribute('data-comment-id');
+      if (!commentId) {
+        return;
+      }
+      try {
+        await deleteArtifactComment(commentId);
+        const nextComments = comments.filter((comment) => comment.comment_id !== commentId);
+        comments = nextComments.filter((comment) => comment.parent_comment_id !== commentId);
+        updateArtifactState(artifact.artifact_id, (item) => ({
+          ...item,
+          stats: { ...item.stats, comments: Math.max(0, getArtifactStats(item).comments - 1) }
+        }));
+        refreshArtifactViews();
+        renderCommentsModal(artifact, comments);
+      } catch (error) {
+        console.error('Comment delete failed.', error);
+        showToast('Unable to delete comment.');
+      }
+    });
+  });
+
+  document.getElementById('commentCancelReply')?.addEventListener('click', () => {
+    commentState.replyTo = null;
+    renderCommentsModal(artifact, comments);
+  });
+
+  document.getElementById('commentForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = document.getElementById('commentInput');
+    const content = input?.value.trim();
+    if (!content) {
+      return;
+    }
+    try {
+      const comment = await postArtifactComment({
+        artifactId: artifact.artifact_id,
+        content,
+        parentCommentId: commentState.replyTo
+      });
+      if (comment) {
+        comments = [comment, ...comments];
+        updateArtifactState(artifact.artifact_id, (item) => ({
+          ...item,
+          stats: { ...item.stats, comments: getArtifactStats(item).comments + 1 }
+        }));
+        refreshArtifactViews();
+      }
+      commentState.replyTo = null;
+      renderCommentsModal(artifact, comments);
+    } catch (error) {
+      console.error('Comment post failed.', error);
+      showToast('Unable to post comment.');
+    }
+  });
 }
 
 function getCreditState() {
@@ -2986,10 +3663,6 @@ function parseCsv(text) {
 function toNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
-}
-
-function formatNumber(value) {
-  return new Intl.NumberFormat('en-US').format(value);
 }
 
 function formatSeconds(ms) {
@@ -4437,8 +5110,21 @@ const chatState = {
 };
 const galleryState = {
   privateArtifacts: [],
-  publicArtifacts: []
+  publicArtifacts: [],
+  publicSort: 'likes'
 };
+const profileState = {
+  handle: null,
+  profile: null,
+  artifacts: [],
+  forks: [],
+  activeTab: 'artifacts'
+};
+const commentState = {
+  artifactId: null,
+  replyTo: null
+};
+let handleCheckTimer = null;
 
 const sandbox = createSandboxController({
   iframe: sandboxFrame,
@@ -6073,6 +6759,14 @@ if (accountLink) {
   });
 }
 
+if (profileEditLink) {
+  profileEditLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    closeUserMenu?.();
+    setRoute('/account/profile');
+  });
+}
+
 if (galleryLink) {
   galleryLink.addEventListener('click', (event) => {
     event.preventDefault();
@@ -6084,6 +6778,12 @@ if (galleryLink) {
 if (publicGalleryButton) {
   publicGalleryButton.addEventListener('click', () => {
     setRoute('/gallery/public');
+  });
+}
+
+if (accountProfileEditButton) {
+  accountProfileEditButton.addEventListener('click', () => {
+    setRoute('/account/profile');
   });
 }
 
@@ -6099,9 +6799,27 @@ if (accountViewPublicGalleryButton) {
   });
 }
 
+if (accountViewProfileButton) {
+  accountViewProfileButton.addEventListener('click', () => {
+    openOwnProfile();
+  });
+}
+
 if (accountBackButton) {
   accountBackButton.addEventListener('click', () => {
     setRoute('/');
+  });
+}
+
+if (profileEditBackButton) {
+  profileEditBackButton.addEventListener('click', () => {
+    setRoute('/account');
+  });
+}
+
+if (profileBackButton) {
+  profileBackButton.addEventListener('click', () => {
+    setRoute('/gallery/public');
   });
 }
 
@@ -6117,9 +6835,162 @@ if (publicGalleryBackButton) {
   });
 }
 
+if (publicGallerySortButtons.length) {
+  publicGallerySortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const sort = button.dataset.sort;
+      if (!sort || sort === galleryState.publicSort) {
+        return;
+      }
+      galleryState.publicSort = sort;
+      publicGallerySortButtons.forEach((item) => {
+        item.classList.toggle('is-active', item.dataset.sort === sort);
+      });
+      loadPublicGallery().catch((error) => {
+        console.warn('Failed to load sorted public gallery.', error);
+      });
+    });
+  });
+}
+
 window.addEventListener('popstate', () => {
   updateRouteView();
 });
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('a[data-route]');
+  if (!link) {
+    return;
+  }
+  const href = link.getAttribute('href');
+  if (!href) {
+    return;
+  }
+  event.preventDefault();
+  setRoute(href);
+});
+
+if (profileTabs.length) {
+  profileTabs.forEach((button) => {
+    button.addEventListener('click', () => {
+      const tab = button.dataset.profileTab;
+      if (!tab) {
+        return;
+      }
+      setProfileTab(tab);
+    });
+  });
+}
+
+if (profileBioInput && profileBioCount) {
+  profileBioInput.addEventListener('input', () => {
+    profileBioCount.textContent = `${profileBioInput.value.length} / 280`;
+  });
+}
+
+if (profileHandleInput) {
+  profileHandleInput.addEventListener('input', () => {
+    const normalized = normalizeHandle(profileHandleInput.value);
+    profileHandleInput.value = normalized;
+    if (!normalized) {
+      updateProfileHandleStatus({ message: 'Handle is required.', isError: true });
+      return;
+    }
+    if (!isValidHandle(normalized)) {
+      updateProfileHandleStatus({ message: 'Handle must be at least 3 characters.', isError: true });
+      return;
+    }
+    if (isReservedHandle(normalized)) {
+      updateProfileHandleStatus({ message: 'Handle is reserved.', isError: true });
+      return;
+    }
+    updateProfileHandleStatus({ message: 'Checking availability…', isError: false });
+    if (handleCheckTimer) {
+      clearTimeout(handleCheckTimer);
+    }
+    handleCheckTimer = window.setTimeout(async () => {
+      const currentHandle = profileState.profile?.handle || '';
+      const status = await checkHandleAvailability(normalized, currentHandle);
+      updateProfileHandleStatus({ message: status.message, isError: !status.available });
+    }, 400);
+  });
+}
+
+if (profileAvatarInput && profileEditAvatarPreview) {
+  profileAvatarInput.addEventListener('change', () => {
+    const file = profileAvatarInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      profileEditAvatarPreview.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+if (profileEditForm) {
+  profileEditForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (profileSaveButton) {
+      profileSaveButton.disabled = true;
+    }
+    try {
+      const handle = normalizeHandle(profileHandleInput?.value || '');
+      if (!isValidHandle(handle)) {
+        updateProfileHandleStatus({ message: 'Enter a valid handle (min 3 characters).', isError: true });
+        return;
+      }
+      if (isReservedHandle(handle)) {
+        updateProfileHandleStatus({ message: 'Handle is reserved.', isError: true });
+        return;
+      }
+      const availability = await checkHandleAvailability(handle, profileState.profile?.handle || '');
+      if (!availability.available) {
+        updateProfileHandleStatus({ message: availability.message, isError: true });
+        return;
+      }
+      const formData = new FormData();
+      const avatarFile = profileAvatarInput?.files?.[0];
+      if (avatarFile) {
+        formData.append('avatar', avatarFile);
+      }
+      formData.append('handle', handle);
+      formData.append('display_name', profileDisplayNameInput?.value.trim() || '');
+      formData.append('bio', profileBioInput?.value.trim() || '');
+      formData.append('age', profileAgeInput?.value ? profileAgeInput.value : '');
+      formData.append('gender', profileGenderInput?.value.trim() || '');
+      formData.append('city', profileCityInput?.value.trim() || '');
+      formData.append('country', profileCountryInput?.value.trim() || '');
+      const res = await fetch(`${API_BASE}/api/profile`, {
+        method: 'PATCH',
+        credentials: 'include',
+        body: formData
+      });
+      if (!res.ok) {
+        throw new Error('Profile update failed');
+      }
+      const data = await res.json().catch(() => ({}));
+      profileState.profile = data?.profile || data || profileState.profile;
+      showToast('Profile updated.', { variant: 'success', duration: 2000 });
+      setRoute('/account');
+    } catch (error) {
+      console.error('Profile update failed.', error);
+      showToast('Unable to update profile.');
+    } finally {
+      if (profileSaveButton) {
+        profileSaveButton.disabled = false;
+      }
+    }
+  });
+}
+
+if (profileCancelButton) {
+  profileCancelButton.addEventListener('click', () => {
+    setRoute('/account');
+  });
+}
 
 if (accountCopyUserIdButton) {
   accountCopyUserIdButton.addEventListener('click', async () => {
@@ -6226,6 +7097,64 @@ if (publicGalleryGrid) {
       handleArtifactOpen(artifactId);
     } else if (action === 'import') {
       handleArtifactImport(artifactId);
+    } else if (action === 'like') {
+      handleArtifactLikeToggle(artifactId);
+    } else if (action === 'comments') {
+      openCommentsModal(artifactId).catch((error) => {
+        console.warn('Failed to open comments.', error);
+      });
+    }
+  });
+}
+
+if (profileArtifactsGrid) {
+  profileArtifactsGrid.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) {
+      return;
+    }
+    const card = button.closest('[data-artifact-id]');
+    const artifactId = card?.dataset.artifactId;
+    if (!artifactId) {
+      return;
+    }
+    const action = button.dataset.action;
+    if (action === 'open') {
+      handleArtifactOpen(artifactId);
+    } else if (action === 'import') {
+      handleArtifactImport(artifactId);
+    } else if (action === 'like') {
+      handleArtifactLikeToggle(artifactId);
+    } else if (action === 'comments') {
+      openCommentsModal(artifactId).catch((error) => {
+        console.warn('Failed to open comments.', error);
+      });
+    }
+  });
+}
+
+if (profileForksGrid) {
+  profileForksGrid.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) {
+      return;
+    }
+    const card = button.closest('[data-artifact-id]');
+    const artifactId = card?.dataset.artifactId;
+    if (!artifactId) {
+      return;
+    }
+    const action = button.dataset.action;
+    if (action === 'open') {
+      handleArtifactOpen(artifactId);
+    } else if (action === 'import') {
+      handleArtifactImport(artifactId);
+    } else if (action === 'like') {
+      handleArtifactLikeToggle(artifactId);
+    } else if (action === 'comments') {
+      openCommentsModal(artifactId).catch((error) => {
+        console.warn('Failed to open comments.', error);
+      });
     }
   });
 }
