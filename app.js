@@ -326,6 +326,7 @@ const sandboxResetButton = document.getElementById('sandboxReset');
 const sandboxStopButton = document.getElementById('sandboxStop');
 const runButton = document.getElementById('runCode');
 const revertButton = document.getElementById('revertButton');
+const forwardButton = document.getElementById('forwardButton');
 const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
@@ -356,7 +357,7 @@ const runtimeState = {
   status: 'idle',
   started_at: null
 };
-let revertInProgress = false;
+let navigationInProgress = false;
 let revertModalOpen = false;
 const GENERATION_PHASES = [
   {
@@ -1711,6 +1712,7 @@ function addCodeVersion({
   if (messageId) {
     linkMessageToCodeVersion(messageId, version.id);
   }
+  updateUndoRedoState();
   return version;
 }
 
@@ -1759,7 +1761,7 @@ function initializeVersionStack() {
   } else if (codeVersionStack.length) {
     setActiveVersionByIndex(codeVersionStack.length - 1);
   }
-  updateRevertButtonState();
+  updateUndoRedoState();
 }
 
 function resetCodeHistory() {
@@ -1775,7 +1777,7 @@ function resetCodeHistory() {
     };
     scheduleSessionStatePersist();
   }
-  updateRevertButtonState();
+  updateUndoRedoState();
 }
 
 function clearEditorState() {
@@ -4122,7 +4124,7 @@ function isRuntimeRunning() {
 function setRuntimeState(status) {
   runtimeState.status = status;
   runtimeState.started_at = status === 'running' ? Date.now() : null;
-  updateRevertButtonState();
+  updateUndoRedoState();
 }
 
 function scheduleRuntimeStateSync() {
@@ -7061,46 +7063,126 @@ function updateRollbackVisibility() {
     userHasEditedCode && lastLLMCode ? 'inline-flex' : 'none';
 }
 
-function updateRevertButtonState() {
-  if (!revertButton) {
-    return;
+async function getVersionTimeline(id = sessionId) {
+  const db = await openSessionStateDb();
+  let versions = [];
+  let editorState = null;
+  if (db) {
+    const tx = db.transaction(SESSION_EDITOR_STORE_NAME, 'readonly');
+    const editorStore = tx.objectStore(SESSION_EDITOR_STORE_NAME);
+    const [dbVersions, storedEditorState] = await Promise.all([
+      getSessionCodeVersionsFromIndexedDb(db, id),
+      requestToPromise(editorStore.get(id), null)
+    ]);
+    versions = dbVersions || [];
+    editorState = storedEditorState;
   }
-  const activeIndex = getActiveVersionIndex();
-  const hasHistory = codeVersionStack.length > 1 && activeIndex > 0;
-  const runtimeRunning = isRuntimeRunning();
-  revertButton.disabled = !hasHistory;
-  revertButton.setAttribute('aria-disabled', hasHistory ? 'false' : 'true');
-  revertButton.classList.toggle('runtime-running', runtimeRunning);
-  const baseTitle = 'Revert to last generated code';
-  revertButton.title = runtimeRunning
-    ? `${baseTitle} · Code is running`
-    : baseTitle;
+  if (!versions.length) {
+    versions = codeVersionStack.slice();
+  }
+  versions.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const activeVersionId = editorState?.active_version_id
+    || sessionState?.current_editor?.version_id
+    || '';
+  const index = activeVersionId
+    ? versions.findIndex((entry) => entry.id === activeVersionId)
+    : -1;
+  return { versions, index };
 }
 
-function revertToPreviousVersion() {
-  const currentIndex = getActiveVersionIndex();
-  if (currentIndex <= 0) {
+async function updateUndoRedoState(id = sessionId, timeline = null) {
+  const { versions, index } = timeline || await getVersionTimeline(id);
+  const runtimeRunning = isRuntimeRunning();
+  const canRevert = index > 0;
+  const canForward = index !== -1 && index < versions.length - 1;
+  if (revertButton) {
+    revertButton.disabled = !canRevert;
+    revertButton.setAttribute('aria-disabled', canRevert ? 'false' : 'true');
+    revertButton.classList.toggle('runtime-running', runtimeRunning);
+    const baseTitle = 'Go to previous code version';
+    revertButton.title = runtimeRunning
+      ? `${baseTitle} · Code is running`
+      : baseTitle;
+  }
+  if (forwardButton) {
+    forwardButton.disabled = !canForward;
+    forwardButton.setAttribute('aria-disabled', canForward ? 'false' : 'true');
+    forwardButton.classList.toggle('runtime-running', runtimeRunning);
+    const baseTitle = 'Go to next code version';
+    forwardButton.title = runtimeRunning
+      ? `${baseTitle} · Code is running`
+      : baseTitle;
+  }
+}
+
+async function activateVersion(id, version, timeline = null) {
+  if (!version || typeof version.content !== 'string') {
     return;
   }
-  const previousIndex = currentIndex - 1;
-  const previousVersion = codeVersionStack[previousIndex];
-  if (!previousVersion || typeof previousVersion.content !== 'string') {
-    return;
+  const resolvedTimeline = timeline || await getVersionTimeline(id);
+  if (sessionState) {
+    sessionState.current_editor = {
+      language: version.language || 'html',
+      content: version.content,
+      version_id: version.id
+    };
+    if (Number.isFinite(resolvedTimeline.index)) {
+      sessionState.active_version_index = resolvedTimeline.index;
+    }
+    if (resolvedTimeline.versions?.length) {
+      sessionState.code_versions = resolvedTimeline.versions;
+    }
+    saveEditorStateToIndexedDb(sessionState);
+    scheduleSessionStatePersist();
   }
-  codeEditor.value = previousVersion.content;
-  setActiveVersionByIndex(previousIndex);
-  updateRevertButtonState();
+  if (codeEditor) {
+    codeEditor.value = version.content;
+  }
   userHasEditedCode = codeEditor.value !== baselineCode;
-  lastCodeSource = previousVersion.source === 'llm' ? 'llm' : 'user';
+  lastCodeSource = version.source === 'llm' ? 'llm' : 'user';
   updateRunButtonVisibility();
   updateRollbackVisibility();
   updatePromoteVisibility();
   updateLineNumbers();
   updateSaveCodeButtonState();
-  emitCodeStateChanged(previousVersion);
+  emitCodeStateChanged(version);
   resetExecutionPreparation();
   requestCreditPreviewUpdate();
+  await updateUndoRedoState(id, resolvedTimeline);
+}
+
+async function revertBackward(id = sessionId) {
+  const timeline = await getVersionTimeline(id);
+  if (timeline.index <= 0) {
+    return;
+  }
+  const previousVersion = timeline.versions[timeline.index - 1];
+  if (!previousVersion) {
+    return;
+  }
+  const nextTimeline = {
+    versions: timeline.versions,
+    index: timeline.index - 1
+  };
+  await activateVersion(id, previousVersion, nextTimeline);
   showToast('Reverted to previous version', { variant: 'success', duration: 2500 });
+}
+
+async function goForward(id = sessionId) {
+  const timeline = await getVersionTimeline(id);
+  if (timeline.index === -1 || timeline.index >= timeline.versions.length - 1) {
+    return;
+  }
+  const nextVersion = timeline.versions[timeline.index + 1];
+  if (!nextVersion) {
+    return;
+  }
+  const nextTimeline = {
+    versions: timeline.versions,
+    index: timeline.index + 1
+  };
+  await activateVersion(id, nextVersion, nextTimeline);
+  showToast('Moved to next version', { variant: 'success', duration: 2500 });
 }
 
 function setRevertModalButtonsDisabled(disabled) {
@@ -7114,7 +7196,11 @@ function setRevertModalButtonsDisabled(disabled) {
   }
 }
 
-function showRevertWhileRunningDialog() {
+function showRevertWhileRunningDialog({
+  description = 'Reverting will stop the current execution before restoring the previous version.',
+  confirmLabel = 'Stop &amp; Revert',
+  onConfirm = null
+} = {}) {
   if (revertModalOpen) {
     return Promise.resolve();
   }
@@ -7122,10 +7208,10 @@ function showRevertWhileRunningDialog() {
   return new Promise((resolve) => {
     const html = `
       <h2>Code is currently running</h2>
-      <p>Reverting will stop the current execution before restoring the previous version.</p>
+      <p>${description}</p>
       <div class="modal-actions">
         <button id="revertWhileRunningCancel" class="secondary" type="button">Cancel</button>
-        <button id="revertWhileRunningConfirm" type="button">Stop &amp; Revert</button>
+        <button id="revertWhileRunningConfirm" type="button">${confirmLabel}</button>
       </div>
     `;
     ModalManager.open(html, { dismissible: true, onClose: () => {
@@ -7144,34 +7230,58 @@ function showRevertWhileRunningDialog() {
         return;
       }
       setRevertModalButtonsDisabled(true);
-      await confirmStopAndRevert();
+      await hardStopRuntime();
+      if (typeof onConfirm === 'function') {
+        await onConfirm();
+      }
       ModalManager.close();
     });
   });
 }
 
-async function confirmStopAndRevert() {
-  await hardStopRuntime();
-  revertToPreviousVersion();
-}
-
 async function requestRevert() {
   if (!isRuntimeRunning()) {
-    revertToPreviousVersion();
+    await revertBackward();
     return;
   }
-  await showRevertWhileRunningDialog();
+  await showRevertWhileRunningDialog({
+    onConfirm: () => revertBackward()
+  });
 }
 
-async function safeRevert() {
-  if (revertInProgress) {
+async function requestForward() {
+  if (!isRuntimeRunning()) {
+    await goForward();
     return;
   }
-  revertInProgress = true;
+  await showRevertWhileRunningDialog({
+    description: 'Moving forward will stop the current execution before restoring the next version.',
+    confirmLabel: 'Stop &amp; Forward',
+    onConfirm: () => goForward()
+  });
+}
+
+async function safeRevertBackward() {
+  if (navigationInProgress) {
+    return;
+  }
+  navigationInProgress = true;
   try {
     await requestRevert();
   } finally {
-    revertInProgress = false;
+    navigationInProgress = false;
+  }
+}
+
+async function safeGoForward() {
+  if (navigationInProgress) {
+    return;
+  }
+  navigationInProgress = true;
+  try {
+    await requestForward();
+  } finally {
+    navigationInProgress = false;
   }
 }
 
@@ -7247,7 +7357,7 @@ function applyLLMEdit(newCode, { messageId = null } = {}) {
     messageId
   });
   codeEditor.value = newCode;
-  updateRevertButtonState();
+  updateUndoRedoState();
 }
 
 function setCodeFromLLM(code, messageId = null) {
@@ -8440,7 +8550,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('⚠️ Revert button not found');
   } else {
     revertButton.addEventListener('click', () => {
-      safeRevert();
+      safeRevertBackward();
+    });
+  }
+  if (!forwardButton) {
+    console.warn('⚠️ Forward button not found');
+  } else {
+    forwardButton.addEventListener('click', () => {
+      safeGoForward();
     });
   }
   if (!rollbackButton) {
