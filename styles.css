@@ -1082,9 +1082,22 @@ html, body {
 }
 
 .tier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-weight: 600;
   margin-bottom: 8px;
   font-size: 13px;
+}
+
+.tier-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #a9b8ff;
+  background: rgba(124, 155, 255, 0.12);
+  padding: 2px 6px;
+  border-radius: 999px;
 }
 
 .tier-card ul {
@@ -1097,6 +1110,22 @@ html, body {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.tier-cta {
+  margin-top: 10px;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(124, 155, 255, 0.4);
+  background: rgba(124, 155, 255, 0.18);
+  color: #d9e4ff;
+  padding: 8px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tier-cta:hover {
+  background: rgba(124, 155, 255, 0.28);
 }
 
 .pricing-table {
@@ -1975,6 +2004,11 @@ button:disabled {
 }
 
 .paywall-plan-compact {
+  display: grid;
+  gap: 12px;
+}
+
+.paywall-plan-cards {
   display: grid;
   gap: 12px;
 }

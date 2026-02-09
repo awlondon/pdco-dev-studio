@@ -673,42 +673,8 @@
 
           <div class="pricing-section">
             <h3>Plans</h3>
-            <div class="pricing-tiers">
-              <div class="tier-card">
-                <div class="tier-header">Free</div>
-                <ul>
-                  <li>For exploring and trying things out</li>
-                  <li>500 credits / month</li>
-                  <li>Daily limit: 100 credits</li>
-                  <li>Basic generation speed</li>
-                  <li>Community support</li>
-                </ul>
-                <p class="tier-note">$0 / month</p>
-              </div>
-              <div class="tier-card">
-                <div class="tier-header">Starter</div>
-                <ul>
-                  <li>For individual builders</li>
-                  <li>5,000 credits / month</li>
-                  <li>Daily limit: 500 credits</li>
-                  <li>Faster generation</li>
-                  <li>Priority sandbox execution</li>
-                </ul>
-                <p class="tier-note">$12 / month</p>
-              </div>
-              <div class="tier-card">
-                <div class="tier-header">Pro</div>
-                <ul>
-                  <li>For serious creators</li>
-                  <li>20,000 credits / month</li>
-                  <li>Daily limit: 2,000 credits</li>
-                  <li>Fastest generation</li>
-                  <li>Priority queue + advanced sandbox</li>
-                  <li>Early access to new features</li>
-                </ul>
-                <p class="tier-note">$39 / month</p>
-              </div>
-            </div>
+            <div class="pricing-tiers" id="pricing-plan-grid"></div>
+            <div id="pricing-plan-actions" class="pricing-plan-actions"></div>
           </div>
 
           <div class="pricing-section">
@@ -760,79 +726,12 @@
 
           <div class="paywall-plans">
             <div class="paywall-plan-compact" data-paywall-compact>
-              <div class="paywall-plan-card is-recommended" data-paywall-plan-card="starter">
-                <div>
-                  <p class="plan-label">Starter (recommended)</p>
-                  <h3>Starter</h3>
-                  <p class="plan-price">$12/mo</p>
-                </div>
-                <ul>
-                  <li>5,000 monthly credits</li>
-                  <li>Relaxed daily throttle</li>
-                  <li>Large generations included</li>
-                </ul>
-              </div>
-              <div class="paywall-plan-card hidden" data-paywall-plan-card="pro">
-                <div>
-                  <p class="plan-label">Pro</p>
-                  <h3>Pro</h3>
-                  <p class="plan-price">$29/mo</p>
-                </div>
-                <ul>
-                  <li>20,000 monthly credits</li>
-                  <li>Minimal daily throttle</li>
-                  <li>Priority queue included</li>
-                </ul>
-              </div>
+              <div id="paywall-plan-cards" class="paywall-plan-cards"></div>
             </div>
 
             <div class="paywall-plan-comparison hidden" data-paywall-compare>
-              <div class="paywall-plan-selector" role="tablist" aria-label="Select a plan">
-                <button class="plan-chip" type="button" data-paywall-plan="starter" aria-pressed="true">Starter</button>
-                <button class="plan-chip" type="button" data-paywall-plan="pro" aria-pressed="false">Pro</button>
-              </div>
-              <table class="paywall-table paywall-compare-table" aria-label="Plan comparison">
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th data-paywall-plan-cell="free">Free</th>
-                    <th data-paywall-plan-cell="starter" class="is-recommended">Starter</th>
-                    <th data-paywall-plan-cell="pro">Pro</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <th scope="row">Monthly credits</th>
-                    <td data-paywall-plan-cell="free">500</td>
-                    <td data-paywall-plan-cell="starter">5,000</td>
-                    <td data-paywall-plan-cell="pro">20,000</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Daily throttle</th>
-                    <td data-paywall-plan-cell="free">Strict</td>
-                    <td data-paywall-plan-cell="starter">Relaxed</td>
-                    <td data-paywall-plan-cell="pro">Minimal</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Large generations</th>
-                    <td data-paywall-plan-cell="free">Limited</td>
-                    <td data-paywall-plan-cell="starter">Yes</td>
-                    <td data-paywall-plan-cell="pro">Yes</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Priority queue</th>
-                    <td data-paywall-plan-cell="free">—</td>
-                    <td data-paywall-plan-cell="starter">—</td>
-                    <td data-paywall-plan-cell="pro">✓</td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Price</th>
-                    <td data-paywall-plan-cell="free">$0</td>
-                    <td data-paywall-plan-cell="starter">$12/mo</td>
-                    <td data-paywall-plan-cell="pro">$29/mo</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div id="paywall-plan-selector" class="paywall-plan-selector" role="tablist" aria-label="Select a plan"></div>
+              <div id="paywall-plan-table"></div>
               <p class="paywall-note">All plans include live code execution and sandboxed previews.</p>
             </div>
           </div>

@@ -87,6 +87,70 @@ const STRIPE_CREDIT_PACKS = (() => {
     return {};
   }
 })();
+const PLAN_CATALOG = (() => {
+  const catalog = {};
+  const baseFree = {
+    tier: FREE_PLAN.tier,
+    display_name: 'Free',
+    stripe_price_id: null,
+    monthly_credits: FREE_PLAN.monthly_credits,
+    daily_cap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null,
+    price_label: '$0'
+  };
+
+  const applyEntry = (tier, entry = {}) => {
+    const normalizedTier = String(tier).toLowerCase();
+    const displayName = entry.display_name
+      || entry.displayName
+      || normalizedTier.charAt(0).toUpperCase() + normalizedTier.slice(1);
+    const monthlyCredits = Number(entry.monthly_credits ?? entry.monthlyCredits);
+    const dailyCap = Number(entry.daily_cap ?? entry.dailyCap);
+    catalog[normalizedTier] = {
+      tier: normalizedTier,
+      display_name: displayName,
+      stripe_price_id: entry.stripe_price_id || entry.price_id || entry.priceId || null,
+      monthly_credits: Number.isFinite(monthlyCredits)
+        ? monthlyCredits
+        : (catalog[normalizedTier]?.monthly_credits ?? FREE_PLAN.monthly_credits),
+      daily_cap: Number.isFinite(dailyCap)
+        ? dailyCap
+        : (PLAN_DAILY_CAPS[normalizedTier] ?? null),
+      price_label: entry.price_label || entry.priceLabel || catalog[normalizedTier]?.price_label || null
+    };
+  };
+
+  const rawCatalog = process.env.STRIPE_PLAN_CATALOG;
+  if (rawCatalog) {
+    try {
+      const parsed = JSON.parse(rawCatalog);
+      Object.entries(parsed).forEach(([tier, entry]) => {
+        applyEntry(tier, entry);
+      });
+    } catch (error) {
+      console.warn('Invalid STRIPE_PLAN_CATALOG JSON.', error);
+    }
+  }
+
+  if (!Object.keys(catalog).length && Object.keys(STRIPE_PLAN_MAP).length) {
+    Object.entries(STRIPE_PLAN_MAP).forEach(([priceId, plan]) => {
+      if (!plan?.tier) return;
+      applyEntry(plan.tier, {
+        stripe_price_id: priceId,
+        monthly_credits: plan.monthly_credits ?? plan.monthlyCredits,
+        display_name: plan.display_name || plan.displayName
+      });
+    });
+  }
+
+  applyEntry(baseFree.tier, baseFree);
+  return catalog;
+})();
+const PLAN_BY_PRICE_ID = Object.values(PLAN_CATALOG).reduce((acc, plan) => {
+  if (plan?.stripe_price_id) {
+    acc[plan.stripe_price_id] = plan;
+  }
+  return acc;
+}, {});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -188,6 +252,17 @@ app.get('/api/me', async (req, res) => {
     console.error('Failed to load /me.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load session' });
   }
+});
+
+app.get('/api/plans', (req, res) => {
+  const plans = Object.values(PLAN_CATALOG)
+    .filter((plan) => plan.tier)
+    .sort((a, b) => {
+      if (a.tier === 'free') return -1;
+      if (b.tier === 'free') return 1;
+      return (a.monthly_credits || 0) - (b.monthly_credits || 0);
+    });
+  res.json({ ok: true, plans });
 });
 
 app.post('/api/artifacts/metadata', async (req, res) => {
@@ -1740,15 +1815,23 @@ app.get('/checkout/subscription', async (req, res) => {
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
-    const priceId = process.env.STRIPE_SUBSCRIPTION_PRICE_ID;
-    if (!priceId) {
-      return res.status(500).json({ ok: false, error: 'Missing subscription price id' });
+    const requestedTier = typeof req.query?.plan_tier === 'string'
+      ? req.query.plan_tier.toLowerCase()
+      : 'starter';
+    const plan = PLAN_CATALOG[requestedTier];
+    if (!plan || !plan.stripe_price_id) {
+      return res.status(400).json({ ok: false, error: 'Invalid plan tier' });
     }
 
     const stripeSession = await createStripeCheckoutSession({
       mode: 'subscription',
-      priceId,
+      priceId: plan.stripe_price_id,
       user,
+      metadata: {
+        purchase_type: 'subscription',
+        plan_tier: plan.tier,
+        price_id: plan.stripe_price_id
+      },
       successUrl: process.env.STRIPE_SUCCESS_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`,
       cancelUrl: process.env.STRIPE_CANCEL_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`
     });
@@ -2956,6 +3039,20 @@ async function onCheckoutSessionCompleted(session) {
         patch.credits_balance = String(nextRemaining);
       }
     }
+  } else if (purchaseType === 'subscription' && session?.subscription) {
+    const priceId = session.metadata?.price_id || session.metadata?.stripe_price_id;
+    const plan = priceId ? PLAN_BY_PRICE_ID[priceId] : null;
+    if (plan?.tier) {
+      const user = await getUserById(userId);
+      const currentBalance = user ? resolveCreditsBalance(user) : 0;
+      const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
+      const nextBalance = Math.min(currentBalance, nextTotal);
+      patch.plan_tier = plan.tier;
+      patch.credits_total = String(nextTotal);
+      patch.credits_remaining = String(nextBalance);
+      patch.credits_balance = String(nextBalance);
+      patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
+    }
   }
 
   await updateUser(userId, patch);
@@ -2965,19 +3062,22 @@ async function onSubscriptionUpsert(subscription) {
   const stripeCustomerId = subscription.customer;
   const stripeSubscriptionId = subscription.id;
   const priceId = subscription.items?.data?.[0]?.price?.id;
-  const plan = STRIPE_PLAN_MAP[priceId] || FREE_PLAN;
+  const plan = PLAN_BY_PRICE_ID[priceId] || STRIPE_PLAN_MAP[priceId] || FREE_PLAN;
   const user = await findUserByStripeCustomer(stripeCustomerId);
   if (!user) {
     throw new Error(`No user for stripe_customer_id=${stripeCustomerId}`);
   }
 
+  const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
+  const nextBalance = Math.min(resolveCreditsBalance(user), nextTotal);
   await updateUser(user.user_id, {
     stripe_customer_id: stripeCustomerId,
     stripe_subscription_id: stripeSubscriptionId,
     plan_tier: plan.tier,
-    credits_total: String(plan.monthly_credits || FREE_PLAN.monthly_credits),
-    credits_balance: String(resolveCreditsBalance(user)),
-    daily_credit_limit: String(PLAN_DAILY_CAPS[plan.tier] ?? ''),
+    credits_total: String(nextTotal),
+    credits_remaining: String(nextBalance),
+    credits_balance: String(nextBalance),
+    daily_credit_limit: String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? ''),
     billing_status: normalizeStripeSubStatus(subscription.status)
   });
 }
