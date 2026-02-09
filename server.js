@@ -38,6 +38,8 @@ import {
   deleteArtifact,
   deletePrivateArtifactsForUser,
   fetchArtifactById,
+  fetchArtifactVersionById,
+  fetchArtifactVersionSummaries,
   fetchArtifactVersions,
   fetchArtifactsByOwner,
   fetchPublicArtifacts,
@@ -610,13 +612,11 @@ app.get('/api/artifacts/:id/versions', async (req, res) => {
     if (!canView) {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
-    const filtered = await fetchArtifactVersions(artifact.artifact_id);
-    const allowChat = isOwner || artifact.versioning?.chat_history_public;
+    const filtered = await fetchArtifactVersionSummaries(artifact.artifact_id);
     const formatted = filtered.map((version, index) => ({
       ...version,
       version_number: version.version_index || index + 1,
-      label: version.label || `v${version.version_index || index + 1}`,
-      chat: allowChat ? version.chat : { included: false, messages: null }
+      label: version.label || `v${version.version_index || index + 1}`
     })).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return res.json({ ok: true, versions: formatted });
   } catch (error) {
@@ -742,12 +742,11 @@ app.get('/api/artifacts/:id/versions/:versionId', async (req, res) => {
     if (!canView) {
       return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
-    const versions = await fetchArtifactVersions(artifact.artifact_id);
-    const version = versions.find((entry) => entry.version_id === req.params.versionId);
+    const version = await fetchArtifactVersionById(artifact.artifact_id, req.params.versionId);
     if (!version) {
       return res.status(404).json({ ok: false, error: 'Version not found' });
     }
-    const versionNumber = version.version_index || versions.findIndex((entry) => entry.version_id === version.version_id) + 1;
+    const versionNumber = version.version_index || 1;
     const allowChat = isOwner || artifact.versioning?.chat_history_public;
     const responseVersion = {
       ...version,

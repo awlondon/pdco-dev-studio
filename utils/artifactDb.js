@@ -88,6 +88,20 @@ export function mapArtifactVersionRow(row) {
   };
 }
 
+export function mapArtifactVersionSummaryRow(row) {
+  if (!row) return null;
+  return {
+    version_id: row.id,
+    artifact_id: row.artifact_id,
+    session_id: row.session_id || '',
+    created_at: toIsoString(row.created_at),
+    label: row.label || null,
+    summary: row.summary || null,
+    version_index: Number(row.version_index || 0),
+    stats: row.stats || {}
+  };
+}
+
 async function fetchArtifactRows({ whereClause = '', params = [] } = {}) {
   const pool = getArtifactsDbPool();
   const result = await pool.query(
@@ -203,6 +217,18 @@ export async function fetchArtifactVersions(artifactId) {
     [artifactId]
   );
   return result.rows.map(mapArtifactVersionRow);
+}
+
+export async function fetchArtifactVersionSummaries(artifactId) {
+  const pool = getArtifactsDbPool();
+  const result = await pool.query(
+    `SELECT id, artifact_id, session_id, created_at, label, summary, version_index, stats
+     FROM artifact_versions
+     WHERE artifact_id = $1
+     ORDER BY version_index ASC`,
+    [artifactId]
+  );
+  return result.rows.map(mapArtifactVersionSummaryRow);
 }
 
 export async function fetchArtifactVersionById(artifactId, versionId) {

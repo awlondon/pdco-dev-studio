@@ -3825,42 +3825,117 @@ function renderArtifactChatHistory(messages = []) {
   `).join('');
 }
 
+function computeLineDiff(source = '', target = '') {
+  const sourceLines = String(source || '').split('\n');
+  const targetLines = String(target || '').split('\n');
+  if (!sourceLines.length && !targetLines.length) {
+    return [];
+  }
+  const sourceLength = sourceLines.length;
+  const targetLength = targetLines.length;
+  const dp = Array.from({ length: sourceLength + 1 }, () => Array(targetLength + 1).fill(0));
+  for (let i = sourceLength - 1; i >= 0; i -= 1) {
+    for (let j = targetLength - 1; j >= 0; j -= 1) {
+      if (sourceLines[i] === targetLines[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+  const diff = [];
+  let i = 0;
+  let j = 0;
+  while (i < sourceLength && j < targetLength) {
+    if (sourceLines[i] === targetLines[j]) {
+      diff.push({ type: 'equal', text: sourceLines[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      diff.push({ type: 'remove', text: sourceLines[i] });
+      i += 1;
+    } else {
+      diff.push({ type: 'add', text: targetLines[j] });
+      j += 1;
+    }
+  }
+  while (i < sourceLength) {
+    diff.push({ type: 'remove', text: sourceLines[i] });
+    i += 1;
+  }
+  while (j < targetLength) {
+    diff.push({ type: 'add', text: targetLines[j] });
+    j += 1;
+  }
+  return diff;
+}
+
+function renderArtifactDiff(source = '', target = '') {
+  const diff = computeLineDiff(source, target);
+  if (!diff.length) {
+    return '<div class="artifact-diff-empty">No differences found.</div>';
+  }
+  const totals = diff.reduce((acc, entry) => {
+    if (entry.type === 'add') acc.added += 1;
+    if (entry.type === 'remove') acc.removed += 1;
+    return acc;
+  }, { added: 0, removed: 0 });
+  const rows = diff.map((entry) => {
+    const marker = entry.type === 'add' ? '+' : entry.type === 'remove' ? '-' : ' ';
+    return `
+      <div class="artifact-diff-line ${entry.type}">
+        <span class="artifact-diff-marker">${marker}</span>
+        <span class="artifact-diff-text">${escapeHtml(entry.text)}</span>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="artifact-diff-summary">+${totals.added} / -${totals.removed}</div>
+    <div class="artifact-diff-body">${rows}</div>
+  `;
+}
+
 function openArtifactVersionsModal(artifactId) {
   const currentArtifact = findArtifactInState(artifactId);
   if (!currentArtifact) {
     showToast('Artifact not found.');
     return;
   }
+  const userId = getUserContext().id;
+  const isOwner = Boolean(userId && currentArtifact.owner_user_id === userId);
+  const currentContent = currentArtifact.code?.content || '';
   fetchArtifactVersions(artifactId).then((versions) => {
     const versionRows = versions.map((version) => {
       const label = version.label || `v${version.version_number || 1}`;
-      const chatHtml = version.chat?.included
-        ? `
-          <details class="artifact-chat-history">
-            <summary>Chat history</summary>
-            <div class="artifact-chat-body">${renderArtifactChatHistory(version.chat.messages || [])}</div>
-          </details>
-        `
-        : '';
+      const isCurrent = currentArtifact.current_version_id === version.version_id;
       return `
-        <div class="artifact-version-row" data-version-id="${version.version_id}">
+        <button class="artifact-version-row ${isCurrent ? 'is-current' : ''}" type="button" data-version-id="${version.version_id}">
           <div class="artifact-version-meta">
             <div class="artifact-version-title">${label}</div>
             <div class="artifact-version-date">${formatArtifactDate(version.created_at)}</div>
           </div>
           <div class="artifact-version-actions">
-            <button class="ghost-button small" data-version-action="open">Open version</button>
+            ${isCurrent ? '<span class="artifact-version-current">Current</span>' : ''}
           </div>
-          ${chatHtml}
-        </div>
+        </button>
       `;
     }).join('');
 
     const html = `
-      <h2>Artifact versions</h2>
-      <p>Browse saved sessions for this artifact.</p>
-      <div class="artifact-version-list">
-        ${versionRows || '<div class="artifact-version-empty">No versions saved yet.</div>'}
+      <h2>Artifact details</h2>
+      <p>${currentArtifact.title || 'Untitled artifact'} · ${currentArtifact.code?.language || 'code'}</p>
+      <div class="artifact-detail-layout">
+        <section class="artifact-version-column">
+          <h3>Version history</h3>
+          <div id="artifactVersionList" class="artifact-version-list">
+            ${versionRows || '<div class="artifact-version-empty">No versions saved yet.</div>'}
+          </div>
+        </section>
+        <section class="artifact-version-view">
+          <div id="artifactVersionDetail" class="artifact-version-detail">
+            ${versions.length ? 'Select a version to view details.' : 'No versions to display.'}
+          </div>
+        </section>
       </div>
       <div class="modal-actions">
         <button id="artifactVersionsClose" class="secondary" type="button">Close</button>
@@ -3872,28 +3947,101 @@ function openArtifactVersionsModal(artifactId) {
       ModalManager.close();
     });
 
-    document.querySelectorAll('.artifact-version-row [data-version-action="open"]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const row = button.closest('.artifact-version-row');
-        const versionId = row?.dataset.versionId;
+    const detailEl = document.getElementById('artifactVersionDetail');
+    const listEl = document.getElementById('artifactVersionList');
+    const setActiveRow = (versionId) => {
+      listEl?.querySelectorAll('.artifact-version-row').forEach((row) => {
+        row.classList.toggle('is-active', row.dataset.versionId === versionId);
+      });
+    };
+
+    const renderVersionDetail = (version) => {
+      if (!detailEl || !version) {
+        return;
+      }
+      const label = version.label || `v${version.version_number || 1}`;
+      const diffHtml = renderArtifactDiff(currentContent, version.code?.content || '');
+      const chatHtml = version.chat?.included
+        ? renderArtifactChatHistory(version.chat.messages || [])
+        : '<div class="artifact-chat-empty">No chat history available.</div>';
+      detailEl.innerHTML = `
+        <div class="artifact-version-header">
+          <div>
+            <h3>${label}</h3>
+            <p>${formatArtifactDate(version.created_at)}</p>
+          </div>
+          <div class="artifact-version-actions">
+            <button class="ghost-button small" data-version-action="open">Open in editor</button>
+            ${isOwner ? '<button class="ghost-button small" data-version-action="restore">Restore as new version</button>' : ''}
+          </div>
+        </div>
+        <div class="artifact-version-section">
+          <h4>Diff vs current</h4>
+          <div class="artifact-diff">${diffHtml}</div>
+        </div>
+        <div class="artifact-version-section">
+          <h4>Chat history</h4>
+          <div class="artifact-chat-body">${chatHtml}</div>
+        </div>
+      `;
+      detailEl.querySelector('[data-version-action="open"]')?.addEventListener('click', () => {
+        applyArtifactToEditor({
+          ...currentArtifact,
+          code: version.code
+        });
+        ModalManager.close();
+      });
+      detailEl.querySelector('[data-version-action="restore"]')?.addEventListener('click', async () => {
+        try {
+          const restored = await createArtifactVersion(artifactId, {
+            code: version.code,
+            label: `Restored from ${label}`
+          });
+          if (restored) {
+            updateArtifactState(artifactId, () => restored);
+            refreshArtifactViews();
+          }
+          ModalManager.close();
+          showToast('Version restored as a new snapshot.', { variant: 'success', duration: 2200 });
+        } catch (error) {
+          console.error('Failed to restore version.', error);
+          showToast('Unable to restore version.');
+        }
+      });
+    };
+
+    const loadVersion = (versionId) => {
+      if (!detailEl) {
+        return;
+      }
+      detailEl.innerHTML = '<div class="artifact-version-loading">Loading version…</div>';
+      fetchArtifactVersion(artifactId, versionId).then((version) => {
+        if (!version) {
+          detailEl.innerHTML = '<div class="artifact-version-empty">Version not found.</div>';
+          return;
+        }
+        setActiveRow(versionId);
+        renderVersionDetail(version);
+      }).catch((error) => {
+        console.error('Failed to load version.', error);
+        detailEl.innerHTML = '<div class="artifact-version-empty">Unable to load version.</div>';
+        showToast('Unable to load version.');
+      });
+    };
+
+    listEl?.querySelectorAll('.artifact-version-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        const versionId = row.dataset.versionId;
         if (!versionId) {
           return;
         }
-        fetchArtifactVersion(artifactId, versionId).then((version) => {
-          if (!version) {
-            return;
-          }
-          applyArtifactToEditor({
-            ...currentArtifact,
-            code: version.code
-          });
-          ModalManager.close();
-        }).catch((error) => {
-          console.error('Failed to load version.', error);
-          showToast('Unable to load version.');
-        });
+        loadVersion(versionId);
       });
     });
+
+    if (versions.length) {
+      loadVersion(versions[0].version_id);
+    }
   }).catch((error) => {
     console.error('Failed to load artifact versions.', error);
     showToast('Unable to load versions.');

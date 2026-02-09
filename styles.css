@@ -3209,12 +3209,24 @@ button:disabled {
 }
 
 .artifact-version-row {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(15, 18, 24, 0.8);
   padding: 12px;
   display: grid;
   gap: 10px;
+}
+
+.artifact-version-row:hover,
+.artifact-version-row.is-active {
+  border-color: rgba(124, 155, 255, 0.5);
+}
+
+.artifact-version-row.is-current .artifact-version-title {
+  color: #b6c8ff;
 }
 
 .artifact-version-meta {
@@ -3238,9 +3250,109 @@ button:disabled {
   gap: 8px;
 }
 
+.artifact-version-current {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
 .artifact-version-empty {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.artifact-version-loading {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.artifact-detail-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  margin-top: 12px;
+}
+
+.artifact-version-column h3 {
+  margin: 0;
+}
+
+.artifact-version-view {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 15, 20, 0.7);
+  padding: 16px;
+}
+
+.artifact-version-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.artifact-version-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.artifact-version-header h3 {
+  margin: 0 0 4px;
+}
+
+.artifact-version-section h4 {
+  margin: 0 0 8px;
+}
+
+.artifact-diff {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 13, 18, 0.9);
+  padding: 12px;
+}
+
+.artifact-diff-summary {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.artifact-diff-body {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+.artifact-diff-line {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  white-space: pre;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.artifact-diff-line.add {
+  background: rgba(94, 209, 143, 0.12);
+  color: #b8f2d1;
+}
+
+.artifact-diff-line.remove {
+  background: rgba(242, 124, 124, 0.12);
+  color: #f6b4b4;
+}
+
+.artifact-diff-marker {
+  color: var(--muted);
+}
+
+.artifact-diff-text {
+  overflow-wrap: anywhere;
 }
 
 .artifact-chat-history summary {
@@ -3293,6 +3405,12 @@ button:disabled {
 .artifact-chat-empty {
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .artifact-detail-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .code-editor.is-locked #code-editor {
