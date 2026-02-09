@@ -8,6 +8,7 @@ import {
   fetchCheapestAllowedModel,
   fetchModelPricing,
   fetchFirstNonPremiumModel,
+  fetchCreditsUsedToday,
   fetchMonthlyQuota,
   fetchPlanNormalizationFactor,
   fetchPlanPolicy,
@@ -23,6 +24,11 @@ import {
   insertUsageEvent,
   isPremiumModel
 } from './utils/usageAnalytics.js';
+import {
+  appendCreditLedger,
+  parseCreditLedger,
+  readCreditLedger
+} from './api/creditLedger.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -49,6 +55,9 @@ const REQUIRED_USER_HEADERS = [
   'plan_tier',
   'credits_total',
   'credits_remaining',
+  'credits_balance',
+  'daily_credit_limit',
+  'credits_last_reset',
   'monthly_reset_at',
   'newsletter_opt_in',
   'account_status',
@@ -945,7 +954,7 @@ app.get('/api/usage/overview', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
     const pool = getUsageAnalyticsPool();
-    const dailyLimit = PLAN_DAILY_CAPS[user.plan_tier] ?? null;
+    const dailyLimit = resolveDailyCreditLimit(user);
     if (pool) {
       const overviewRow = await fetchUsageOverview({ userId: session.sub });
       const todayKey = new Date().toISOString().slice(0, 10);
@@ -1227,9 +1236,73 @@ app.post('/api/chat', async (req, res) => {
       outputChars: 0,
       intentType
     });
-    const creditsRemaining = Number(user.credits_remaining || 0);
+    const creditsRemaining = resolveCreditsBalance(user);
     const creditsTotal = Number(user.credits_total || 0);
     const inputTokensEstimate = estimateTokensFromChars(inputChars);
+    const dailyLimit = resolveDailyCreditLimit(user);
+    const creditsUsedToday = Number.isFinite(dailyLimit)
+      ? await fetchCreditsUsedTodayForUser(user.user_id)
+      : 0;
+
+    if (Number.isFinite(dailyLimit) && creditsUsedToday >= dailyLimit) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_rejected',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
+      return res.status(402).json({
+        ok: false,
+        error: 'Daily credit limit reached',
+        credits_remaining: creditsRemaining,
+        daily_limit: dailyLimit,
+        credits_used_today: creditsUsedToday
+      });
+    }
+
+    if (
+      Number.isFinite(dailyLimit)
+      && creditsUsedToday + estimatedCredits > dailyLimit
+    ) {
+      await appendUsageEntry({
+        user,
+        requestId,
+        sessionId: req.body?.sessionId || '',
+        eventType: 'chat_rejected',
+        intentType,
+        model: req.body?.model || OPENAI_MODEL,
+        inputTokens: inputTokensEstimate,
+        outputTokens: 0,
+        inputChars,
+        outputChars: 0,
+        totalTokens: inputTokensEstimate,
+        reservedCredits: estimatedCredits,
+        actualCredits: 0,
+        creditsCharged: 0,
+        latencyMs: Date.now() - requestStartedAt,
+        status: 'failure'
+      });
+      return res.status(402).json({
+        ok: false,
+        error: 'Daily credit limit reached',
+        credits_remaining: creditsRemaining,
+        daily_limit: dailyLimit,
+        credits_used_today: creditsUsedToday,
+        estimated_credits: estimatedCredits
+      });
+    }
 
     if (!Number.isFinite(creditsRemaining) || creditsRemaining <= 0) {
       await appendUsageEntry({
@@ -1382,7 +1455,7 @@ app.post('/api/chat', async (req, res) => {
       intentType,
       totalTokens
     });
-    const nextRemaining = clampCredits(creditsRemaining - actualCredits, creditsTotal);
+    let nextRemaining = clampCredits(creditsRemaining - actualCredits, creditsTotal);
 
     const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
     if (sessionId) {
@@ -1409,9 +1482,51 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    await updateUser(user.user_id, {
-      credits_remaining: String(nextRemaining)
-    });
+    try {
+      const chargeResult = await applyCreditDeduction({
+        userId: user.user_id,
+        sessionId,
+        turnId: requestId,
+        creditsToCharge: actualCredits,
+        creditsTotal,
+        metadata: {
+          model: data?.model || req.body?.model || requestedModel,
+          tokens_in: resolvedInputTokens,
+          tokens_out: resolvedOutputTokens
+        }
+      });
+      nextRemaining = Number.isFinite(chargeResult.nextBalance)
+        ? chargeResult.nextBalance
+        : nextRemaining;
+    } catch (chargeError) {
+      if (String(chargeError?.message || '') === 'INSUFFICIENT_CREDITS') {
+        await appendUsageEntry({
+          user,
+          requestId,
+          sessionId,
+          eventType: 'chat_rejected',
+          intentType,
+          model: data?.model || req.body?.model || requestedModel,
+          inputTokens: resolvedInputTokens,
+          outputTokens: resolvedOutputTokens,
+          inputChars,
+          outputChars,
+          totalTokens,
+          reservedCredits: estimatedCredits,
+          actualCredits,
+          creditsCharged: 0,
+          latencyMs: Date.now() - requestStartedAt,
+          status: 'failure'
+        });
+        return res.status(402).json({
+          ok: false,
+          error: 'Insufficient credits for this request',
+          credits_remaining: creditsRemaining,
+          estimated_credits: estimatedCredits
+        });
+      }
+      throw chargeError;
+    }
 
     await appendUsageEntry({
       user,
@@ -1946,7 +2061,7 @@ function parseCookie(cookieHeader, name) {
 }
 
 function mapUserForClient(user) {
-  const creditsRemainingRaw = Number(user.credits_remaining ?? 0);
+  const creditsRemainingRaw = resolveCreditsBalance(user);
   const creditsTotal = Number(user.credits_total ?? 0);
   const creditsRemaining = clampCredits(creditsRemainingRaw, creditsTotal);
   return {
@@ -1965,6 +2080,7 @@ function mapUserForClient(user) {
     credits_remaining: creditsRemaining,
     credits_total: creditsTotal,
     monthly_reset_at: user.monthly_reset_at,
+    daily_credit_limit: resolveDailyCreditLimit(user),
     creditsRemaining: creditsRemaining,
     creditsTotal: creditsTotal
   };
@@ -2031,6 +2147,28 @@ function calculateCreditsUsed({ inputChars, outputChars, intentType, totalTokens
   return Math.ceil(tokenEstimate / 250);
 }
 
+function resolveCreditsBalance(user) {
+  const balance = Number(user?.credits_balance ?? user?.credits_remaining ?? 0);
+  return Number.isFinite(balance) ? balance : 0;
+}
+
+function resolveDailyCreditLimit(user) {
+  const limit = Number(user?.daily_credit_limit);
+  if (Number.isFinite(limit)) {
+    return limit;
+  }
+  return PLAN_DAILY_CAPS[user?.plan_tier] ?? null;
+}
+
+function formatCreditLedgerMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') {
+    return '';
+  }
+  return Object.entries(metadata)
+    .map(([key, value]) => `${key}:${value}`)
+    .join(';');
+}
+
 async function readUsersCSV() {
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
     throw new Error('Missing GitHub credentials for users.csv');
@@ -2089,6 +2227,19 @@ function parseCSV(text) {
     });
     return entry;
   });
+}
+
+async function fetchCreditsUsedTodayForUser(userId) {
+  const pool = getUsageAnalyticsPool();
+  if (pool) {
+    return fetchCreditsUsedToday({ userId });
+  }
+
+  const usageRows = await loadUsageLogRows();
+  const todayKey = new Date().toISOString().slice(0, 10);
+  return usageRows
+    .filter((row) => row.user_id === userId && row.timestamp_utc?.startsWith(todayKey))
+    .reduce((sum, row) => sum + Number(row.credits_charged || row.credits_used || 0), 0);
 }
 
 async function loadUsageLogRows() {
@@ -2774,6 +2925,9 @@ async function findOrCreateUser({ email, provider, providerUserId, displayName }
       plan_tier: FREE_PLAN.tier,
       credits_total: String(FREE_PLAN.monthly_credits),
       credits_remaining: String(FREE_PLAN.monthly_credits),
+      credits_balance: String(FREE_PLAN.monthly_credits),
+      daily_credit_limit: String(PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? ''),
+      credits_last_reset: new Date().toISOString(),
       monthly_reset_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
       newsletter_opt_in: 'true',
       account_status: 'active',
@@ -2958,6 +3112,92 @@ async function appendUsageEntry({
   await appendUsageLog(process.env, entry);
 }
 
+async function findCreditLedgerEntry({ userId, turnId, reason }) {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO || !turnId) {
+    return null;
+  }
+
+  try {
+    const { content } = await readCreditLedger(process.env);
+    const rows = parseCreditLedger(content);
+    return rows.find((row) => {
+      return row.user_id === userId && row.turn_id === turnId && row.reason === reason;
+    }) || null;
+  } catch (error) {
+    console.warn('Failed to read credit ledger.', error);
+    return null;
+  }
+}
+
+async function appendCreditLedgerEntry(entry) {
+  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
+    return;
+  }
+
+  try {
+    await appendCreditLedger(process.env, entry);
+  } catch (error) {
+    console.warn('Failed to append credit ledger entry.', error);
+  }
+}
+
+async function applyCreditDeduction({
+  userId,
+  sessionId,
+  turnId,
+  creditsToCharge,
+  creditsTotal,
+  metadata,
+  reason = 'llm_usage'
+}) {
+  if (!Number.isFinite(creditsToCharge) || creditsToCharge <= 0) {
+    return { nextBalance: resolveCreditsBalance(await getUserById(userId)), alreadyCharged: false };
+  }
+
+  const existing = await findCreditLedgerEntry({ userId, turnId, reason });
+  if (existing) {
+    const balanceAfter = Number(existing.balance_after);
+    const resolvedBalance = Number.isFinite(balanceAfter)
+      ? balanceAfter
+      : resolveCreditsBalance(await getUserById(userId));
+    if (Number.isFinite(balanceAfter)) {
+      await updateUser(userId, {
+        credits_balance: String(balanceAfter),
+        credits_remaining: String(balanceAfter)
+      });
+    }
+    return { nextBalance: resolvedBalance, alreadyCharged: true };
+  }
+
+  const freshUser = await getUserById(userId);
+  if (!freshUser) {
+    throw new Error(`User ${userId} not found`);
+  }
+  const currentBalance = resolveCreditsBalance(freshUser);
+  if (currentBalance < creditsToCharge) {
+    throw new Error('INSUFFICIENT_CREDITS');
+  }
+  const nextBalance = clampCredits(currentBalance - creditsToCharge, creditsTotal);
+
+  await updateUser(userId, {
+    credits_balance: String(nextBalance),
+    credits_remaining: String(nextBalance)
+  });
+
+  await appendCreditLedgerEntry({
+    timestamp_utc: new Date().toISOString(),
+    user_id: userId,
+    session_id: sessionId || '',
+    turn_id: turnId || '',
+    delta: -creditsToCharge,
+    balance_after: nextBalance,
+    reason,
+    metadata: formatCreditLedgerMetadata(metadata)
+  });
+
+  return { nextBalance, alreadyCharged: false };
+}
+
 async function sendMagicEmail(email, link) {
   if (!process.env.RESEND_API_KEY) {
     throw new Error('Missing RESEND_API_KEY');
@@ -3123,8 +3363,9 @@ async function onCheckoutSessionCompleted(session) {
     if (Number.isFinite(credits) && credits > 0) {
       const user = await getUserById(userId);
       if (user) {
-        const nextRemaining = Number(user.credits_remaining || 0) + credits;
+        const nextRemaining = resolveCreditsBalance(user) + credits;
         patch.credits_remaining = String(nextRemaining);
+        patch.credits_balance = String(nextRemaining);
       }
     }
   }
@@ -3147,6 +3388,8 @@ async function onSubscriptionUpsert(subscription) {
     stripe_subscription_id: stripeSubscriptionId,
     plan_tier: plan.tier,
     credits_total: String(plan.monthly_credits || FREE_PLAN.monthly_credits),
+    credits_balance: String(resolveCreditsBalance(user)),
+    daily_credit_limit: String(PLAN_DAILY_CAPS[plan.tier] ?? ''),
     billing_status: normalizeStripeSubStatus(subscription.status)
   });
 }
@@ -3157,7 +3400,7 @@ async function onSubscriptionDeleted(subscription) {
   if (!user) return;
 
   const remaining = Math.min(
-    Number(user.credits_remaining || 0),
+    resolveCreditsBalance(user),
     FREE_PLAN.monthly_credits
   );
 
@@ -3165,7 +3408,9 @@ async function onSubscriptionDeleted(subscription) {
     billing_status: 'canceled',
     plan_tier: 'free',
     credits_total: String(FREE_PLAN.monthly_credits),
-    credits_remaining: String(remaining)
+    credits_remaining: String(remaining),
+    credits_balance: String(remaining),
+    daily_credit_limit: String(PLAN_DAILY_CAPS.free ?? '')
   });
 }
 
@@ -3181,6 +3426,7 @@ async function onInvoicePaymentSucceeded(invoice) {
   await updateUser(user.user_id, {
     billing_status: 'active',
     credits_remaining: String(user.credits_total || FREE_PLAN.monthly_credits),
+    credits_balance: String(user.credits_total || FREE_PLAN.monthly_credits),
     monthly_reset_at: nextResetAt
   });
 }

@@ -136,6 +136,34 @@ ALTER TABLE users
 ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'
 REFERENCES plan_tiers(plan);
 
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS credits_balance INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS daily_credit_limit INTEGER,
+ADD COLUMN IF NOT EXISTS credits_last_reset TIMESTAMPTZ;
+
+CREATE TABLE credit_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_id UUID NOT NULL,
+  session_id UUID,
+  turn_id UUID,
+
+  delta INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+
+  reason TEXT NOT NULL,
+  metadata JSONB,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_credit_ledger_user_time
+  ON credit_ledger (user_id, created_at);
+
+CREATE UNIQUE INDEX uniq_credit_ledger_turn
+  ON credit_ledger (turn_id)
+  WHERE reason = 'llm_usage';
+
 ALTER TABLE usage_events
 ADD COLUMN IF NOT EXISTS input_tokens INTEGER,
 ADD COLUMN IF NOT EXISTS output_tokens INTEGER,

@@ -16,6 +16,9 @@ Canonical file: `data/users.csv`.
 | plan_tier | enum | `free`, `starter`, `pro`, `enterprise`. |
 | credits_total | int | Total credits granted for the current period. |
 | credits_remaining | int | Remaining credits for the current period. |
+| credits_balance | int | Authoritative remaining credits (ledger-backed). |
+| daily_credit_limit | int | Optional per-plan daily cap. |
+| credits_last_reset | ISO 8601 | Last daily reset timestamp. |
 | monthly_reset_at | ISO 8601 | Next monthly reset timestamp. |
 | newsletter_opt_in | boolean | Always true by default. |
 | account_status | enum | `active`, `suspended`. |

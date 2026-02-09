@@ -275,6 +275,17 @@ export async function fetchUsageOverview({ userId }) {
   return result?.rows?.[0] || null;
 }
 
+export async function fetchCreditsUsedToday({ userId }) {
+  const result = await queryUsageAnalytics(
+    `SELECT COALESCE(SUM(credits_used), 0) AS credits_used
+     FROM usage_events
+     WHERE user_id = $1
+       AND created_at >= CURRENT_DATE`,
+    [userId]
+  );
+  return Number(result?.rows?.[0]?.credits_used || 0);
+}
+
 export async function fetchUsageDailySummary({ userId, days }) {
   const result = await queryUsageAnalytics(
     `SELECT
