@@ -1,4 +1,10 @@
 import { estimateTokens, isTokenizerAccurate } from './tokenEstimator.js';
+import {
+  buildHistorySummarySystemMessage,
+  DEFAULT_HISTORY_SUMMARY_THRESHOLD_TOKENS,
+  splitHistoryByThreshold,
+  summarizeHistoryWithModel
+} from './historySummarizer.js';
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_VECTOR_SIZE = 96;
@@ -255,49 +261,6 @@ export async function selectRelevantCodeChunks({ currentQuery, code, maxChunks =
     .map(({ chunk }) => chunk.slice(0, maxCharsPerChunk));
 }
 
-export async function summarizeMessagesWithModel({
-  messages,
-  llmProxyUrl,
-  model = process.env.SUMMARY_MODEL || 'gpt-4.1-nano'
-}) {
-  if (!llmProxyUrl || !Array.isArray(messages) || messages.length === 0) {
-    return '';
-  }
-  const transcript = messages
-    .map((entry) => `${entry.role || 'user'}: ${String(entry.content || '').slice(0, 1200)}`)
-    .join('\n');
-
-  try {
-    const response = await fetch(llmProxyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: 'Summarize prior chat context as concise bullet points preserving requirements, constraints, and pending tasks. Max 220 words.'
-          },
-          { role: 'user', content: transcript }
-        ],
-        temperature: 0.1
-      })
-    });
-    if (!response.ok) {
-      return '';
-    }
-    const data = await response.json();
-    return String(
-      data?.choices?.[0]?.message?.content
-      ?? data?.candidates?.[0]?.content
-      ?? data?.output_text
-      ?? ''
-    ).trim();
-  } catch {
-    return '';
-  }
-}
-
 export async function buildTrimmedContext({
   systemPrompt = '',
   messages = [],
@@ -309,8 +272,11 @@ export async function buildTrimmedContext({
   contextMode = 'balanced',
   query = '',
   summaryTriggerTokens = 5000,
+  historySummaryThresholdTokens = DEFAULT_HISTORY_SUMMARY_THRESHOLD_TOKENS,
+  historySummary = '',
   maxCodeChars = 3000,
-  llmProxyUrl
+  llmProxyUrl,
+  summarizeHistory = summarizeHistoryWithModel
 }) {
   const normalizedMessages = Array.isArray(messages)
     ? messages
@@ -341,8 +307,19 @@ export async function buildTrimmedContext({
       return sum + estimateTokensWithTokenizer(`[${segment.name}]\n${segment.content.slice(0, maxCodeChars)}`, model);
     }, 0);
 
-  const recentMessages = normalizedMessages.slice(-effectiveRecentCount);
-  const relevantPool = normalizedMessages.slice(0, Math.max(0, normalizedMessages.length - effectiveRecentCount));
+  const historySplit = splitHistoryByThreshold({
+    messages: normalizedMessages,
+    recentCount: effectiveRecentCount,
+    thresholdTokens: historySummaryThresholdTokens,
+    model
+  });
+
+  const recentMessages = historySplit.shouldSummarize
+    ? historySplit.recentMessages
+    : normalizedMessages.slice(-effectiveRecentCount);
+  const relevantPool = historySplit.shouldSummarize
+    ? historySplit.olderMessages
+    : normalizedMessages.slice(0, Math.max(0, normalizedMessages.length - effectiveRecentCount));
   const relevantMessages = await selectRelevantMessages(
     query || recentMessages[recentMessages.length - 1]?.content || '',
     relevantPool,
@@ -352,13 +329,14 @@ export async function buildTrimmedContext({
   const hybridMessages = dedupeMessages([...relevantMessages, ...recentMessages]);
   const olderTokens = estimateMessageTokens(relevantPool, model);
 
-  let summaryText = '';
+  let summaryText = String(historySummary || '').trim();
   let summarized = false;
-  if (relevantPool.length && olderTokens > effectiveSummaryTrigger) {
-    summaryText = await summarizeMessagesWithModel({
+  if (relevantPool.length && (historySplit.shouldSummarize || olderTokens > effectiveSummaryTrigger)) {
+    summaryText = await summarizeHistory({
       messages: relevantPool,
       llmProxyUrl,
-      model
+      model,
+      existingSummary: summaryText
     });
     summarized = Boolean(summaryText);
   }
@@ -372,7 +350,7 @@ export async function buildTrimmedContext({
   }
 
   if (summaryText) {
-    const summaryMessage = `Summary of earlier conversation:\n${summaryText}`;
+    const summaryMessage = buildHistorySummarySystemMessage(summaryText);
     const summaryTokens = estimateTokensWithTokenizer(summaryMessage, model);
     if (usedTokens + summaryTokens <= maxTokens) {
       built.push({ role: 'system', content: summaryMessage });
@@ -427,6 +405,8 @@ export async function buildTrimmedContext({
       tokensSaved: Math.max(0, naiveTokens - usedTokens),
       relevanceSelectedCount: relevantMessages.length,
       summarized,
+      historySummaryRetained: Boolean(summaryText),
+      historySummaryThresholdTokens,
       contextMode: modeConfig.mode,
       recentSelectedCount: recentMessages.length,
       codeChunkCount: selectedCode.length

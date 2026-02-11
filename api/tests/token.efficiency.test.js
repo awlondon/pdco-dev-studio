@@ -10,6 +10,7 @@ import {
   getContextTokenBudget,
   selectRelevantMessages
 } from '../../utils/tokenEfficiency.js';
+import { splitHistoryByThreshold } from '../../utils/historySummarizer.js';
 
 test('estimateTokensWithTokenizer returns deterministic token counts', () => {
   const text = 'Build a responsive dashboard with charts and filters.';
@@ -98,4 +99,45 @@ test('buildTrimmedContext enforces token budget and returns efficiency metrics',
   assert.ok(result.savedTokens >= 0);
   assert.ok(result.metrics.tokensSaved >= 0);
   assert.ok(result.metrics.relevanceSelectedCount >= 0);
+});
+
+
+test('splitHistoryByThreshold isolates older messages when token threshold is exceeded', () => {
+  const messages = Array.from({ length: 12 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `Entry ${index} ` + 'history '.repeat(120)
+  }));
+
+  const split = splitHistoryByThreshold({
+    messages,
+    recentCount: 4,
+    thresholdTokens: 600
+  });
+
+  assert.equal(split.shouldSummarize, true);
+  assert.equal(split.recentMessages.length, 4);
+  assert.equal(split.olderMessages.length, 8);
+});
+
+test('buildTrimmedContext carries existing summary and avoids summary regeneration when under threshold', async () => {
+  const messages = [
+    { role: 'user', content: 'Please keep keyboard accessibility.' },
+    { role: 'assistant', content: 'Acknowledged. I will preserve keyboard navigation.' },
+    { role: 'user', content: 'Add a compact table layout.' }
+  ];
+
+  const result = await buildTrimmedContext({
+    systemPrompt: 'You are a coding assistant.',
+    messages,
+    query: 'compact table layout with keyboard support',
+    maxTokens: 500,
+    historySummary: '- Keep keyboard accessibility as a hard requirement.',
+    historySummaryThresholdTokens: 6000,
+    summarizeHistory: async () => 'should-not-be-used',
+    llmProxyUrl: ''
+  });
+
+  assert.match(result.summaryText, /keyboard accessibility/i);
+  assert.equal(result.metrics.summarized, false);
+  assert.equal(result.metrics.historySummaryRetained, true);
 });

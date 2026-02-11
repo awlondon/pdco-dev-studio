@@ -391,6 +391,7 @@ const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
 const DEFAULT_MAX_CONTEXT_MESSAGES = 8;
 const DEFAULT_MAX_RELEVANT_MESSAGES = 8;
 const DEFAULT_MAX_CODE_CONTEXT_CHARS = 3000;
+const DEFAULT_HISTORY_SUMMARY_THRESHOLD_TOKENS = 6000;
 const storageAdapter = createObjectStorageAdapter({
   artifactUploadsDir: ARTIFACT_UPLOADS_DIR,
   profileUploadsDir: PROFILE_UPLOADS_DIR
@@ -1620,6 +1621,12 @@ app.post('/api/chat', async (req, res) => {
       recentUsage: Number(user.credits_used || 0),
       monthlyLimit: Number(user.credits_total || FREE_PLAN.monthly_credits)
     });
+    const existingHistorySummary = String(
+      req.body?.history_summary
+      || req.body?.historySummary
+      || req.body?.context_summary
+      || ''
+    ).trim();
     const trimmedContext = await buildTrimmedContext({
       systemPrompt: CHAT_SYSTEM_PROMPT,
       messages,
@@ -1631,6 +1638,8 @@ app.post('/api/chat', async (req, res) => {
       maxRelevantMessages: DEFAULT_MAX_RELEVANT_MESSAGES,
       contextMode,
       summaryTriggerTokens: Math.floor(adjustedContextBudget * 0.65),
+      historySummaryThresholdTokens: DEFAULT_HISTORY_SUMMARY_THRESHOLD_TOKENS,
+      historySummary: existingHistorySummary,
       maxCodeChars: DEFAULT_MAX_CODE_CONTEXT_CHARS,
       llmProxyUrl: LLM_PROXY_URL
     });
@@ -2006,6 +2015,10 @@ app.post('/api/chat', async (req, res) => {
         routed_model: data?.model || req.body?.model || requestedModel,
         reason: routeDecision.reason
       };
+    }
+
+    if (req.body?.context_summary) {
+      data.context_summary = req.body.context_summary;
     }
 
     res.status(200);
