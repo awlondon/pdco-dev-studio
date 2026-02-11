@@ -5136,6 +5136,7 @@ function setRuntimeState(status) {
     unlockEditor();
   }
   updateUndoRedoState();
+  updatePlayableButtonState();
 }
 
 function scheduleRuntimeStateSync() {
@@ -8093,6 +8094,7 @@ function setSandboxControlsVisible(isVisible) {
 
 function setSandboxAnimationState(state) {
   sandboxAnimationState = state;
+  updatePlayableButtonState();
   if (!sandboxPauseButton || !sandboxResumeButton) {
     return;
   }
@@ -8108,6 +8110,7 @@ function setPreviewExecutionStatus(state, message) {
 
   previewExecutionStatus.textContent = message;
   previewExecutionStatus.className = `preview-execution-status ${state}`;
+  updatePlayableButtonState();
 }
 
 function formatGenerationMetadata(durationMs) {
@@ -8892,12 +8895,13 @@ function updatePlayableButtonState() {
   }
 
   const prompt = chatInput?.value?.trim() || '';
-  const code = (currentCode || '').trim();
-  const hasEnoughInput = prompt.length > 20 || code.length > 0;
+  const promptTokens = estimateTokensForContent(prompt);
+  const hasPromptToken = promptTokens > 0;
+  const hasRunningCode = isRuntimeRunning() || isSandboxExecuting();
 
-  if (!hasEnoughInput) {
+  if (!hasPromptToken && !hasRunningCode) {
     playableButton.disabled = true;
-    playableButton.title = 'Add at least 21 prompt characters or editor code';
+    playableButton.title = 'Add a prompt or run code to enable game mode';
     return;
   }
 
