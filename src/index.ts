@@ -1,41 +1,3 @@
-import { handleAuth } from './auth';
-import { handleMe } from './auth/me';
-
-const DEFAULT_PLANS = [
-  {
-    tier: 'free',
-    display_name: 'Free',
-    monthly_credits: 500,
-    daily_cap: 100,
-    price_label: '$0',
-    stripe_price_id: null
-  },
-  {
-    tier: 'starter',
-    display_name: 'Starter',
-    monthly_credits: 5000,
-    daily_cap: 500,
-    price_label: '$12/mo',
-    stripe_price_id: null
-  },
-  {
-    tier: 'pro',
-    display_name: 'Pro',
-    monthly_credits: 20000,
-    daily_cap: 2000,
-    price_label: '$29/mo',
-    stripe_price_id: null
-  },
-  {
-    tier: 'enterprise',
-    display_name: 'Enterprise',
-    monthly_credits: 100000,
-    daily_cap: 10000,
-    price_label: 'Contact sales',
-    stripe_price_id: null
-  }
-];
-
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://maya-dev-ui.pages.dev',
   'https://dev.primarydesignco.com',
@@ -69,20 +31,11 @@ function corsHeaders(request: Request, env: Env) {
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': request.headers.get('Access-Control-Request-Headers')
+      || 'Content-Type,Authorization',
     Vary: 'Origin'
   };
-}
-
-function jsonWithCors(payload: unknown, request: Request, env: Env, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders(request, env)
-    }
-  });
 }
 
 function normalizePathname(pathname: string) {
@@ -92,57 +45,63 @@ function normalizePathname(pathname: string) {
     : withoutApiPrefix;
 }
 
+function canonicalApiOrigin(env: Env) {
+  const origin = env.CANONICAL_API_ORIGIN || env.API_ORIGIN || env.API_BASE_URL;
+  if (!origin) {
+    throw new Error('Missing CANONICAL_API_ORIGIN');
+  }
+  return origin.replace(/\/$/, '');
+}
+
+function withCors(response: Response, headers: Record<string, string>) {
+  const nextHeaders = new Headers(response.headers);
+  Object.entries(headers).forEach(([key, value]) => nextHeaders.set(key, value));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: nextHeaders
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env) {
+    const baseCorsHeaders = corsHeaders(request, env);
+
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders(request, env)
+        headers: baseCorsHeaders
       });
     }
 
-    const url = new URL(request.url);
-    const pathname = normalizePathname(url.pathname);
-
-    if (pathname.startsWith('/auth/')) {
-      const response = await handleAuth(new Request(new URL(pathname, request.url), request), env);
-      const body = await response.text();
-      const parsed = body ? JSON.parse(body) : {};
-      return jsonWithCors(parsed, request, env, response.status);
-    }
-
-    if (pathname === '/me') {
-      if (request.method !== 'GET') {
-        return jsonWithCors({ ok: false, error: 'Method not allowed' }, request, env, 405);
-      }
-      const response = await handleMe(request, env);
-      const body = await response.text();
-      const parsed = body ? JSON.parse(body) : {};
-      return jsonWithCors(parsed, request, env, response.status);
-    }
-
-    if (pathname === '/plans' && request.method === 'GET') {
-      return jsonWithCors({ ok: true, plans: DEFAULT_PLANS }, request, env);
-    }
-
-    if (pathname === '/usage/overview' && request.method === 'GET') {
-      return jsonWithCors(
-        {
-          ok: true,
-          overview: {
-            total_requests: 0,
-            total_credits: 0,
-            avg_latency_ms: 0,
-            success_rate: 1
-          },
-          credits_used_today: 0,
-          daily_limit: 100
-        },
-        request,
-        env
+    let origin;
+    try {
+      origin = canonicalApiOrigin(env);
+    } catch (error) {
+      return withCors(
+        new Response(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Bad gateway' }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' }
+        }),
+        baseCorsHeaders
       );
     }
 
-    return jsonWithCors({ ok: false, error: 'Not found' }, request, env, 404);
+    const url = new URL(request.url);
+    const upstreamPath = normalizePathname(url.pathname);
+    const upstreamUrl = new URL(`${origin}${upstreamPath}${url.search}`);
+
+    const headers = new Headers(request.headers);
+    headers.set('x-forwarded-host', url.host);
+    headers.set('x-forwarded-proto', url.protocol.replace(':', ''));
+
+    const upstreamResponse = await fetch(upstreamUrl.toString(), {
+      method: request.method,
+      headers,
+      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+      redirect: 'manual'
+    });
+
+    return withCors(upstreamResponse, baseCorsHeaders);
   }
 };

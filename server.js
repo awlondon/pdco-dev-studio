@@ -2923,25 +2923,19 @@ app.post('/api/stripe/webhook', async (req, res) => {
         stripe_event_id: stripeEventId,
         user_id: userId,
         type: event.type,
-        outcome: 'duplicate'
+        outcome: 'replay_rejected'
       });
-      return res.json({ received: true, duplicate: true });
+      return res.status(200).json({ received: true, duplicate: true });
     }
 
-    await handleStripeEvent(event);
     await updateBillingEventStatus({
       stripeEventId,
-      status: 'processed',
+      status: 'processing',
       userId
     });
-    logStructured('info', 'stripe_webhook_processed', {
-      stripe_event_id: stripeEventId,
-      user_id: userId,
-      type: event.type,
-      outcome: 'processed'
-    });
 
-    return res.json({ received: true });
+    queueStripeEventProcessing({ event, stripeEventId, userId });
+    return res.status(202).json({ received: true, queued: true });
   } catch (error) {
     if (stripeEventId) {
       await updateBillingEventStatus({
@@ -4025,6 +4019,38 @@ async function createStripeBillingPortalSession({ customerId, returnUrl }) {
   }
 
   return response.json();
+}
+
+function queueStripeEventProcessing({ event, stripeEventId, userId }) {
+  setImmediate(async () => {
+    try {
+      await handleStripeEvent(event);
+      await updateBillingEventStatus({
+        stripeEventId,
+        status: 'processed',
+        userId
+      });
+      logStructured('info', 'stripe_webhook_processed', {
+        stripe_event_id: stripeEventId,
+        user_id: userId,
+        type: event.type,
+        outcome: 'processed'
+      });
+    } catch (error) {
+      await updateBillingEventStatus({
+        stripeEventId,
+        status: 'failed',
+        userId
+      });
+      logStructured('error', 'stripe_webhook_processing_failed', {
+        stripe_event_id: stripeEventId,
+        user_id: userId,
+        type: event?.type,
+        error: error?.message || 'unknown_error'
+      });
+      console.error('Stripe webhook async processing failed.', error);
+    }
+  });
 }
 
 function verifyStripeSignature({ rawBody, signatureHeader, webhookSecret }) {

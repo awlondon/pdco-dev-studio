@@ -9,9 +9,10 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 const API_BASE =
-  location.hostname.includes('localhost')
+  window.API_BASE
+  || (location.hostname.includes('localhost')
     ? 'http://localhost:8080'
-    : 'https://maya-api-136741418395.us-central1.run.app';
+    : 'https://maya-api-136741418395.us-central1.run.app');
 
 const SESSION_STATE_SERVER_PERSIST_THRESHOLD = 200_000;
 

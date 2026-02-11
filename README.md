@@ -37,9 +37,10 @@ This UI **must** talk to a backend endpoint that proxies requests to OpenAI. A s
 
 Recommended deployment option for the backend:
 
-- **Cloudflare Workers** (the UI is configured to call `https://maya-llm-proxy.workers.dev/chat`)
+- **Node/Express API (`server.js`)** as the canonical backend. This single API surface owns auth, `/api/me`, chat proxying, artifacts, analytics, and billing webhooks.
+- **Cloudflare Worker (`src/index.ts`)** is optional and now acts only as an edge passthrough. If used, set `CANONICAL_API_ORIGIN` to your Express API base URL.
 
-If you host the UI on a static site, keep the API key on the server (for example, as a Worker secret).
+If you host the UI on a static site, keep the API key on the server.
 
 ## Features
 
