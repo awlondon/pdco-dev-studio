@@ -81,6 +81,7 @@ import { getDbPool } from './utils/queryLayer.js';
 import { buildPlayablePrompt } from './server/utils/playableWrapper.js';
 import { buildRetryPrompt } from './server/utils/retryWrapper.js';
 import { normalizeRole, resolveRoleForUser } from './auth/middleware.js';
+import { createAgentRouter } from './agent/routes.js';
 
 const app = express();
 const revokedSessionStore = new Map();
@@ -594,6 +595,16 @@ app.use((req, res, next) => {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
+
+app.use('/agent', createAgentRouter({
+  getSessionFromRequest,
+  verifyStripeSignature
+}));
+
+app.use('/api/agent', createAgentRouter({
+  getSessionFromRequest,
+  verifyStripeSignature
+}));
 
 /**
  * SESSION CHECK

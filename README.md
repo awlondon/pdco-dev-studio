@@ -67,7 +67,8 @@ User accounts, billing, and credits are stored in Postgres. To bootstrap a new d
 1. Apply `data/migrations/001_create_user_storage.sql`.
 2. Apply `data/migrations/002_create_artifacts_profiles.sql`.
 3. Apply `data/migrations/010_transactional_usage_and_agent_runs.sql`.
-4. (Optional) Import legacy CSV users (and optionally usage rows):
+4. Apply `data/migrations/011_agent_findings_and_run_config.sql`.
+5. (Optional) Import legacy CSV users (and optionally usage rows):
 
    ```bash
    node scripts/import-users.js
