@@ -1,12 +1,4 @@
-import { getUsageAnalyticsPool } from './usageAnalytics.js';
-
-function getProfilesDbPool() {
-  const pool = getUsageAnalyticsPool();
-  if (!pool) {
-    throw new Error('DATABASE_URL is required for profile storage.');
-  }
-  return pool;
-}
+import { requireDbPool } from './queryLayer.js';
 
 function toIsoString(value) {
   if (!value) return null;
@@ -36,7 +28,7 @@ export function mapProfileRow(row) {
 }
 
 export async function fetchProfileByUserId(userId) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const result = await pool.query(
     `SELECT *
      FROM profiles
@@ -48,7 +40,7 @@ export async function fetchProfileByUserId(userId) {
 }
 
 export async function fetchProfileByHandle(handle) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const result = await pool.query(
     `SELECT *
      FROM profiles
@@ -60,7 +52,7 @@ export async function fetchProfileByHandle(handle) {
 }
 
 export async function fetchProfileHandleOwner(handle) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const result = await pool.query(
     `SELECT user_id
      FROM profiles
@@ -80,7 +72,7 @@ export async function upsertProfile({
   demographics,
   createdAt
 }) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const result = await pool.query(
     `INSERT INTO profiles
       (user_id, handle, display_name, bio, avatar_url, age, gender, city, country, created_at, updated_at)
@@ -115,7 +107,7 @@ export async function upsertProfile({
 }
 
 export async function buildProfileStats(userId) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const artifactResult = await pool.query(
     `SELECT
       COUNT(*) FILTER (WHERE visibility = 'public') AS public_artifacts,
@@ -140,7 +132,7 @@ export async function buildProfileStats(userId) {
 }
 
 export async function deleteProfile(userId) {
-  const pool = getProfilesDbPool();
+  const pool = requireDbPool();
   const result = await pool.query(
     `DELETE FROM profiles
      WHERE user_id = $1`,
