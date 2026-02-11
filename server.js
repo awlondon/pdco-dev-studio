@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveUserStoreDriver, isCsvUserStoreDriver } from './db/index.js';
+import { recordUsageEvent } from './db/usage.js';
 import {
   fetchCheapestAllowedModel,
   fetchModelPricing,
@@ -21,7 +23,6 @@ import {
   getUsageAnalyticsPool,
   insertLlmTurnLog,
   insertRouteDecision,
-  insertUsageEvent,
   isPremiumModel
 } from './utils/usageAnalytics.js';
 import {
@@ -82,6 +83,57 @@ import { buildRetryPrompt } from './server/utils/retryWrapper.js';
 import { createHttpError, logStructured } from './utils/logger.js';
 
 const app = express();
+const revokedSessionStore = new Map();
+const authRateLimitStore = new Map();
+
+function splitEmailList(value) {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function resolveUserRole(user) {
+  return resolveRoleForUser(user, {
+    adminEmails: splitEmailList(process.env.ADMIN_EMAILS),
+    internalEmails: splitEmailList(process.env.INTERNAL_EMAILS)
+  });
+}
+
+function revokeSessionJti(jti) {
+  if (!jti) return;
+  revokedSessionStore.set(jti, Date.now() + (SESSION_REVOCATION_TTL_SECONDS * 1000));
+}
+
+function isSessionRevoked(jti) {
+  if (!jti) return false;
+  const expiresAt = revokedSessionStore.get(jti);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    revokedSessionStore.delete(jti);
+    return false;
+  }
+  return true;
+}
+
+function enforceLocalAuthRateLimit({ key, limit, windowMs }) {
+  const now = Date.now();
+  const current = authRateLimitStore.get(key);
+  if (!current || current.resetAt <= now) {
+    authRateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= limit) {
+    return false;
+  }
+  current.count += 1;
+  return true;
+}
+
+function getRequestIp(req) {
+  return req.header('cf-connecting-ip') || req.header('x-forwarded-for') || req.ip || 'unknown';
+}
+
 
 const REQUEST_LOG_EVENT = 'http_request';
 const MAX_CHAT_MESSAGE_CHARS = 12000;
@@ -179,13 +231,15 @@ function enforceRequestValidation(req, _res, next) {
 async function recordUsageEventToDb({
   user,
   sessionId,
+  requestId,
   intentType,
   model,
   inputTokens,
   outputTokens,
   creditsCharged,
   latencyMs,
-  status
+  status,
+  timestamp
 }) {
   if (!user || !model) {
     return;
@@ -207,8 +261,9 @@ async function recordUsageEventToDb({
     ) * Number(pricing.credit_multiplier)
     : 0;
 
-  await insertUsageEvent({
+  await recordUsageEvent({
     userId: user.user_id,
+    requestId,
     sessionId: sessionId || crypto.randomUUID(),
     intentType,
     model,
@@ -218,7 +273,9 @@ async function recordUsageEventToDb({
     creditNormFactor,
     modelCostUsd,
     latencyMs: latencyMs ?? 0,
-    success: status === 'success'
+    success: status === 'success',
+    status: status === 'success' ? 'success' : 'error',
+    timestamp
   });
 }
 
@@ -229,6 +286,9 @@ function usageEventLoggingMiddleware(req, _res, next) {
 
 app.use(usageEventLoggingMiddleware);
 app.use(requestContextMiddleware);
+
+const USER_STORE_DRIVER = resolveUserStoreDriver(process.env);
+const CSV_USER_STORE_FALLBACK_ENABLED = isCsvUserStoreDriver(process.env);
 
 const CREDIT_MONTHLY_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const CREDIT_DAILY_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -279,6 +339,8 @@ const LLM_PROXY_URL =
   process.env.LLM_PROXY_URL
   || 'https://text-code.primarydesigncompany.workers.dev';
 const SESSION_COOKIE_NAME = 'maya_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const SESSION_REVOCATION_TTL_SECONDS = 60 * 60 * 24 * 35;
 const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
 const PLAN_DAILY_CAPS = {
   free: 100,
@@ -613,6 +675,16 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.use('/agent', createAgentRouter({
+  getSessionFromRequest,
+  verifyStripeSignature
+}));
+
+app.use('/api/agent', createAgentRouter({
+  getSessionFromRequest,
+  verifyStripeSignature
+}));
+
 /**
  * SESSION CHECK
  */
@@ -636,9 +708,25 @@ app.get('/api/me', async (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
+  const session = await getSessionFromRequest(req);
+  if (session?.jti) {
+    revokeSessionJti(session.jti);
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+app.post('/api/auth/session/revoke', async (req, res) => {
+  const session = await getSessionFromRequest(req);
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  }
+  if (session.jti) {
+    revokeSessionJti(session.jti);
+  }
+  clearSessionCookie(res);
+  return res.json({ ok: true, revoked: Boolean(session.jti) });
 });
 
 app.patch('/api/account/preferences', async (req, res) => {
@@ -2304,7 +2392,19 @@ app.post('/api/chat', async (req, res) => {
           model: data?.model || req.body?.model || requestedModel,
           tokens_in: resolvedInputTokens,
           tokens_out: resolvedOutputTokens
-        })
+        }),
+        usageEvent: {
+          sessionId,
+          intentType,
+          model: data?.model || req.body?.model || requestedModel,
+          inputTokens: resolvedInputTokens,
+          outputTokens: resolvedOutputTokens,
+          totalTokens: Number.isFinite(totalTokens) ? totalTokens : (resolvedInputTokens + resolvedOutputTokens),
+          creditsUsed: actualCredits,
+          latencyMs: Date.now() - requestStartedAt,
+          status: 'success',
+          sourceHash: crypto.createHash('sha256').update(`${user.user_id}:${requestId}:success`).digest('hex')
+        }
       });
       nextRemaining = Number.isFinite(chargeResult.nextBalance)
         ? chargeResult.nextBalance
@@ -2681,6 +2781,13 @@ app.get('/api/usage/token-efficiency', async (req, res) => {
  */
 app.post('/api/auth/google', async (req, res) => {
   try {
+    const ip = getRequestIp(req);
+    const googleLimit = Number(process.env.AUTH_RATE_LIMIT_GOOGLE || 20);
+    const googleWindowMs = Number(process.env.AUTH_RATE_LIMIT_GOOGLE_WINDOW_MS || 60_000);
+    if (!enforceLocalAuthRateLimit({ key: `auth:google:${ip}`, limit: googleLimit, windowMs: googleWindowMs })) {
+      return res.status(429).json({ ok: false, error: 'Too many requests' });
+    }
+
     const idToken = typeof req.body?.id_token === 'string' ? req.body.id_token.trim() : '';
     if (!idToken) {
       return res.status(400).json({ ok: false, error: 'Missing id_token' });
@@ -2728,6 +2835,13 @@ app.post('/api/auth/google', async (req, res) => {
 app.post(['/api/auth/email/request', '/api/v1/auth/email/request'], async (req, res) => {
   try {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const ip = getRequestIp(req);
+    const magicLimit = Number(process.env.AUTH_RATE_LIMIT_MAGIC || 6);
+    const magicWindowMs = Number(process.env.AUTH_RATE_LIMIT_MAGIC_WINDOW_MS || 60_000);
+    const rateKey = `auth:magic:${email || ip}`;
+    if (!enforceLocalAuthRateLimit({ key: rateKey, limit: magicLimit, windowMs: magicWindowMs })) {
+      return res.status(429).json({ ok: false, error: 'Too many requests' });
+    }
     if (!email) {
       return res.status(400).json({ ok: false, error: 'Email required' });
     }
@@ -3075,6 +3189,7 @@ app.use((err, req, res, _next) => {
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
   console.log('Maya API listening on', port);
+  logStructured('info', 'user_store_driver_selected', { user_store_driver: USER_STORE_DRIVER });
   startCreditResetScheduler();
 });
 
@@ -3149,12 +3264,18 @@ async function issueSessionCookie(res, req, user, options = {}) {
     res.status(500).json({ ok: false, error: 'Missing SESSION_SECRET' });
     return;
   }
+  const role = resolveUserRole(user);
+  const jti = crypto.randomUUID();
   const token = await createSignedToken(
     {
       sub: user.user_id,
       email: user.email,
       provider: user.auth_provider,
-      iat: Math.floor(Date.now() / 1000)
+      role,
+      jti,
+      session_version: Number(user.session_version || 1),
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS
     },
     process.env.SESSION_SECRET
   );
@@ -3164,7 +3285,8 @@ async function issueSessionCookie(res, req, user, options = {}) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=None'
+    'SameSite=Lax',
+    `Max-Age=${SESSION_MAX_AGE_SECONDS}`
   ];
 
   if (process.env.COOKIE_DOMAIN) {
@@ -3194,7 +3316,7 @@ function clearSessionCookie(res) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=None',
+    'SameSite=Lax',
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT'
   ];
 
@@ -3253,6 +3375,7 @@ function mapUserForClient(user) {
     created_at: user.created_at,
     plan: user.plan_tier,
     plan_tier: user.plan_tier,
+    role: resolveUserRole(user),
     billing_status: user.billing_status,
     credits_remaining: creditsRemaining,
     credits_total: creditsTotal,
@@ -3356,6 +3479,9 @@ function parseCSV(text) {
 }
 
 async function loadUsageLogRows() {
+  if (!CSV_USER_STORE_FALLBACK_ENABLED) {
+    return [];
+  }
   try {
     const fileUrl = new URL('./data/usage_log.csv', import.meta.url);
     const text = await fs.readFile(fileUrl, 'utf8');
@@ -4018,31 +4144,35 @@ async function appendUsageEntry({
       await req.logUsageEventToDb({
         user,
         sessionId,
+        requestId,
         intentType,
         model,
         inputTokens,
         outputTokens,
         creditsCharged,
         latencyMs,
-        status
+        status,
+        timestamp: timestampValue
       });
     } else {
       await recordUsageEventToDb({
         user,
         sessionId,
+        requestId,
         intentType,
         model,
         inputTokens,
         outputTokens,
         creditsCharged,
         latencyMs,
-        status
+        status,
+        timestamp: timestampValue
       });
     }
   }
 
 
-  if (process.env.GITHUB_TOKEN && process.env.GITHUB_REPO) {
+  if (CSV_USER_STORE_FALLBACK_ENABLED && process.env.GITHUB_TOKEN && process.env.GITHUB_REPO) {
     const { appendUsageLog } = await import('./api/usageLog.js');
     await appendUsageLog(process.env, entry);
   }

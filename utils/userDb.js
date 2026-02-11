@@ -769,6 +769,7 @@ export async function applyCreditDeduction({
   creditsTotal,
   metadata,
   reason = 'llm_usage',
+  usageEvent = null,
   pool
 }) {
   if (!Number.isFinite(creditsToCharge) || creditsToCharge <= 0) {
@@ -921,6 +922,37 @@ export async function applyCreditDeduction({
         metadata || ''
       ]
     );
+
+
+    if (usageEvent && usageEvent.model) {
+      const usageStatus = usageEvent.status === 'success' ? 'success' : 'error';
+      await client.query(
+        `INSERT INTO usage_events
+          (user_id, session_id, intent, model, input_tokens, output_tokens, tokens_requested, tokens_used,
+           credits_used, credit_norm_factor, model_cost_usd, cost, latency_ms, success, status, event_timestamp, source_hash)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (source_hash) DO NOTHING`,
+        [
+          userId,
+          usageEvent.sessionId || sessionId || null,
+          usageEvent.intentType || 'text',
+          usageEvent.model,
+          Number(usageEvent.inputTokens || 0),
+          Number(usageEvent.outputTokens || 0),
+          Number(usageEvent.totalTokens || 0),
+          Number(usageEvent.outputTokens || 0),
+          Number(usageEvent.creditsUsed || creditsToCharge || 0),
+          Number(usageEvent.creditNormFactor || 1),
+          Number(usageEvent.modelCostUsd || 0),
+          Number(usageEvent.latencyMs || 0),
+          usageStatus === 'success',
+          usageStatus,
+          usageEvent.timestamp || new Date(),
+          usageEvent.sourceHash || null
+        ]
+      );
+    }
 
     await client.query('COMMIT');
     logCreditEvent('info', 'credit_deduction_applied', {

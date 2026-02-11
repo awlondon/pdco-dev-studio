@@ -1572,23 +1572,33 @@ html, body {
 }
 
 .playable-btn {
-  font-size: 20px;
-  background: #222;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
-  border-radius: 6px;
-  padding: 6px 10px;
-  min-width: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 120px;
   min-height: 40px;
 }
 
+.playable-btn-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
 .playable-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
 .playable-btn:hover:not(:disabled) {
-  background-color: rgba(0, 0, 0, 0.08);
-  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.16);
 }
 
 .chat-controls {

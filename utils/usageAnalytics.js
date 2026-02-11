@@ -30,14 +30,20 @@ export async function insertUsageEvent({
   creditNormFactor,
   modelCostUsd,
   latencyMs,
-  success
+  success,
+  status,
+  timestamp,
+  sourceHash
 }) {
+  const normalizedStatus = status || (success ? 'success' : 'error');
   const result = await queryUsageAnalytics(
     `INSERT INTO usage_events
       (user_id, session_id, intent, model, input_tokens, output_tokens, tokens_requested, tokens_used,
-       credits_used, credit_norm_factor, model_cost_usd, cost, latency_ms, success)
+       credits_used, credit_norm_factor, model_cost_usd, cost, latency_ms, success, status, event_timestamp, source_hash)
      VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+     ON CONFLICT (source_hash)
+     DO NOTHING`,
     [
       userId,
       sessionId,
@@ -52,7 +58,10 @@ export async function insertUsageEvent({
       modelCostUsd,
       modelCostUsd,
       latencyMs,
-      success
+      success,
+      normalizedStatus,
+      timestamp || new Date(),
+      sourceHash || null
     ]
   );
   return result;

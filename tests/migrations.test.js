@@ -48,10 +48,10 @@ test('centralized schema migration backfills users and keeps usage_events indexe
   assert.match(migration.sql, /CREATE INDEX IF NOT EXISTS usage_events_user_created_idx/i);
 });
 
-test('latest gallery migration preserves category column and index', () => {
+test('latest migration includes agent findings schema updates', () => {
   const last = readMigrations().at(-1);
   assert.ok(last);
-  assert.equal(last.file, '009_gallery_categories.sql');
-  assert.match(last.sql, /ADD COLUMN IF NOT EXISTS category/i);
-  assert.match(last.sql, /CREATE INDEX IF NOT EXISTS artifacts_public_category_updated_idx/i);
+  assert.equal(last.file, '011_agent_findings_and_run_config.sql');
+  assert.match(last.sql, /ALTER TABLE agent_runs/i);
+  assert.match(last.sql, /CREATE TABLE IF NOT EXISTS agent_findings/i);
 });

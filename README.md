@@ -66,11 +66,24 @@ User accounts, billing, and credits are stored in Postgres. To bootstrap a new d
 
 1. Apply `data/migrations/001_create_user_storage.sql`.
 2. Apply `data/migrations/002_create_artifacts_profiles.sql`.
-3. (Optional) Import legacy CSV users:
+3. Apply `data/migrations/010_transactional_usage_and_agent_runs.sql`.
+4. Apply `data/migrations/011_agent_findings_and_run_config.sql`.
+5. (Optional) Import legacy CSV users (and optionally usage rows):
 
    ```bash
    node scripts/import-users.js
+   node scripts/import-users.js --usage
    ```
+
+
+## User store driver
+
+Set `USER_STORE_DRIVER` to control storage behavior:
+
+- `postgres` (default): authoritative user + usage storage in Postgres.
+- `csv`: legacy compatibility mode for GitHub CSV-backed worker paths.
+
+When `USER_STORE_DRIVER=postgres`, the server does not append usage to CSV files in normal operation.
 
 ## Object storage configuration
 
