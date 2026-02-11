@@ -1,15 +1,7 @@
-import { Pool } from 'pg';
-
-let pgPool = null;
+import { getDbPool } from './queryLayer.js';
 
 export function getUsageAnalyticsPool() {
-  if (!process.env.DATABASE_URL) {
-    return null;
-  }
-  if (!pgPool) {
-    pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
-  }
-  return pgPool;
+  return getDbPool();
 }
 
 async function queryUsageAnalytics(text, params) {
@@ -42,9 +34,10 @@ export async function insertUsageEvent({
 }) {
   const result = await queryUsageAnalytics(
     `INSERT INTO usage_events
-      (user_id, session_id, intent, model, input_tokens, output_tokens, credits_used, credit_norm_factor, model_cost_usd, latency_ms, success)
+      (user_id, session_id, intent, model, input_tokens, output_tokens, tokens_requested, tokens_used,
+       credits_used, credit_norm_factor, model_cost_usd, cost, latency_ms, success)
      VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       userId,
       sessionId,
@@ -52,8 +45,11 @@ export async function insertUsageEvent({
       model,
       inputTokens,
       outputTokens,
+      Number(inputTokens || 0) + Number(outputTokens || 0),
+      Number(outputTokens || 0),
       creditsUsed,
       creditNormFactor,
+      modelCostUsd,
       modelCostUsd,
       latencyMs,
       success
