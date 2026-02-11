@@ -175,7 +175,6 @@ const chatMessages = document.getElementById('chat-messages');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
-const playableButton = document.getElementById('playable-controller-btn');
 const creditPreviewEl = document.getElementById('credit-preview');
 const chatContextMode = document.getElementById('chatContextMode');
 const micButton = document.getElementById('btn-mic');
@@ -473,6 +472,49 @@ function getEditorValue() {
     return codeEditor.value;
   }
   return defaultInterfaceCode;
+}
+
+function getEditorCode() {
+  return getEditorValue();
+}
+
+function getPromptInputElement() {
+  return document.getElementById('chat-input') || chatInput;
+}
+
+function getPlayableButtonElement() {
+  return document.getElementById('playable-controller-btn');
+}
+
+function getPromptInput() {
+  return getPromptInputElement()?.value || '';
+}
+
+function initComposerControls() {
+  const promptInput = getPromptInputElement();
+  const playableBtn = getPlayableButtonElement();
+
+  if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
+    playableBtn.dataset.composerBound = 'true';
+    playableBtn.addEventListener('click', () => {
+      sendChat({
+        playableMode: true,
+        userPrompt: getPromptInput(),
+        code: getEditorCode()
+      });
+    });
+  }
+
+  if (promptInput && promptInput.dataset.composerBound !== 'true') {
+    promptInput.dataset.composerBound = 'true';
+    promptInput.addEventListener('input', () => {
+      requestCreditPreviewUpdate();
+      requestThrottleUpdate();
+      updatePlayableButtonState();
+    });
+  }
+
+  updatePlayableButtonState();
 }
 
 function setEditorValue(value = '') {
@@ -8951,12 +8993,13 @@ function updateRetryButton() {
 
 
 function updatePlayableButtonState() {
+  const playableButton = getPlayableButtonElement();
   if (!playableButton) {
     return;
   }
 
-  const prompt = chatInput?.value?.trim() || '';
-  const codeText = getEditorValue().trim();
+  const prompt = getPromptInput().trim();
+  const codeText = getEditorCode().trim();
   const hasPromptText = prompt.length >= 1;
   const hasCodeText = codeText.length >= 1;
 
@@ -8992,7 +9035,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     return;
   }
 
-  const promptSource = typeof userPrompt === 'string' ? userPrompt : chatInput.value;
+  const promptSource = typeof userPrompt === 'string' ? userPrompt : getPromptInput();
   const userInput = promptSource.trim();
   const resolvedCodeInput = typeof code === 'string' ? code : currentCode;
   const effectiveInput = retryMode
@@ -9316,16 +9359,13 @@ chatForm.addEventListener('submit', (event) => {
   sendChat();
 });
 
-if (playableButton) {
-  playableButton.addEventListener('click', () => {
-    const promptText = chatInput?.value || '';
-    const codeText = getEditorValue();
-    sendChat({
-      playableMode: true,
-      userPrompt: promptText,
-      code: codeText
-    });
+initComposerControls();
+
+if (chatForm && typeof MutationObserver !== 'undefined') {
+  const composerObserver = new MutationObserver(() => {
+    initComposerControls();
   });
+  composerObserver.observe(chatForm, { childList: true, subtree: true });
 }
 
 if (clearChatButton) {
@@ -9333,14 +9373,6 @@ if (clearChatButton) {
     openClearChatModal();
   });
   updateClearChatButtonState();
-}
-
-if (chatInput) {
-  chatInput.addEventListener('input', () => {
-    requestCreditPreviewUpdate();
-    requestThrottleUpdate();
-    updatePlayableButtonState();
-  });
 }
 
 if (creditBadge && creditPanel) {
