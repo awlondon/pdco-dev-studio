@@ -1573,6 +1573,7 @@ html, body {
 
 .playable-btn {
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   gap: 6px;
   font-size: 14px;
@@ -1604,15 +1605,16 @@ html, body {
 .chat-controls {
   width: 100%;
   display: flex;
-  flex-direction: column !important;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .playable-wrapper-container {
   display: flex;
-  justify-content: center;
-  margin-bottom: 6px;
+  justify-content: flex-start;
   width: 100%;
+  min-height: 48px;
 }
 
 .chat-input-row {
