@@ -86,7 +86,38 @@ const PLAN_DAILY_CAPS = {
   free: 100,
   starter: 500,
   pro: 2000,
+  enterprise: 10000,
   power: 10000
+};
+const DEFAULT_PLAN_CATALOG = {
+  free: {
+    display_name: 'Free',
+    monthly_credits: FREE_PLAN.monthly_credits,
+    daily_cap: PLAN_DAILY_CAPS.free,
+    price_label: '$0',
+    stripe_price_id: null
+  },
+  starter: {
+    display_name: 'Starter',
+    monthly_credits: 5000,
+    daily_cap: PLAN_DAILY_CAPS.starter,
+    price_label: '$12/mo',
+    stripe_price_id: process.env.STRIPE_PRICE_STARTER || null
+  },
+  pro: {
+    display_name: 'Pro',
+    monthly_credits: 20000,
+    daily_cap: PLAN_DAILY_CAPS.pro,
+    price_label: '$29/mo',
+    stripe_price_id: process.env.STRIPE_PRICE_PRO || null
+  },
+  enterprise: {
+    display_name: 'Enterprise',
+    monthly_credits: 100000,
+    daily_cap: PLAN_DAILY_CAPS.enterprise,
+    price_label: 'Contact sales',
+    stripe_price_id: process.env.STRIPE_PRICE_ENTERPRISE || null
+  }
 };
 const STRIPE_PLAN_MAP = (() => {
   const raw = process.env.STRIPE_PLAN_MAP;
@@ -126,14 +157,6 @@ function logStructured(level, message, context = {}) {
 }
 const PLAN_CATALOG = (() => {
   const catalog = {};
-  const baseFree = {
-    tier: FREE_PLAN.tier,
-    display_name: 'Free',
-    stripe_price_id: null,
-    monthly_credits: FREE_PLAN.monthly_credits,
-    daily_cap: PLAN_DAILY_CAPS[FREE_PLAN.tier] ?? null,
-    price_label: '$0'
-  };
 
   const applyEntry = (tier, entry = {}) => {
     const normalizedTier = String(tier).toLowerCase();
@@ -155,6 +178,11 @@ const PLAN_CATALOG = (() => {
       price_label: entry.price_label || entry.priceLabel || catalog[normalizedTier]?.price_label || null
     };
   };
+
+
+  Object.entries(DEFAULT_PLAN_CATALOG).forEach(([tier, entry]) => {
+    applyEntry(tier, entry);
+  });
 
   const rawCatalog = process.env.STRIPE_PLAN_CATALOG;
   if (rawCatalog) {
@@ -179,7 +207,15 @@ const PLAN_CATALOG = (() => {
     });
   }
 
-  applyEntry(baseFree.tier, baseFree);
+  if (catalog.power && !catalog.enterprise) {
+    applyEntry('enterprise', {
+      ...catalog.power,
+      tier: 'enterprise',
+      display_name: 'Enterprise'
+    });
+  }
+
+  applyEntry(FREE_PLAN.tier, DEFAULT_PLAN_CATALOG.free);
   return catalog;
 })();
 const PLAN_BY_PRICE_ID = Object.values(PLAN_CATALOG).reduce((acc, plan) => {
@@ -2396,6 +2432,58 @@ app.post('/api/auth/apple', async (req, res) => {
   }
 });
 
+async function createSubscriptionCheckoutSession({ user, planTier, req }) {
+  const requestedTier = String(planTier || 'starter').toLowerCase();
+  const plan = PLAN_CATALOG[requestedTier];
+  if (!plan || !plan.stripe_price_id) {
+    const error = new Error('Invalid plan tier');
+    error.status = 400;
+    throw error;
+  }
+
+  const stripeSession = await createStripeCheckoutSession({
+    mode: 'subscription',
+    priceId: plan.stripe_price_id,
+    user,
+    metadata: {
+      purchase_type: 'subscription',
+      plan_tier: plan.tier,
+      price_id: plan.stripe_price_id
+    },
+    successUrl: process.env.STRIPE_SUCCESS_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`,
+    cancelUrl: process.env.STRIPE_CANCEL_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`
+  });
+
+  return stripeSession;
+}
+
+app.post('/api/billing/subscriptions', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    const stripeSession = await createSubscriptionCheckoutSession({
+      user,
+      planTier: req.body?.plan_tier,
+      req
+    });
+
+    return res.json({ ok: true, url: stripeSession.url });
+  } catch (error) {
+    if (error?.status === 400) {
+      return res.status(400).json({ ok: false, error: error.message });
+    }
+    console.error('Subscription checkout failed.', error);
+    return res.status(500).json({ ok: false, error: 'Checkout failed' });
+  }
+});
+
 app.get('/checkout/subscription', async (req, res) => {
   try {
     const session = await getSessionFromRequest(req);
@@ -2406,29 +2494,17 @@ app.get('/checkout/subscription', async (req, res) => {
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
-    const requestedTier = typeof req.query?.plan_tier === 'string'
-      ? req.query.plan_tier.toLowerCase()
-      : 'starter';
-    const plan = PLAN_CATALOG[requestedTier];
-    if (!plan || !plan.stripe_price_id) {
-      return res.status(400).json({ ok: false, error: 'Invalid plan tier' });
-    }
 
-    const stripeSession = await createStripeCheckoutSession({
-      mode: 'subscription',
-      priceId: plan.stripe_price_id,
+    const stripeSession = await createSubscriptionCheckoutSession({
       user,
-      metadata: {
-        purchase_type: 'subscription',
-        plan_tier: plan.tier,
-        price_id: plan.stripe_price_id
-      },
-      successUrl: process.env.STRIPE_SUCCESS_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`,
-      cancelUrl: process.env.STRIPE_CANCEL_URL || process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`
+      planTier: req.query?.plan_tier,
+      req
     });
-
     return res.redirect(303, stripeSession.url);
   } catch (error) {
+    if (error?.status === 400) {
+      return res.status(400).json({ ok: false, error: error.message });
+    }
     console.error('Subscription checkout failed.', error);
     return res.status(500).json({ ok: false, error: 'Checkout failed' });
   }
@@ -3679,6 +3755,36 @@ async function handleStripeEvent(event) {
   }
 }
 
+function resolvePlanFromStripePriceId(priceId) {
+  if (!priceId) return FREE_PLAN;
+  const configuredPlan = PLAN_BY_PRICE_ID[priceId] || STRIPE_PLAN_MAP[priceId];
+  if (!configuredPlan) {
+    return FREE_PLAN;
+  }
+  if (typeof configuredPlan === 'string') {
+    return PLAN_CATALOG[configuredPlan.toLowerCase()] || FREE_PLAN;
+  }
+  if (configuredPlan.tier) {
+    return PLAN_CATALOG[String(configuredPlan.tier).toLowerCase()] || configuredPlan;
+  }
+  return FREE_PLAN;
+}
+
+function buildPlanReconciliationPatch({ user, plan }) {
+  if (!plan?.tier || isUserPlanOverridden(user)) {
+    return {};
+  }
+  const nextTotal = Number(plan.monthly_credits) || FREE_PLAN.monthly_credits;
+  const nextBalance = Math.min(resolveCreditsBalance(user), nextTotal);
+  return {
+    plan_tier: plan.tier,
+    credits_total: String(nextTotal),
+    credits_remaining: String(nextBalance),
+    credits_balance: String(nextBalance),
+    daily_credit_limit: String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '')
+  };
+}
+
 async function onCheckoutSessionCompleted(session) {
   const userId = session.metadata?.user_id || session.client_reference_id;
   if (!userId) {
@@ -3704,20 +3810,9 @@ async function onCheckoutSessionCompleted(session) {
     }
   } else if (purchaseType === 'subscription' && session?.subscription) {
     const priceId = session.metadata?.price_id || session.metadata?.stripe_price_id;
-    const plan = priceId ? PLAN_BY_PRICE_ID[priceId] : null;
-    if (plan?.tier) {
-      const user = await getUserById(userId);
-      if (!isUserPlanOverridden(user)) {
-        const currentBalance = user ? resolveCreditsBalance(user) : 0;
-        const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
-        const nextBalance = Math.min(currentBalance, nextTotal);
-        patch.plan_tier = plan.tier;
-        patch.credits_total = String(nextTotal);
-        patch.credits_remaining = String(nextBalance);
-        patch.credits_balance = String(nextBalance);
-        patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
-      }
-    }
+    const plan = resolvePlanFromStripePriceId(priceId);
+    const user = await getUserById(userId);
+    Object.assign(patch, buildPlanReconciliationPatch({ user, plan }));
   }
 
   await updateUser(userId, patch);
@@ -3727,7 +3822,7 @@ async function onSubscriptionUpsert(subscription) {
   const stripeCustomerId = subscription.customer;
   const stripeSubscriptionId = subscription.id;
   const priceId = subscription.items?.data?.[0]?.price?.id;
-  const plan = PLAN_BY_PRICE_ID[priceId] || STRIPE_PLAN_MAP[priceId] || FREE_PLAN;
+  const plan = resolvePlanFromStripePriceId(priceId);
   const user = await findUserByStripeCustomer(stripeCustomerId);
   if (!user) {
     throw new Error(`No user for stripe_customer_id=${stripeCustomerId}`);
@@ -3739,15 +3834,7 @@ async function onSubscriptionUpsert(subscription) {
     billing_status: normalizeStripeSubStatus(subscription.status)
   };
 
-  if (!isUserPlanOverridden(user)) {
-    const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
-    const nextBalance = Math.min(resolveCreditsBalance(user), nextTotal);
-    patch.plan_tier = plan.tier;
-    patch.credits_total = String(nextTotal);
-    patch.credits_remaining = String(nextBalance);
-    patch.credits_balance = String(nextBalance);
-    patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
-  }
+  Object.assign(patch, buildPlanReconciliationPatch({ user, plan }));
 
   await updateUser(user.user_id, patch);
 }

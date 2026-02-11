@@ -84,6 +84,16 @@ Set the following environment variables to enable object storage:
 - `OBJECT_STORAGE_FORCE_PATH_STYLE`: `true` for path-style URLs when required.
 - `OBJECT_STORAGE_PUBLIC_URL`: Optional public base URL used in returned media URLs.
 
+## Stripe plan tier configuration
+
+For multi-tier subscriptions, set Stripe price IDs so users can choose Starter, Pro, or Enterprise:
+
+- `STRIPE_PRICE_STARTER`
+- `STRIPE_PRICE_PRO`
+- `STRIPE_PRICE_ENTERPRISE`
+
+You can also override plan metadata with `STRIPE_PLAN_CATALOG` or `STRIPE_PLAN_MAP` if needed.
+
 ## Next steps
 
 Consider swapping in a richer editor (CodeMirror/Monaco), capturing `console.error`/`console.warn`, or adding a server-side sandbox for safer code execution.

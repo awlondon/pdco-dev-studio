@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Maya — Select a Plan</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="plans-page">
+    <main class="plans-shell">
+      <header class="plans-header">
+        <a class="link-button" href="/">← Back to Maya</a>
+        <h1>Choose a plan</h1>
+        <p>Select Starter, Pro, or Enterprise and continue to secure Stripe checkout.</p>
+      </header>
+
+      <section>
+        <div id="plans-grid" class="plans-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="plans-comparison-section">
+        <h2>Feature comparison</h2>
+        <div id="plans-comparison" class="plans-comparison"></div>
+      </section>
+
+      <p id="plans-error" class="plans-error hidden" role="alert"></p>
+    </main>
+    <script type="module" src="plans.js"></script>
+  </body>
+</html>
