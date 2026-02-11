@@ -41,6 +41,21 @@ function isDevEnv(env) {
   return label === 'dev' || label === 'development';
 }
 
+
+function resolveUserStoreDriver(env) {
+  const configured = String(env?.USER_STORE_DRIVER || '').trim().toLowerCase();
+  if (configured === 'csv') {
+    return 'csv';
+  }
+  if (configured === 'postgres') {
+    return 'postgres';
+  }
+  return isDevEnv(env) ? 'postgres' : 'csv';
+}
+
+function isCsvUserStoreDriver(env) {
+  return resolveUserStoreDriver(env) === 'csv';
+}
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -854,12 +869,107 @@ async function getUser(env, userId) {
   return getUserFromStore(env, userId);
 }
 
-function canonicalApiOrigin(env) {
-  const origin = env.CANONICAL_API_ORIGIN || env.API_ORIGIN || env.API_BASE_URL;
-  if (!origin) {
-    throw new Error('Missing CANONICAL_API_ORIGIN');
+async function upsertUserBillingState(env, userId, patch) {
+  return upsertUserToStore(env, userId, patch);
+}
+
+async function findUserIdByStripeCustomer(env, stripeCustomerId) {
+  return findUserIdByStripeCustomerInStore(env, stripeCustomerId);
+}
+
+async function getUserFromStore(env, userId) {
+  const { rows } = await readUsersCSV(env);
+  return rows.find((row) => row.user_id === userId) || null;
+}
+
+async function upsertUserToStore(env, userId, patch) {
+  assertLegacyUserStoreEnabled(env);
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const { sha, rows } = await readUsersCSV(env);
+
+  const user = rows.find((row) => row.user_id === userId);
+  if (!user) {
+    throw new Error(`User ${userId} not found`);
   }
-  return origin.replace(/\/$/, '');
+
+  Object.entries(patch).forEach(([key, value]) => {
+    if (key === 'clamp_remaining_to_total' && value === true) {
+      const total = Number(user.credits_total || 0);
+      user.credits_remaining = Math.min(Number(user.credits_remaining || 0), total);
+    } else {
+      user[key] = value;
+    }
+  });
+
+  const csv = serializeCSV(rows);
+  const encoded = btoa(csv);
+
+  await githubRequest(env, `/repos/${repo}/contents/data/users.csv`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      message: `Update billing for user ${userId}`,
+      content: encoded,
+      sha,
+      branch
+    })
+  });
+}
+
+async function findUserIdByStripeCustomerInStore(env, stripeCustomerId) {
+  const { rows } = await readUsersCSV(env);
+  const user = rows.find((row) => row.stripe_customer_id === stripeCustomerId);
+  return user ? user.user_id : null;
+}
+
+async function githubRequest(env, path, options = {}) {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'maya-dev-worker',
+      ...(options.headers || {})
+    }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API error ${res.status}: ${text}`);
+  }
+
+  return res.json();
+}
+
+async function readUsersCSV(env) {
+  assertLegacyUserStoreEnabled(env);
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const data = await githubRequest(env, `/repos/${repo}/contents/data/users.csv?ref=${branch}`);
+  const content = atob(data.content);
+  return {
+    sha: data.sha,
+    rows: parseCSV(content)
+  };
+}
+
+function assertLegacyUserStoreEnabled(env) {
+  if (isCsvUserStoreDriver(env) || env.LEGACY_USERS_CSV === 'true') {
+    return;
+  }
+  throw new Error('USER_STORE_DRIVER=postgres is enabled; legacy CSV user store is disabled.');
+}
+
+async function readUsageLogRows(env) {
+  assertLegacyUserStoreEnabled(env);
+  const repo = env.GITHUB_REPO;
+  const branch = env.GITHUB_BRANCH || 'main';
+
+  const res = await githubRequest(env, `/repos/${repo}/contents/data/usage_log.csv?ref=${branch}`);
+  const csv = atob(res.content);
+  return parseCSV(csv);
 }
 
 function withCors(response, headers) {

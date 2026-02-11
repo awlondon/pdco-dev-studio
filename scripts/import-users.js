@@ -2,10 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
+import crypto from 'node:crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const csvPath = process.argv[2] || path.join(__dirname, '..', 'data', 'users.csv');
+const cliArgs = process.argv.slice(2);
+const csvPath = cliArgs.find((arg) => !arg.startsWith('--')) || path.join(__dirname, '..', 'data', 'users.csv');
+const usageCsvPathArg = cliArgs.find((arg) => arg.startsWith('--usage='));
+const usageCsvPath = usageCsvPathArg
+  ? usageCsvPathArg.split('=')[1]
+  : (cliArgs.includes('--usage') ? path.join(__dirname, '..', 'data', 'usage_log.csv') : '');
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is required to import users.');
@@ -25,6 +31,11 @@ function parseCSV(text) {
     });
     return entry;
   });
+}
+
+
+function buildSourceHash(parts) {
+  return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
 }
 
 function toNullable(value) {
@@ -122,8 +133,56 @@ async function main() {
         ]
       );
     }
+
+    let usageImported = 0;
+    if (usageCsvPath) {
+      const usageText = await fs.readFile(usageCsvPath, 'utf8');
+      const usageRows = parseCSV(usageText);
+      for (const row of usageRows) {
+        const userId = row.user_id;
+        if (!userId) continue;
+        const timestamp = toNullable(row.timestamp_utc) || new Date().toISOString();
+        const status = (row.status || 'success').toLowerCase() === 'success' ? 'success' : 'error';
+        const sourceHash = buildSourceHash([
+          userId,
+          row.request_id || '',
+          row.session_id || '',
+          timestamp,
+          status
+        ]);
+        await client.query(
+          `INSERT INTO usage_events
+            (user_id, session_id, intent, model, input_tokens, output_tokens, tokens_requested, tokens_used,
+             credits_used, credit_norm_factor, model_cost_usd, cost, latency_ms, success, status, event_timestamp, source_hash)
+           VALUES
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 0, 0, $10, $11, $12, $13, $14)
+           ON CONFLICT (source_hash) DO NOTHING`,
+          [
+            userId,
+            row.session_id || null,
+            row.intent_type || 'text',
+            row.model || 'unknown',
+            Number(row.input_tokens || row.input_est_tokens || 0),
+            Number(row.output_tokens || row.output_est_tokens || 0),
+            Number(row.total_est_tokens || 0),
+            Number(row.output_tokens || row.output_est_tokens || 0),
+            Number(row.credits_charged || row.credits_used || 0),
+            Number(row.latency_ms || 0),
+            status === 'success',
+            status,
+            timestamp,
+            sourceHash
+          ]
+        );
+        usageImported += 1;
+      }
+    }
+
     await client.query('COMMIT');
     console.log(`Imported ${rows.length} users from ${csvPath}.`);
+    if (usageCsvPath) {
+      console.log(`Processed ${usageImported} usage rows from ${usageCsvPath}.`);
+    }
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Import failed:', error);
