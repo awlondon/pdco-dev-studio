@@ -1687,6 +1687,33 @@ app.get('/billing/portal', async (req, res) => {
   }
 });
 
+app.post('/api/billing/portal-session', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    if (!user.stripe_customer_id) {
+      return res.status(400).json({ ok: false, error: 'No Stripe customer ID' });
+    }
+    const returnUrl = process.env.FRONTEND_URL
+      || req.headers.origin
+      || 'https://maya-dev-ui.pages.dev';
+    const portalSession = await createStripeBillingPortalSession({
+      customerId: user.stripe_customer_id,
+      returnUrl
+    });
+    return res.json({ ok: true, url: portalSession.url });
+  } catch (error) {
+    console.error('Billing portal session failed.', error);
+    return res.status(500).json({ ok: false, error: 'Unable to create billing portal session' });
+  }
+});
+
 /**
  * CHAT (FULL IMPLEMENTATION — DO NOT STUB)
  */

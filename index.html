@@ -166,42 +166,70 @@
 
       <section class="account-section">
         <div class="account-section-header">
-          <h3>Plan &amp; billing</h3>
-          <p>What you’re on and how your monthly credits reset.</p>
+          <h3>Billing dashboard</h3>
+          <p>Manage your subscription, renewal cycle, and credit usage in one place.</p>
         </div>
-        <div class="account-grid">
-          <div class="account-card">
+        <div class="account-grid billing-dashboard-grid">
+          <div class="account-card billing-summary-card">
             <div class="account-field">
               <span class="account-label">Current plan</span>
               <span id="accountPlanTier" class="account-value">—</span>
             </div>
             <div class="account-field">
+              <span class="account-label">Credit balance</span>
+              <span id="accountCreditsRemaining" class="account-value">—</span>
+            </div>
+            <div class="account-field">
+              <span class="account-label">Next renewal</span>
+              <span id="accountRenewalDate" class="account-value">—</span>
+            </div>
+            <div class="account-field">
               <span class="account-label">Billing status</span>
               <span id="accountBillingStatus" class="account-value">—</span>
             </div>
-            <div class="account-field">
-              <span class="account-label">Renewal date</span>
-              <span id="accountRenewalDate" class="account-value">—</span>
-            </div>
           </div>
-          <div class="account-card">
+
+          <div class="account-card billing-usage-card">
             <div class="account-field">
-              <span class="account-label">Credits remaining</span>
-              <span id="accountCreditsRemaining" class="account-value">—</span>
+              <span class="account-label">Monthly usage</span>
+              <span id="accountBillingUsageSummary" class="account-value">—</span>
+            </div>
+            <div class="billing-usage-meter" role="progressbar" aria-label="Monthly credit usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="accountBillingUsageFill" class="billing-usage-fill"></div>
             </div>
             <div class="account-field">
               <span class="account-label">Monthly allowance</span>
               <span id="accountCreditsTotal" class="account-value">—</span>
             </div>
             <div class="account-field">
-              <span class="account-label">Days until reset</span>
+              <span class="account-label">Days until renewal</span>
               <span id="accountCreditsReset" class="account-value">—</span>
             </div>
           </div>
         </div>
+
         <div class="account-action-row">
           <button id="accountPrimaryAction" class="ghost-button" type="button">Upgrade plan</button>
+          <button id="accountManagePortal" class="ghost-button subtle" type="button">Open Stripe customer portal</button>
           <button id="accountBuyCredits" class="ghost-button subtle" type="button">Buy credits</button>
+        </div>
+
+        <div class="billing-upgrade-options">
+          <p class="account-muted">Upgrade options</p>
+          <div class="billing-plan-cards">
+            <button type="button" class="billing-plan-option" data-plan-upgrade="starter">
+              <span class="billing-plan-name">Starter</span>
+              <span class="billing-plan-copy">For individual builders with higher monthly limits.</span>
+            </button>
+            <button type="button" class="billing-plan-option" data-plan-upgrade="pro">
+              <span class="billing-plan-name">Pro</span>
+              <span class="billing-plan-copy">Best for teams shipping production workflows.</span>
+            </button>
+            <button type="button" class="billing-plan-option" data-plan-upgrade="enterprise">
+              <span class="billing-plan-name">Enterprise</span>
+              <span class="billing-plan-copy">Advanced scale, support, and custom allocation.</span>
+            </button>
+          </div>
         </div>
       </section>
 

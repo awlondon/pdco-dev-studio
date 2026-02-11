@@ -213,8 +213,12 @@ const accountRenewalDateEl = document.getElementById('accountRenewalDate');
 const accountCreditsRemainingEl = document.getElementById('accountCreditsRemaining');
 const accountCreditsTotalEl = document.getElementById('accountCreditsTotal');
 const accountCreditsResetEl = document.getElementById('accountCreditsReset');
+const accountBillingUsageSummaryEl = document.getElementById('accountBillingUsageSummary');
+const accountBillingUsageFillEl = document.getElementById('accountBillingUsageFill');
 const accountPrimaryActionButton = document.getElementById('accountPrimaryAction');
+const accountManagePortalButton = document.getElementById('accountManagePortal');
 const accountBuyCreditsButton = document.getElementById('accountBuyCredits');
+const accountPlanUpgradeButtons = Array.from(document.querySelectorAll('[data-plan-upgrade]'));
 const accountSessionStartedEl = document.getElementById('accountSessionStarted');
 const accountSessionTurnsEl = document.getElementById('accountSessionTurns');
 const accountSessionCreditsEl = document.getElementById('accountSessionCredits');
@@ -2334,6 +2338,35 @@ function updateAccountPlan() {
       ? formatCreditNumber(total)
       : '—';
   }
+
+  const usedCredits = Number.isFinite(remaining) && Number.isFinite(total)
+    ? Math.max(0, total - remaining)
+    : NaN;
+  const usagePercent = Number.isFinite(usedCredits) && total > 0
+    ? Math.min(100, Math.max(0, Math.round((usedCredits / total) * 100)))
+    : 0;
+
+  if (accountBillingUsageSummaryEl) {
+    accountBillingUsageSummaryEl.textContent = Number.isFinite(usedCredits) && Number.isFinite(total)
+      ? `${formatCreditNumber(usedCredits)} / ${formatCreditNumber(total)} used`
+      : '—';
+  }
+  if (accountBillingUsageFillEl) {
+    accountBillingUsageFillEl.style.width = `${usagePercent}%`;
+    const meter = accountBillingUsageFillEl.closest('.billing-usage-meter');
+    if (meter) {
+      meter.setAttribute('aria-valuenow', `${usagePercent}`);
+    }
+  }
+
+  const resolvedPlan = (planTierValue || '').toString().toLowerCase();
+  accountPlanUpgradeButtons.forEach((button) => {
+    const isCurrent = button.dataset.planUpgrade === resolvedPlan;
+    button.classList.toggle('is-current-plan', isCurrent);
+    button.setAttribute('aria-pressed', String(isCurrent));
+    button.title = isCurrent ? 'Current plan' : '';
+  });
+
   if (accountCreditsResetEl) {
     if (resetAt) {
       const diffDays = Math.max(
@@ -2478,6 +2511,9 @@ function updateAccountActions(planTierValue) {
   }
   if (accountBuyCreditsButton) {
     accountBuyCreditsButton.onclick = () => openStripeCheckout('credits');
+  }
+  if (accountManagePortalButton) {
+    accountManagePortalButton.onclick = () => openBillingPortal();
   }
 }
 
@@ -5330,9 +5366,23 @@ async function openStripeCheckout(mode, planTier) {
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
 }
 
-function openBillingPortal() {
-  const portalUrl = `${API_BASE}/billing/portal`;
-  window.open(portalUrl, '_blank', 'noopener,noreferrer');
+async function openBillingPortal() {
+  try {
+    const response = await fetch(`${API_BASE}/api/billing/portal-session`, {
+      method: 'POST',
+      credentials: 'include'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.url) {
+      throw new Error(data?.error || 'Unable to open billing portal');
+    }
+    window.location.href = data.url;
+  } catch (error) {
+    console.error('Failed to open billing portal session.', error);
+    showToast('Unable to open the Stripe customer portal right now. Please try again.', {
+      variant: 'error'
+    });
+  }
 }
 
 function openPlanSelectionPage() {
@@ -9878,6 +9928,28 @@ if (pricingModal) {
       updateCollapseState(!pricingModalBody.classList.contains('collapsed'));
     });
   }
+}
+
+if (accountPlanUpgradeButtons.length) {
+  accountPlanUpgradeButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const requestedPlan = button.dataset.planUpgrade;
+      if (!requestedPlan) {
+        return;
+      }
+      const currentPlan = (
+        resolveAccountUser()?.plan_tier
+        || resolveAccountUser()?.planTier
+        || resolveAccountUser()?.plan
+        || ''
+      ).toString().toLowerCase();
+      if (requestedPlan === currentPlan) {
+        openBillingPortal();
+        return;
+      }
+      openStripeCheckout('subscription', requestedPlan);
+    });
+  });
 }
 
 const signOutButton = document.getElementById('signOutBtn');
