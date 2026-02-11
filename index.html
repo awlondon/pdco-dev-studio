@@ -396,6 +396,14 @@
           <form id="chat-form" class="panel-footer">
             <div id="credit-banner" class="credit-banner hidden"></div>
             <div id="credit-inline-warning" class="credit-inline-warning hidden"></div>
+            <label class="context-mode-control" for="chatContextMode">
+              <span>Context Mode</span>
+              <select id="chatContextMode" aria-label="Context Mode">
+                <option value="balanced" selected>Balanced</option>
+                <option value="aggressive">Aggressive</option>
+                <option value="full">Full</option>
+              </select>
+            </label>
             <div id="throttleNotice" class="throttle hidden"></div>
             <div id="credit-zero" class="credit-zero hidden">
               <span>You are approaching your credit limit.</span>

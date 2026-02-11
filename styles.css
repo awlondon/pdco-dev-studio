@@ -1066,6 +1066,23 @@ html, body {
   align-items: center;
 }
 
+.context-mode-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.context-mode-control select {
+  background: #11111b;
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .pricing-body {
   padding: 20px 20px 24px;
 }
