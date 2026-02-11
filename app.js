@@ -176,6 +176,7 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const sendButton = document.getElementById('btn-send');
 const creditPreviewEl = document.getElementById('credit-preview');
+const chatContextMode = document.getElementById('chatContextMode');
 const micButton = document.getElementById('btn-mic');
 const creditBadge = document.getElementById('creditBadge');
 const creditPanel = document.getElementById('credit-panel');
@@ -408,6 +409,8 @@ const AUTH_STORAGE_KEYS = [
   'maya_user',
   'maya_token'
 ];
+const CONTEXT_MODE_STORAGE_KEY = 'maya_context_mode';
+const VALID_CONTEXT_MODES = ['balanced', 'aggressive', 'full'];
 const runtimeState = {
   status: 'idle',
   started_at: null
@@ -2345,6 +2348,36 @@ function updateAccountPlan() {
   updateAccountActions(planTierValue);
 }
 
+function resolveContextMode(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (VALID_CONTEXT_MODES.includes(normalized)) {
+    return normalized;
+  }
+  return 'balanced';
+}
+
+function getSelectedContextMode() {
+  return resolveContextMode(
+    chatContextMode?.value
+    || Auth.user?.preferences?.context_mode
+    || window.localStorage?.getItem(CONTEXT_MODE_STORAGE_KEY)
+    || 'balanced'
+  );
+}
+
+function applyContextModeSelection(mode) {
+  const resolvedMode = resolveContextMode(mode);
+  if (chatContextMode) {
+    chatContextMode.value = resolvedMode;
+  }
+  if (accountContextMode) {
+    accountContextMode.value = resolvedMode;
+  }
+  if (window.localStorage) {
+    window.localStorage.setItem(CONTEXT_MODE_STORAGE_KEY, resolvedMode);
+  }
+}
+
 function updateAccountPreferences() {
   if (!accountPage) {
     return;
@@ -2354,21 +2387,18 @@ function updateAccountPreferences() {
   const newsletterOptIn = typeof preferences.newsletter_opt_in === 'boolean'
     ? preferences.newsletter_opt_in
     : false;
-  const contextMode = ['aggressive', 'balanced', 'full'].includes(preferences.context_mode)
-    ? preferences.context_mode
-    : 'balanced';
+  const contextMode = resolveContextMode(preferences.context_mode);
   if (accountNewsletterOptIn) {
     accountNewsletterOptIn.checked = newsletterOptIn;
   }
-  if (accountContextMode) {
-    accountContextMode.value = contextMode;
-  }
+  applyContextModeSelection(contextMode);
   if (accountPreferencesStatus) {
     accountPreferencesStatus.textContent = 'Preferences sync automatically.';
   }
 }
 
 async function saveAccountPreferences({ newsletterOptIn, contextMode }) {
+  const resolvedContextMode = resolveContextMode(contextMode);
   if (!API_BASE) {
     return false;
   }
@@ -2382,7 +2412,7 @@ async function saveAccountPreferences({ newsletterOptIn, contextMode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         newsletter_opt_in: newsletterOptIn,
-        context_mode: contextMode
+        context_mode: resolvedContextMode
       })
     });
     const data = await response.json().catch(() => ({}));
@@ -2391,7 +2421,7 @@ async function saveAccountPreferences({ newsletterOptIn, contextMode }) {
     }
     const nextPreferences = data?.preferences || {
       newsletter_opt_in: newsletterOptIn,
-      context_mode: contextMode || 'balanced'
+      context_mode: resolvedContextMode
     };
     if (Auth.user) {
       Auth.user.preferences = nextPreferences;
@@ -2403,6 +2433,7 @@ async function saveAccountPreferences({ newsletterOptIn, contextMode }) {
       accountState.user.preferences = nextPreferences;
     }
     persistSessionStorage({ user: Auth.user });
+    applyContextModeSelection(nextPreferences.context_mode);
     return true;
   } catch (error) {
     console.warn('Failed to update preferences.', error);
@@ -8931,7 +8962,7 @@ async function sendChat() {
         sessionId,
         session_id: sessionId,
         intentType: resolvedIntent.type,
-        contextMode: (Auth.user?.preferences?.context_mode || 'balanced'),
+        contextMode: getSelectedContextMode(),
         historySummary: sessionState?.history_summary?.text || '',
         user: getUserContext()
       })
@@ -9681,7 +9712,7 @@ if (accountNewsletterOptIn) {
 if (accountContextMode) {
   accountContextMode.addEventListener('change', async () => {
     const nextMode = accountContextMode.value;
-    const previousMode = Auth.user?.preferences?.context_mode || 'balanced';
+    const previousMode = getSelectedContextMode();
     accountContextMode.disabled = true;
     if (accountPreferencesStatus) {
       accountPreferencesStatus.textContent = 'Saving preferences...';
@@ -9691,15 +9722,57 @@ if (accountContextMode) {
       contextMode: nextMode
     });
     if (!saved) {
-      accountContextMode.value = previousMode;
+      applyContextModeSelection(previousMode);
       if (accountPreferencesStatus) {
         accountPreferencesStatus.textContent = 'Unable to save preferences.';
       }
       showToast('We could not save your preferences. Please try again.', { variant: 'error' });
-    } else if (accountPreferencesStatus) {
-      accountPreferencesStatus.textContent = 'Preferences saved.';
+    } else {
+      applyContextModeSelection(nextMode);
+      if (accountPreferencesStatus) {
+        accountPreferencesStatus.textContent = 'Preferences saved.';
+      }
     }
     accountContextMode.disabled = false;
+  });
+}
+
+if (chatContextMode) {
+  applyContextModeSelection(getSelectedContextMode());
+  chatContextMode.addEventListener('change', async () => {
+    const previousMode = resolveContextMode(
+      window.localStorage?.getItem(CONTEXT_MODE_STORAGE_KEY)
+      || Auth.user?.preferences?.context_mode
+      || 'balanced'
+    );
+    const nextMode = resolveContextMode(chatContextMode.value);
+    applyContextModeSelection(nextMode);
+
+    if (!Auth.user) {
+      return;
+    }
+
+    if (accountPreferencesStatus) {
+      accountPreferencesStatus.textContent = 'Saving preferences...';
+    }
+
+    const saved = await saveAccountPreferences({
+      newsletterOptIn: Boolean(accountNewsletterOptIn?.checked),
+      contextMode: nextMode
+    });
+
+    if (!saved) {
+      applyContextModeSelection(previousMode);
+      if (accountPreferencesStatus) {
+        accountPreferencesStatus.textContent = 'Unable to save preferences.';
+      }
+      showToast('We could not save your preferences. Please try again.', { variant: 'error' });
+      return;
+    }
+
+    if (accountPreferencesStatus) {
+      accountPreferencesStatus.textContent = 'Preferences saved.';
+    }
   });
 }
 
