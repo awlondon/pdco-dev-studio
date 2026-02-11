@@ -301,6 +301,11 @@ const publicGalleryBackButton = document.getElementById('publicGalleryBackButton
 const publicGallerySearchInput = document.getElementById('publicGallerySearch');
 const publicGallerySortSelect = document.getElementById('publicGallerySort');
 const publicGalleryTagChips = document.getElementById('publicGalleryTagChips');
+const publicGalleryCategorySelect = document.getElementById('publicGalleryCategory');
+const publicGalleryPagination = document.getElementById('publicGalleryPagination');
+const publicGalleryPrevButton = document.getElementById('publicGalleryPrev');
+const publicGalleryNextButton = document.getElementById('publicGalleryNext');
+const publicGalleryPageLabel = document.getElementById('publicGalleryPageLabel');
 const usageScopeLabel = document.getElementById('usage-scope-label');
 const usageFilters = document.getElementById('usage-filters');
 const usageUserFilter = document.getElementById('usage-user-filter');
@@ -3228,7 +3233,10 @@ async function fetchArtifacts(path) {
     throw new Error('Failed to load artifacts');
   }
   const data = await res.json();
-  return data.artifacts || [];
+  return {
+    artifacts: data.artifacts || [],
+    pagination: data.pagination || null
+  };
 }
 
 function renderGalleryCards(artifacts, { mode }) {
@@ -3256,6 +3264,7 @@ function renderGalleryCards(artifacts, { mode }) {
     const canBrowseVersions = mode === 'private'
       || (artifact.visibility === 'public' && artifact.versioning?.enabled);
     const tags = Array.isArray(artifact.tags) ? artifact.tags : [];
+    const category = artifact.category || 'general';
     const tagsMarkup = tags.length
       ? `
         <div class="artifact-tags">
@@ -3273,6 +3282,7 @@ function renderGalleryCards(artifacts, { mode }) {
           <h3>${artifact.title || 'Untitled artifact'}</h3>
           ${mode !== 'private' ? `<div class="artifact-author"><a href="/u/${ownerHandle}" data-route>${getArtifactOwnerDisplay(artifact)}</a></div>` : ''}
           <p>${artifact.description || 'No description provided.'}</p>
+          <div class="artifact-category">${escapeHtml(category)}</div>
           ${tagsMarkup}
           ${forkLabel ? `<div class="artifact-fork-label">${forkLabel}</div>` : ''}
           <div class="artifact-meta">
@@ -3335,7 +3345,7 @@ function applyArtifactToEditor(artifact) {
 }
 
 async function loadPrivateGallery() {
-  const artifacts = await fetchArtifacts('/api/artifacts/private');
+  const { artifacts } = await fetchArtifacts('/api/artifacts/private');
   galleryState.privateArtifacts = artifacts;
   if (galleryGrid) {
     galleryGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'private' });
@@ -3344,7 +3354,7 @@ async function loadPrivateGallery() {
   galleryEmpty?.classList.toggle('hidden', hasItems);
 }
 
-function getPublicGalleryPath({ sort, query, tag } = {}) {
+function getPublicGalleryPath({ sort, query, tag, category, page } = {}) {
   const params = new URLSearchParams();
   if (sort) {
     params.set('sort', sort);
@@ -3355,8 +3365,14 @@ function getPublicGalleryPath({ sort, query, tag } = {}) {
   if (tag) {
     params.set('tag', tag);
   }
+  if (category) {
+    params.set('category', category);
+  }
+  if (page && Number(page) > 1) {
+    params.set('page', String(page));
+  }
   const queryString = params.toString();
-  return `/api/artifacts/public${queryString ? `?${queryString}` : ''}`;
+  return `/api/gallery${queryString ? `?${queryString}` : ''}`;
 }
 
 function buildPublicGalleryTags(artifacts = []) {
@@ -3390,6 +3406,21 @@ function renderPublicGalleryTagChips(tags) {
   }).join('');
 }
 
+function renderPublicGalleryPagination() {
+  const pagination = galleryState.publicPagination || { page: 1, total_pages: 1, total: 0 };
+  const hasItems = galleryState.publicArtifacts.length > 0;
+  publicGalleryPagination?.classList.toggle('hidden', !hasItems);
+  if (publicGalleryPageLabel) {
+    publicGalleryPageLabel.textContent = `Page ${pagination.page} of ${pagination.total_pages} · ${pagination.total} result${pagination.total === 1 ? '' : 's'}`;
+  }
+  if (publicGalleryPrevButton) {
+    publicGalleryPrevButton.disabled = pagination.page <= 1;
+  }
+  if (publicGalleryNextButton) {
+    publicGalleryNextButton.disabled = pagination.page >= pagination.total_pages;
+  }
+}
+
 async function loadPublicGallery() {
   if (publicGallerySortSelect) {
     publicGallerySortSelect.value = galleryState.publicSort;
@@ -3397,28 +3428,36 @@ async function loadPublicGallery() {
   if (publicGallerySearchInput) {
     publicGallerySearchInput.value = galleryState.publicQuery;
   }
-  const artifacts = await fetchArtifacts(getPublicGalleryPath({
+  if (publicGalleryCategorySelect) {
+    publicGalleryCategorySelect.value = galleryState.publicCategory;
+  }
+  const { artifacts, pagination } = await fetchArtifacts(getPublicGalleryPath({
     sort: galleryState.publicSort,
     query: galleryState.publicQuery,
-    tag: galleryState.publicTag
+    tag: galleryState.publicTag,
+    category: galleryState.publicCategory,
+    page: galleryState.publicPage
   }));
   galleryState.publicArtifacts = artifacts;
+  galleryState.publicPagination = pagination || galleryState.publicPagination;
   if (publicGalleryGrid) {
     publicGalleryGrid.innerHTML = renderGalleryCards(artifacts, { mode: 'public' });
   }
   renderPublicGalleryTagChips(buildPublicGalleryTags(artifacts));
   const hasItems = artifacts.length > 0;
   publicGalleryEmpty?.classList.toggle('hidden', hasItems);
+  renderPublicGalleryPagination();
 }
 
 const requestPublicGalleryRefresh = debounce(() => {
+  galleryState.publicPage = 1;
   loadPublicGallery().catch((error) => {
     console.warn('Failed to load public gallery.', error);
   });
 }, 300);
 
 async function loadAccountArtifactSummary() {
-  const artifacts = await fetchArtifacts('/api/artifacts/private');
+  const { artifacts } = await fetchArtifacts('/api/artifacts/private');
   const privateCount = artifacts.filter((artifact) => artifact.visibility === 'private').length;
   const publicCount = artifacts.filter((artifact) => artifact.visibility === 'public').length;
   if (accountArtifactsPrivateEl) {
@@ -3466,14 +3505,14 @@ async function fetchPublicArtifactsByHandle(handle) {
   }
   const path = `/api/artifacts/public${params.toString() ? `?${params}` : ''}`;
   try {
-    const artifacts = await fetchArtifacts(path);
+    const { artifacts } = await fetchArtifacts(path);
     if (artifacts.length) {
       return artifacts;
     }
   } catch (error) {
     console.warn('Failed to load filtered public artifacts.', error);
   }
-  const all = await fetchArtifacts(getPublicGalleryPath({
+  const { artifacts: all } = await fetchArtifacts(getPublicGalleryPath({
     sort: galleryState.publicSort,
     query: galleryState.publicQuery,
     tag: galleryState.publicTag
@@ -4079,6 +4118,10 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
       <input id="artifactTagsInput" type="text" placeholder="ui, animation, dashboard" />
     </label>
     <label class="modal-field">
+      <span>Category</span>
+      <input id="artifactCategoryInput" type="text" placeholder="general" value="general" />
+    </label>
+    <label class="modal-field">
       <span>Visibility</span>
       <select id="artifactVisibilityInput">
         <option value="private" selected>Private</option>
@@ -4096,12 +4139,14 @@ function openArtifactModal({ title, description, codePreview, onConfirm, onCance
     const titleInput = document.getElementById('artifactTitleInput');
     const descriptionInput = document.getElementById('artifactDescriptionInput');
     const tagsInput = document.getElementById('artifactTagsInput');
+    const categoryInput = document.getElementById('artifactCategoryInput');
     const visibilityInput = document.getElementById('artifactVisibilityInput');
     onConfirm({
       title: titleInput?.value.trim() || '',
       description: descriptionInput?.value.trim() || '',
       visibility: visibilityInput?.value === 'public' ? 'public' : 'private',
-      tags: parseTagsInput(tagsInput?.value || '')
+      tags: parseTagsInput(tagsInput?.value || ''),
+      category: categoryInput?.value.trim() || 'general'
     });
   });
 
@@ -4162,7 +4207,7 @@ async function handleSaveCodeArtifact() {
     title: '',
     description: '',
     codePreview: resolvedContent,
-    onConfirm: async ({ title, description, visibility, tags }) => {
+    onConfirm: async ({ title, description, visibility, tags, category }) => {
       const tempId = generateArtifactTempId();
       try {
         const inferred = await metadataPromise;
@@ -4181,6 +4226,7 @@ async function handleSaveCodeArtifact() {
           description: normalizedDescription,
           visibility,
           tags,
+          category,
           code: { language: resolvedLanguage, content: resolvedContent, versions: codeVersions },
           artifact: {
             code_version_id: activeVersionId,
@@ -4307,6 +4353,10 @@ async function handleArtifactEdit(artifactId) {
       <span>Tags</span>
       <input id="artifactEditTags" type="text" value="${(currentArtifact.tags || []).join(', ')}" />
     </label>
+    <label class="modal-field">
+      <span>Category</span>
+      <input id="artifactEditCategory" type="text" value="${currentArtifact.category || 'general'}" />
+    </label>
     <div class="modal-actions">
       <button id="artifactEditSave" type="button">Save</button>
       <button id="artifactEditCancel" class="secondary" type="button">Cancel</button>
@@ -4317,6 +4367,7 @@ async function handleArtifactEdit(artifactId) {
     const titleInput = document.getElementById('artifactEditTitle');
     const descriptionInput = document.getElementById('artifactEditDescription');
     const tagsInput = document.getElementById('artifactEditTags');
+    const categoryInput = document.getElementById('artifactEditCategory');
     try {
       await fetch(`${API_BASE}/api/artifacts/${artifactId}`, {
         method: 'PATCH',
@@ -4325,7 +4376,8 @@ async function handleArtifactEdit(artifactId) {
         body: JSON.stringify({
           title: titleInput?.value.trim() || currentArtifact.title,
           description: descriptionInput?.value.trim() || currentArtifact.description,
-          tags: parseTagsInput(tagsInput?.value || '')
+          tags: parseTagsInput(tagsInput?.value || ''),
+          category: categoryInput?.value.trim() || currentArtifact.category || 'general'
         })
       });
       ModalManager.close();
@@ -6984,7 +7036,10 @@ const galleryState = {
   publicArtifacts: [],
   publicSort: 'recent',
   publicQuery: '',
-  publicTag: ''
+  publicTag: '',
+  publicCategory: '',
+  publicPage: 1,
+  publicPagination: { page: 1, total_pages: 1, total: 0, page_size: 24 }
 };
 const profileState = {
   handle: null,
@@ -9104,6 +9159,13 @@ if (publicGallerySortSelect) {
   });
 }
 
+if (publicGalleryCategorySelect) {
+  publicGalleryCategorySelect.addEventListener('change', () => {
+    galleryState.publicCategory = publicGalleryCategorySelect.value || '';
+    requestPublicGalleryRefresh();
+  });
+}
+
 if (publicGallerySearchInput) {
   publicGallerySearchInput.addEventListener('input', () => {
     galleryState.publicQuery = publicGallerySearchInput.value.trim();
@@ -9123,6 +9185,32 @@ if (publicGalleryTagChips) {
     }
     galleryState.publicTag = tag;
     requestPublicGalleryRefresh();
+  });
+}
+
+if (publicGalleryPrevButton) {
+  publicGalleryPrevButton.addEventListener('click', () => {
+    if ((galleryState.publicPagination?.page || 1) <= 1) {
+      return;
+    }
+    galleryState.publicPage = Math.max(1, (galleryState.publicPagination?.page || 1) - 1);
+    loadPublicGallery().catch((error) => {
+      console.warn('Failed to load previous gallery page.', error);
+    });
+  });
+}
+
+if (publicGalleryNextButton) {
+  publicGalleryNextButton.addEventListener('click', () => {
+    const currentPage = galleryState.publicPagination?.page || 1;
+    const totalPages = galleryState.publicPagination?.total_pages || 1;
+    if (currentPage >= totalPages) {
+      return;
+    }
+    galleryState.publicPage = currentPage + 1;
+    loadPublicGallery().catch((error) => {
+      console.warn('Failed to load next gallery page.', error);
+    });
   });
 }
 

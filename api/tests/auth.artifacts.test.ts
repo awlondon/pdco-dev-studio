@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapArtifactRow, mapArtifactVersionRow } from '../../utils/artifactDb.js';
+import { mapArtifactRow, mapArtifactVersionRow, normalizeCategoryInput } from '../../utils/artifactDb.js';
 import { mapProfileRow } from '../../utils/profileDb.js';
 
 test('mapArtifactRow shapes artifact payload', () => {
@@ -12,6 +12,7 @@ test('mapArtifactRow shapes artifact payload', () => {
     updated_at: '2024-01-02T00:00:00Z',
     title: 'Test artifact',
     description: 'Description',
+    category: 'ui',
     code_language: 'html',
     code_content: '<div />',
     screenshot_url: 'https://cdn.example.com/artifacts/a.png',
@@ -40,6 +41,13 @@ test('mapArtifactRow shapes artifact payload', () => {
   assert.equal(artifact?.derived_from.original_artifact_id, row.origin_artifact_id);
   assert.equal(artifact?.stats.forks, 2);
   assert.equal(artifact?.versioning.enabled, true);
+  assert.equal(artifact?.category, 'ui');
+});
+
+test('normalizeCategoryInput sanitizes and defaults category values', () => {
+  assert.equal(normalizeCategoryInput('UI Components'), 'ui-components');
+  assert.equal(normalizeCategoryInput(''), 'general');
+  assert.equal(normalizeCategoryInput('@@@'), 'general');
 });
 
 test('mapArtifactVersionRow shapes version payload', () => {

@@ -545,6 +545,17 @@
               <option value="forked">Most forked</option>
             </select>
           </label>
+          <label class="gallery-sort" for="publicGalleryCategory">
+            <span>Category</span>
+            <select id="publicGalleryCategory">
+              <option value="">All</option>
+              <option value="general">General</option>
+              <option value="ui">UI</option>
+              <option value="animation">Animation</option>
+              <option value="dashboard">Dashboard</option>
+              <option value="tooling">Tooling</option>
+            </select>
+          </label>
         </div>
         <div class="gallery-tags-row">
           <span class="gallery-muted">Tags</span>
@@ -554,6 +565,11 @@
       <div id="publicGalleryGrid" class="gallery-grid"></div>
       <div id="publicGalleryEmpty" class="gallery-empty hidden">
         No public artifacts yet.
+      </div>
+      <div id="publicGalleryPagination" class="gallery-pagination hidden">
+        <button id="publicGalleryPrev" class="ghost-button" type="button">Previous</button>
+        <span id="publicGalleryPageLabel" class="gallery-muted">Page 1 of 1</span>
+        <button id="publicGalleryNext" class="ghost-button" type="button">Next</button>
       </div>
     </main>
 

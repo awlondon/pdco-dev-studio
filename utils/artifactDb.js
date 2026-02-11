@@ -31,6 +31,14 @@ export function normalizeTagsInput(tags) {
   return Array.from(new Set(normalized)).slice(0, 20);
 }
 
+export function normalizeCategoryInput(category) {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (!normalized) {
+    return 'general';
+  }
+  return normalized.replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, '-').slice(0, 48) || 'general';
+}
+
 export function mapArtifactRow(row) {
   if (!row) return null;
   return {
@@ -41,6 +49,7 @@ export function mapArtifactRow(row) {
     updated_at: toIsoString(row.updated_at),
     title: row.title || '',
     description: row.description || '',
+    category: row.category || 'general',
     code: {
       language: row.code_language || 'html',
       content: row.code_content || ''
@@ -121,6 +130,7 @@ async function fetchArtifactRows({ whereClause = '', params = [] } = {}) {
       a.updated_at,
       a.title,
       a.description,
+      a.category,
       a.current_version_id AS artifact_current_version_id,
       a.forked_from_id,
       a.forked_from_owner_user_id,
@@ -176,11 +186,14 @@ export async function fetchArtifactsByOwner(ownerUserId) {
   return rows.map(mapArtifactRow);
 }
 
-export async function fetchPublicArtifacts({ query, tag, sort } = {}) {
+export async function fetchPublicArtifacts({ query, tag, sort, category, page = 1, pageSize = 24 } = {}) {
   const params = [];
   const where = ["a.visibility = 'public'"];
   const normalizedQuery = query ? String(query).trim() : '';
   const normalizedTag = tag ? String(tag).trim().toLowerCase() : '';
+  const normalizedCategory = normalizeCategoryInput(category);
+  const resolvedPageSize = Math.min(Math.max(Number(pageSize) || 24, 1), 60);
+  const resolvedPage = Math.max(Number(page) || 1, 1);
 
   if (normalizedQuery) {
     params.push(`%${normalizedQuery}%`);
@@ -190,6 +203,11 @@ export async function fetchPublicArtifacts({ query, tag, sort } = {}) {
   if (normalizedTag) {
     params.push(normalizedTag);
     where.push(`EXISTS (\n      SELECT 1 FROM artifact_tags t\n      WHERE t.artifact_id = a.id AND t.tag = $${params.length}\n    )`);
+  }
+
+  if (category && normalizedCategory) {
+    params.push(normalizedCategory);
+    where.push(`a.category = $${params.length}`);
   }
 
   let orderClause = 'ORDER BY a.created_at DESC';
@@ -212,11 +230,32 @@ export async function fetchPublicArtifacts({ query, tag, sort } = {}) {
       orderClause = 'ORDER BY a.created_at DESC';
   }
 
+  const countResult = await getArtifactsDbPool().query(
+    `SELECT COUNT(*)::int AS total
+     FROM artifacts a
+     WHERE ${where.join(' AND ')}`,
+    params
+  );
+  const total = Number(countResult.rows?.[0]?.total || 0);
+  const offset = (resolvedPage - 1) * resolvedPageSize;
+  params.push(resolvedPageSize);
+  const limitParam = params.length;
+  params.push(offset);
+  const offsetParam = params.length;
+
   const rows = await fetchArtifactRows({
-    whereClause: `WHERE ${where.join(' AND ')} ${orderClause}`,
+    whereClause: `WHERE ${where.join(' AND ')} ${orderClause} LIMIT $${limitParam} OFFSET $${offsetParam}`,
     params
   });
-  return rows.map(mapArtifactRow);
+  return {
+    artifacts: rows.map(mapArtifactRow),
+    pagination: {
+      page: resolvedPage,
+      page_size: resolvedPageSize,
+      total,
+      total_pages: Math.max(1, Math.ceil(total / resolvedPageSize))
+    }
+  };
 }
 
 export async function fetchArtifactVersions(artifactId) {
@@ -268,7 +307,8 @@ export async function createArtifact({
   sourceSession,
   derivedFrom,
   screenshotUrl,
-  tags = []
+  tags = [],
+  category = 'general'
 }) {
   const pool = getArtifactsDbPool();
   const client = await pool.connect();
@@ -305,10 +345,10 @@ export async function createArtifact({
       `INSERT INTO artifacts
         (id, owner_user_id, title, description, visibility, created_at, updated_at,
          forked_from_id, forked_from_owner_user_id, forked_from_version_id, forked_from_version_label,
-         origin_artifact_id, origin_owner_user_id,
+         origin_artifact_id, origin_owner_user_id, category,
          current_version_id, versioning_enabled, chat_history_public, source_session)
        VALUES
-        ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $1, $2, $11, false, false, $12)`,
+        ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $1, $2, $11, $12, false, false, $13)`,
       [
         artifactId,
         ownerUserId,
@@ -321,6 +361,7 @@ export async function createArtifact({
         derivedFrom?.version_id || null,
         derivedFrom?.version_label || null,
         versionId,
+        normalizeCategoryInput(category),
         sourceSession || null
       ]
     );
@@ -526,7 +567,7 @@ export async function updateArtifactVisibility({ artifactId, ownerUserId, visibi
   return result.rowCount > 0;
 }
 
-export async function updateArtifactMetadata({ artifactId, ownerUserId, title, description, tags }) {
+export async function updateArtifactMetadata({ artifactId, ownerUserId, title, description, tags, category }) {
   const pool = getArtifactsDbPool();
   const client = await pool.connect();
   try {
@@ -535,10 +576,11 @@ export async function updateArtifactMetadata({ artifactId, ownerUserId, title, d
       `UPDATE artifacts
        SET title = $1,
            description = $2,
+           category = $5,
            updated_at = NOW()
        WHERE id = $3 AND owner_user_id = $4
        RETURNING id`,
-      [title, description, artifactId, ownerUserId]
+      [title, description, artifactId, ownerUserId, normalizeCategoryInput(category)]
     );
     if (result.rowCount > 0 && tags !== undefined) {
       const normalizedTags = normalizeTagsInput(tags);

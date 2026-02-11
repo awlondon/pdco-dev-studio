@@ -50,6 +50,7 @@ import {
   fetchArtifactsByOwner,
   fetchPublicArtifacts,
   forkArtifact,
+  normalizeCategoryInput,
   normalizeTagsInput,
   unpublishPublicArtifactsForUser,
   updateArtifactMetadata,
@@ -679,6 +680,7 @@ app.post('/api/artifacts', async (req, res) => {
     const codeVersions = resolveArtifactCodeVersions(req.body);
     const visibility = req.body?.visibility === 'public' ? 'public' : 'private';
     const tags = normalizeTagsInput(req.body?.tags);
+    const category = normalizeCategoryInput(req.body?.category);
     const validation = validateArtifactPayload({
       code: resolvedCode,
       codeVersions,
@@ -723,7 +725,8 @@ app.post('/api/artifacts', async (req, res) => {
         version_label: derivedFrom?.version_label || null
       },
       screenshotUrl,
-      tags
+      tags,
+      category
     });
 
     const artifact = await fetchArtifactById(artifactId);
@@ -1089,14 +1092,17 @@ app.get('/api/artifacts/private', async (req, res) => {
   }
 });
 
-app.get('/api/artifacts/public', async (req, res) => {
+app.get(['/api/artifacts/public', '/api/gallery', '/gallery'], async (req, res) => {
   try {
-    const publicArtifacts = await fetchPublicArtifacts({
+    const result = await fetchPublicArtifacts({
       query: req.query?.query,
       tag: req.query?.tag,
-      sort: req.query?.sort
+      sort: req.query?.sort,
+      category: req.query?.category,
+      page: req.query?.page,
+      pageSize: req.query?.page_size
     });
-    return res.json({ ok: true, artifacts: publicArtifacts });
+    return res.json({ ok: true, artifacts: result.artifacts, pagination: result.pagination });
   } catch (error) {
     console.error('Failed to load public artifacts.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load artifacts' });
@@ -1261,7 +1267,8 @@ app.patch('/api/artifacts/:id', async (req, res) => {
       ownerUserId: artifact.owner_user_id,
       title: String(req.body?.title || artifact.title),
       description: String(req.body?.description || artifact.description),
-      tags: shouldUpdateTags ? normalizeTagsInput(req.body?.tags) : undefined
+      tags: shouldUpdateTags ? normalizeTagsInput(req.body?.tags) : undefined,
+      category: req.body?.category !== undefined ? normalizeCategoryInput(req.body?.category) : artifact.category
     });
     const updated = await fetchArtifactById(artifact.artifact_id);
     return res.json({ ok: true, artifact: updated });
