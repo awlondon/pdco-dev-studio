@@ -16,6 +16,8 @@ Canonical schema lives in Postgres migrations (see `data/migrations/001_create_u
 | created_at | timestamptz | Account creation timestamp. |
 | last_seen_at | timestamptz | Last successful login. |
 | auth_providers | jsonb | Array of `{ provider, provider_user_id }` objects. |
+| is_internal | boolean | Marks internal/test accounts. |
+| plan_override | text | Optional internal plan tier override (`free`, `starter`, `pro`, `power`). When set, this is the effective runtime plan. |
 
 ### `billing`
 
