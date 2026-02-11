@@ -1,4 +1,13 @@
 import { estimateTokens, isTokenizerAccurate } from './tokenEstimator.js';
+import { buildContext, selectRelevantMessages as selectRelevantMessageSet } from './contextSelector.js';
+import { chunkCode as splitCodeIntoChunks, selectRelevantCodeChunks as selectTopCodeChunks } from './codeContext.js';
+import {
+  clearEmbeddingCache as clearSharedEmbeddingCache,
+  embedText,
+  getEmbeddingCacheStats as getSharedEmbeddingCacheStats
+} from './embeddings.js';
+import { cosineSimilarity as baseCosineSimilarity } from './similarity.js';
+import { packMessagesToBudget } from './tokenBudget.js';
 import {
   buildHistorySummarySystemMessage,
   DEFAULT_HISTORY_SUMMARY_THRESHOLD_TOKENS,
@@ -7,50 +16,7 @@ import {
 } from './historySummarizer.js';
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-const EMBEDDING_VECTOR_SIZE = 96;
-const embeddingCache = new Map();
 const messageEmbeddingStore = new WeakMap();
-
-function tokenizeText(text) {
-  if (!text) {
-    return [];
-  }
-  const value = String(text);
-  return value
-    .match(/[A-Za-z0-9_]+|\s+|[^\sA-Za-z0-9_]/g)
-    ?.filter(Boolean)
-    || [];
-}
-
-function hashTokenToBucket(token) {
-  let hash = 0;
-  for (let index = 0; index < token.length; index += 1) {
-    hash = ((hash << 5) - hash) + token.charCodeAt(index);
-    hash |= 0;
-  }
-  return Math.abs(hash) % EMBEDDING_VECTOR_SIZE;
-}
-
-function normalizeEmbedding(vector) {
-  const magnitude = Math.sqrt(vector.reduce((sum, value) => sum + (value * value), 0));
-  if (!magnitude) {
-    return vector;
-  }
-  return vector.map((value) => value / magnitude);
-}
-
-function computeLightweightEmbedding(text) {
-  const vector = Array.from({ length: EMBEDDING_VECTOR_SIZE }, () => 0);
-  const tokens = tokenizeText(String(text || '').toLowerCase()).filter((token) => token.trim());
-  if (!tokens.length) {
-    return vector;
-  }
-  for (const token of tokens) {
-    const bucket = hashTokenToBucket(token);
-    vector[bucket] += 1;
-  }
-  return normalizeEmbedding(vector);
-}
 
 export function getContextTokenBudget({ planTier, intentType }) {
   const normalizedPlan = String(planTier || 'free').toLowerCase();
@@ -121,7 +87,7 @@ export function getContextModeConfig(mode) {
     return {
       mode: resolvedMode,
       recentCount: 2,
-      relevantCount: 5,
+      relevantCount: 3,
       codeChunkLimit: 4,
       summaryThresholdRatio: 0.35
     };
@@ -130,7 +96,7 @@ export function getContextModeConfig(mode) {
     return {
       mode: resolvedMode,
       recentCount: 4,
-      relevantCount: 10,
+      relevantCount: 8,
       codeChunkLimit: 10,
       summaryThresholdRatio: 0.7
     };
@@ -138,7 +104,7 @@ export function getContextModeConfig(mode) {
   return {
     mode: resolvedMode,
     recentCount: 3,
-    relevantCount: 7,
+    relevantCount: 5,
     codeChunkLimit: 6,
     summaryThresholdRatio: 0.5
   };
@@ -158,42 +124,19 @@ export function dedupeMessages(messages = []) {
 }
 
 export function cosineSimilarity(vectorA = [], vectorB = []) {
-  if (!Array.isArray(vectorA) || !Array.isArray(vectorB) || vectorA.length !== vectorB.length) {
-    return 0;
-  }
-  let dot = 0;
-  let magA = 0;
-  let magB = 0;
-  for (let index = 0; index < vectorA.length; index += 1) {
-    const a = Number(vectorA[index]) || 0;
-    const b = Number(vectorB[index]) || 0;
-    dot += a * b;
-    magA += a * a;
-    magB += b * b;
-  }
-  if (!magA || !magB) {
-    return 0;
-  }
-  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  return baseCosineSimilarity(vectorA, vectorB);
 }
 
 export async function embedCached(text) {
-  const normalized = String(text || '').trim();
-  if (!normalized) {
-    return Array.from({ length: EMBEDDING_VECTOR_SIZE }, () => 0);
-  }
-  if (embeddingCache.has(normalized)) {
-    return embeddingCache.get(normalized);
-  }
-  const embedding = computeLightweightEmbedding(normalized);
-  embeddingCache.set(normalized, embedding);
-  return embedding;
+  return embedText(text);
 }
 
 export function getEmbeddingCacheStats() {
-  return {
-    size: embeddingCache.size
-  };
+  return getSharedEmbeddingCacheStats();
+}
+
+export function clearEmbeddingCache() {
+  clearSharedEmbeddingCache();
 }
 
 export async function storeEmbeddingsForMessages(messages = []) {
@@ -229,27 +172,16 @@ export async function selectRelevantMessages(query, messages, topK = 5) {
   if (!Array.isArray(messages) || messages.length === 0 || topK <= 0) {
     return [];
   }
-  await storeEmbeddingsForMessages(messages);
-  const queryEmbedding = await embedCached(query);
-  const scored = await Promise.all(messages.map(async (message, index) => {
-    const normalized = normalizeMessageForScoring(message);
-    const embedding = normalized.embedding
-      || messageEmbeddingStore.get(message)
-      || await embedCached(normalized.content);
-    const score = cosineSimilarity(queryEmbedding, embedding);
-    return {
-      ...normalized,
-      _index: index,
-      score,
-      embedding
-    };
+  const scored = await selectRelevantMessageSet({
+    query,
+    allMessages: messages,
+    maxResults: topK,
+    embedFn: embedCached
+  });
+  return scored.map((message) => ({
+    ...normalizeMessageForScoring(message),
+    score: Number(message.score) || 0
   }));
-
-  return scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .sort((a, b) => a._index - b._index)
-    .map(({ _index, score, ...message }) => ({ ...message, score }));
 }
 
 export async function selectRecentAndRelevantMessages({
@@ -273,36 +205,19 @@ export async function selectRecentAndRelevantMessages({
 }
 
 export function chunkCode(code = '') {
-  const value = String(code || '');
-  if (!value.trim()) {
-    return [];
-  }
-  const chunks = value
-    .split(/\n(?=function\s+|class\s+|export\s+|const\s+\w+\s*=\s*\([^)]*\)\s*=>)/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-  return chunks.length ? chunks : [value];
+  return splitCodeIntoChunks(code);
 }
 
 export async function selectRelevantCodeChunks({ currentQuery, code, maxChunks = 4, maxCharsPerChunk = 1500 }) {
-  const chunks = chunkCode(code);
-  if (!chunks.length || maxChunks <= 0) {
+  const codeChunks = splitCodeIntoChunks(code).map((content) => ({ content }));
+  if (!codeChunks.length || maxChunks <= 0) {
     return [];
   }
-  const scored = await Promise.all(chunks.map(async (chunk, index) => {
-    const embedding = await embedCached(chunk);
-    return {
-      index,
-      chunk,
-      embedding,
-      score: cosineSimilarity(await embedCached(currentQuery), embedding)
-    };
-  }));
-  return scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, maxChunks)
-    .sort((a, b) => a.index - b.index)
-    .map(({ chunk }) => chunk.slice(0, maxCharsPerChunk));
+  const selected = await selectTopCodeChunks(currentQuery, codeChunks, {
+    maxResults: maxChunks,
+    embedFn: embedCached
+  });
+  return selected.map((chunk) => String(chunk.content || '').slice(0, maxCharsPerChunk));
 }
 
 export async function buildTrimmedContext({
@@ -364,11 +279,12 @@ export async function buildTrimmedContext({
   const relevantPool = historySplit.shouldSummarize
     ? historySplit.olderMessages
     : normalizedMessages.slice(0, Math.max(0, normalizedMessages.length - effectiveRecentCount));
-  const hybridMessages = await selectRecentAndRelevantMessages({
+  const hybridMessages = await buildContext({
     query: query || recentMessages[recentMessages.length - 1]?.content || '',
-    messages: [...relevantPool, ...recentMessages],
+    sessionMessages: [...relevantPool, ...recentMessages],
+    maxRelevantResults: effectiveRelevantCount,
     recentCount: recentMessages.length,
-    topK: effectiveRelevantCount
+    embedFn: embedCached
   });
   const relevantMessages = hybridMessages.filter((message) => Number.isFinite(message?.score));
   const olderTokens = estimateMessageTokens(relevantPool, model);
@@ -402,11 +318,9 @@ export async function buildTrimmedContext({
     }
   }
 
-  for (const message of hybridMessages) {
+  const packedMessages = packMessagesToBudget(hybridMessages, Math.max(0, maxTokens - usedTokens));
+  for (const message of packedMessages) {
     const messageTokens = estimateTokensWithTokenizer(`${message.role}:\n${message.content}`, model);
-    if (usedTokens + messageTokens > maxTokens) {
-      break;
-    }
     built.push({ role: message.role, content: message.content });
     usedTokens += messageTokens;
   }
