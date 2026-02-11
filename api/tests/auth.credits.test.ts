@@ -33,6 +33,7 @@ function createMockPool({
             daily_used: currentDailyUsed,
             last_daily_reset_at: lastDaily,
             last_monthly_reset_at: lastMonthly,
+            current_period_end: new Date(lastMonthly.getTime() + 30 * 24 * 3600 * 1000),
             plan_tier: planTier
           }]
         };
@@ -159,5 +160,29 @@ test('resetUserCreditsIfNeeded resets daily and monthly credits for free users',
   assert.equal(Number(result.user?.credits_remaining ?? 0), 500);
   assert.equal(result.daily_used, 0);
   assert.equal(mock.getBalance(), 500);
+  assert.equal(mock.getDailyUsed(), 0);
+});
+
+
+test('resetUserCreditsIfNeeded resets daily counters at UTC midnight boundaries', async () => {
+  const now = new Date('2024-02-01T00:05:00Z');
+  const mock = createMockPool({
+    startingBalance: 250,
+    monthlyQuota: 500,
+    dailyUsed: 32,
+    lastDailyResetAt: new Date('2024-01-31T23:55:00Z'),
+    lastMonthlyResetAt: new Date('2024-01-15T00:00:00Z'),
+    planTier: 'pro'
+  });
+
+  const result = await resetUserCreditsIfNeeded({
+    userId: 'user-4',
+    now,
+    pool: mock.pool as unknown as { connect: () => Promise<unknown> }
+  });
+
+  assert.equal(Number(result.user?.credits_remaining ?? 0), 250);
+  assert.equal(result.daily_used, 0);
+  assert.equal(mock.getBalance(), 250);
   assert.equal(mock.getDailyUsed(), 0);
 });

@@ -29,6 +29,7 @@ import {
   findUserByStripeCustomer,
   getUserById,
   resetUserCreditsIfNeeded,
+  runScheduledCreditResets,
   updateUser
 } from './utils/userDb.js';
 import {
@@ -75,6 +76,50 @@ import {
 import { getDbPool } from './utils/queryLayer.js';
 
 const app = express();
+
+const CREDIT_MONTHLY_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+const CREDIT_DAILY_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function millisecondsUntilNextUtcMidnight(now = new Date()) {
+  const nextMidnight = new Date(now.getTime());
+  nextMidnight.setUTCHours(24, 0, 0, 0);
+  return Math.max(0, nextMidnight.getTime() - now.getTime());
+}
+
+async function runCreditResetSweep(reason) {
+  try {
+    const result = await runScheduledCreditResets();
+    logStructured('info', 'credit_reset_sweep', {
+      reason,
+      daily_reset_users: result.daily_reset_users,
+      monthly_reset_users: result.monthly_reset_users,
+      next_midnight_utc: result.next_midnight_utc
+    });
+  } catch (error) {
+    logStructured('error', 'credit_reset_sweep_failed', {
+      reason,
+      error: error?.message || 'unknown_error'
+    });
+    console.error('Credit reset sweep failed.', error);
+  }
+}
+
+function startCreditResetScheduler() {
+  runCreditResetSweep('startup');
+  setInterval(() => {
+    runCreditResetSweep('monthly_sweep_interval');
+  }, CREDIT_MONTHLY_SWEEP_INTERVAL_MS);
+
+  const startDailyReset = () => {
+    runCreditResetSweep('daily_midnight');
+    setInterval(() => {
+      runCreditResetSweep('daily_midnight');
+    }, CREDIT_DAILY_RESET_INTERVAL_MS);
+  };
+
+  const initialDelay = millisecondsUntilNextUtcMidnight();
+  setTimeout(startDailyReset, initialDelay);
+}
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const LLM_PROXY_URL =
@@ -2615,6 +2660,7 @@ app.post('/api/stripe/webhook', async (req, res) => {
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
   console.log('Maya API listening on', port);
+  startCreditResetScheduler();
 });
 
 function base64UrlEncode(value) {

@@ -38,8 +38,6 @@ function getUserDbPool() {
   return pool;
 }
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
 function logCreditEvent(level, message, context = {}) {
   const payload = {
     level,
@@ -64,10 +62,13 @@ function addMonthsUtc(date, months) {
 
 function shouldResetDaily(lastResetAt, now) {
   if (!lastResetAt) return true;
-  return now.getTime() - lastResetAt.getTime() >= DAY_IN_MS;
+  return now.toISOString().slice(0, 10) !== lastResetAt.toISOString().slice(0, 10);
 }
 
-function shouldResetMonthly(lastResetAt, now) {
+function shouldResetMonthly({ lastResetAt, periodEndAt, now }) {
+  if (periodEndAt) {
+    return now.getTime() >= periodEndAt.getTime();
+  }
   if (!lastResetAt) return true;
   const nextResetAt = addMonthsUtc(lastResetAt, 1);
   return now.getTime() >= nextResetAt.getTime();
@@ -149,14 +150,76 @@ function computeResetState({ row, now }) {
   const nowValue = now instanceof Date ? now : new Date(now);
   const lastDailyResetAt = parseDate(row.last_daily_reset_at);
   const lastMonthlyResetAt = parseDate(row.last_monthly_reset_at);
+  const currentPeriodEnd = parseDate(row.current_period_end);
   const dailyReset = shouldResetDaily(lastDailyResetAt, nowValue);
-  const monthlyReset = shouldResetMonthly(lastMonthlyResetAt, nowValue);
+  const monthlyReset = shouldResetMonthly({
+    lastResetAt: lastMonthlyResetAt,
+    periodEndAt: currentPeriodEnd,
+    now: nowValue
+  });
   return {
     now: nowValue,
     dailyReset,
     monthlyReset,
     lastDailyResetAt,
-    lastMonthlyResetAt
+    lastMonthlyResetAt,
+    currentPeriodEnd
+  };
+}
+
+function nextUtcMidnight(now = new Date()) {
+  const midnight = new Date(now.getTime());
+  midnight.setUTCHours(24, 0, 0, 0);
+  return midnight;
+}
+
+export async function runScheduledCreditResets({ now = new Date(), pool } = {}) {
+  const activePool = pool || getUserDbPool();
+  const timestamp = now instanceof Date ? now : new Date(now);
+  const nextPeriodEnd = addMonthsUtc(timestamp, 1);
+  const dailyResult = await activePool.query(
+    `UPDATE credits
+     SET daily_used = 0,
+         last_daily_reset_at = $1
+     WHERE last_daily_reset_at IS NULL
+        OR DATE(last_daily_reset_at AT TIME ZONE 'UTC') < DATE($1 AT TIME ZONE 'UTC')`,
+    [timestamp]
+  );
+
+  const monthlyResult = await activePool.query(
+    `WITH due AS (
+      SELECT c.user_id
+      FROM credits c
+      JOIN users u ON u.id = c.user_id
+      JOIN billing b ON b.user_id = c.user_id
+      WHERE COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') = 'free'
+        AND (
+          (b.current_period_end IS NOT NULL AND b.current_period_end <= $1)
+          OR (b.current_period_end IS NULL AND (c.last_monthly_reset_at IS NULL OR c.last_monthly_reset_at + INTERVAL '1 month' <= $1))
+        )
+      FOR UPDATE
+    ),
+    reset AS (
+      UPDATE credits c
+      SET balance = c.monthly_quota,
+          last_monthly_reset_at = $1
+      FROM due
+      WHERE c.user_id = due.user_id
+      RETURNING c.user_id
+    )
+    UPDATE billing b
+    SET current_period_start = $1,
+        current_period_end = $2
+    FROM reset
+    WHERE b.user_id = reset.user_id`,
+    [timestamp, nextPeriodEnd]
+  );
+
+  return {
+    now: timestamp,
+    next_midnight_utc: nextUtcMidnight(timestamp).toISOString(),
+    daily_reset_users: Number(dailyResult.rowCount || 0),
+    monthly_reset_users: Number(monthlyResult.rowCount || 0)
   };
 }
 
@@ -322,6 +385,7 @@ export async function resetUserCreditsIfNeeded({ userId, now = new Date(), pool 
         c.daily_used,
         c.last_daily_reset_at,
         c.last_monthly_reset_at,
+        b.current_period_end,
         COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier
        FROM credits c
        JOIN users u ON u.id = c.user_id
@@ -724,6 +788,7 @@ export async function applyCreditDeduction({
         c.daily_used,
         c.last_daily_reset_at,
         c.last_monthly_reset_at,
+        b.current_period_end,
         COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier
        FROM credits c
        JOIN users u ON u.id = c.user_id
