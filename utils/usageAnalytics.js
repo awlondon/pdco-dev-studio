@@ -374,3 +374,67 @@ export async function fetchSessionEvents({ userId, sessionId }) {
   );
   return result?.rows || null;
 }
+
+export async function fetchAdminUsageSummary({
+  days,
+  startDate,
+  endDate,
+  userId,
+  limit = 12
+} = {}) {
+  const where = [];
+  const params = [];
+
+  if (userId) {
+    params.push(userId);
+    where.push(`user_id = $${params.length}`);
+  }
+  if (startDate) {
+    params.push(startDate);
+    where.push(`DATE(created_at) >= $${params.length}`);
+  }
+  if (endDate) {
+    params.push(endDate);
+    where.push(`DATE(created_at) <= $${params.length}`);
+  }
+  if (Number.isFinite(days)) {
+    params.push(days);
+    where.push(`created_at >= NOW() - ($${params.length} || ' days')::interval`);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  params.push(limit);
+  const topModelsLimitParam = `$${params.length}`;
+
+  const result = await queryUsageAnalytics(
+    `WITH filtered AS (
+      SELECT *
+      FROM usage_events
+      ${whereClause}
+    ),
+    top_models AS (
+      SELECT
+        model,
+        COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tokens
+      FROM filtered
+      GROUP BY model
+      ORDER BY total_tokens DESC
+      LIMIT ${topModelsLimitParam}
+    )
+    SELECT json_build_object(
+      'total_requests', COALESCE((SELECT COUNT(*) FROM filtered), 0),
+      'total_input_tokens', COALESCE((SELECT SUM(input_tokens) FROM filtered), 0),
+      'total_output_tokens', COALESCE((SELECT SUM(output_tokens) FROM filtered), 0),
+      'total_tokens', COALESCE((SELECT SUM(input_tokens + output_tokens) FROM filtered), 0),
+      'avg_tokens_per_request', COALESCE((SELECT ROUND(AVG(input_tokens + output_tokens)) FROM filtered), 0),
+      'models', COALESCE((SELECT json_agg(top_models ORDER BY top_models.total_tokens DESC) FROM top_models), '[]'::json)
+    ) AS summary`,
+    params
+  );
+
+  return result?.rows?.[0]?.summary || null;
+}

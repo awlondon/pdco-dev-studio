@@ -321,6 +321,8 @@ const usageRangeLabel = document.getElementById('usage-range-label');
 const usageCreditsChart = document.getElementById('credits-chart');
 const usageRequestsChart = document.getElementById('requests-chart');
 const usageLatencyChart = document.getElementById('latency-chart');
+const usageTokenModelChart = document.getElementById('token-model-chart');
+const usageTokenRequestChart = document.getElementById('token-request-chart');
 const usageHistoryBody = document.getElementById('usage-history-body');
 const usageHistoryEmpty = document.getElementById('usage-history-empty');
 const usageLoadMore = document.getElementById('usage-load-more');
@@ -756,7 +758,9 @@ const usageState = {
   charts: {
     credits: null,
     requests: null,
-    latency: null
+    latency: null,
+    tokenModel: null,
+    tokenRequest: null
   }
 };
 
@@ -5790,7 +5794,37 @@ function formatRequestId(id, isAdmin) {
 }
 
 async function fetchUsageOverview({ force = false } = {}) {
-  return fetchUsageAnalytics({ force });
+  const isAdmin = window.location.pathname.startsWith('/admin/usage');
+  if (!isAdmin) {
+    return fetchUsageAnalytics({ force });
+  }
+  try {
+    const res = await withTimeout(
+      fetch(`${API_BASE}/admin/usage/summary?days=30`, {
+        cache: force ? 'no-store' : 'default',
+        credentials: 'include'
+      }),
+      USAGE_FETCH_TIMEOUT_MS,
+      'Admin usage summary request timed out'
+    );
+    if (!res.ok) {
+      throw new Error('Admin usage summary unavailable');
+    }
+    const data = await res.json();
+    const summary = data?.summary || {};
+    return {
+      overview: {
+        total_credits: 0,
+        total_requests: toNumber(summary.total_requests),
+        avg_latency_ms: 0,
+        success_rate: 0
+      },
+      admin_summary: summary
+    };
+  } catch (error) {
+    console.warn('Admin usage summary fetch failed.', error);
+    return { overview: null, admin_summary: null };
+  }
 }
 
 async function fetchUsageDaily({ days = 14, force = false } = {}) {
@@ -5824,7 +5858,7 @@ async function fetchUsageHistory({ days = 14, force = false } = {}) {
   }
   try {
     const res = await withTimeout(
-      fetch(`${API_BASE}/api/usage/history?${params.toString()}`, {
+      fetch(`${API_BASE}/user/usage/history?${params.toString()}`, {
         cache: force ? 'no-store' : 'default',
         credentials: 'include'
       }),
@@ -6025,12 +6059,13 @@ function buildUsageHistory(daily, isAdmin) {
       <td>${formatNumber(entry.total_credits)}</td>
       <td>${formatSeconds(entry.avg_latency_ms)}</td>
       <td>${formatNumber(failures)}</td>
+      <td>${formatNumber((entry.entries || []).reduce((sum, row) => sum + toNumber(row.input_tokens) + toNumber(row.output_tokens), 0))}</td>
     `;
     usageHistoryBody.appendChild(rowEl);
 
     const detailsRow = document.createElement('tr');
     const detailsCell = document.createElement('td');
-    detailsCell.colSpan = 5;
+    detailsCell.colSpan = 6;
     const details = document.createElement('details');
     details.innerHTML = `<summary>View requests</summary>`;
     const list = document.createElement('div');
@@ -6043,6 +6078,7 @@ function buildUsageHistory(daily, isAdmin) {
         <span>${request.intent_type || 'text'}</span>
         <span>${formatNumber(toNumber(request.credits_charged))} credits</span>
         <span>${formatSeconds(toNumber(request.latency_ms))}</span>
+        <span>${formatNumber(toNumber(request.input_tokens) + toNumber(request.output_tokens))} tokens</span>
         <span class="usage-pill">${request.status}</span>
       `;
       list.appendChild(item);
@@ -6211,6 +6247,80 @@ function renderLatencyChart(daily) {
   });
 }
 
+
+function renderTokenModelChart(daily, adminSummary = null) {
+  if (!usageTokenModelChart || !window.Chart) {
+    return;
+  }
+  destroyChart(usageState.charts.tokenModel);
+  const aggregated = new Map();
+  if (Array.isArray(adminSummary?.models) && adminSummary.models.length) {
+    adminSummary.models.forEach((row) => {
+      const key = row.model || 'unknown';
+      aggregated.set(key, toNumber(row.total_tokens));
+    });
+  } else {
+    daily.forEach((day) => {
+      (day.entries || []).forEach((entry) => {
+        const key = entry.model || 'unknown';
+        const current = aggregated.get(key) || 0;
+        aggregated.set(key, current + toNumber(entry.input_tokens) + toNumber(entry.output_tokens));
+      });
+    });
+  }
+  const rows = Array.from(aggregated.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  usageState.charts.tokenModel = new window.Chart(usageTokenModelChart.getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: rows.map(([model]) => model),
+      datasets: [{
+        data: rows.map(([, total]) => total),
+        backgroundColor: ['#6ae3be', '#7ba9ff', '#ffc766', '#ff8c8c', '#cf9cff', '#63d2ff', '#8ce36a', '#f7a8ff']
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#cfd4ff' } } }
+    }
+  });
+}
+
+function renderRequestTokenChart(daily) {
+  if (!usageTokenRequestChart || !window.Chart) {
+    return;
+  }
+  destroyChart(usageState.charts.tokenRequest);
+  const requests = [];
+  daily.forEach((entry) => {
+    (entry.entries || []).forEach((request) => {
+      requests.push({
+        id: formatRequestId(request.request_id, false),
+        tokens: toNumber(request.input_tokens) + toNumber(request.output_tokens)
+      });
+    });
+  });
+  const topRequests = requests.slice(-20);
+  usageState.charts.tokenRequest = new window.Chart(usageTokenRequestChart.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: topRequests.map((request) => request.id),
+      datasets: [{
+        label: 'Tokens',
+        data: topRequests.map((request) => request.tokens),
+        backgroundColor: 'rgba(106, 227, 190, 0.7)'
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#cfd4ff' } } },
+      scales: {
+        x: { ticks: { color: '#8c94c6', maxRotation: 70, minRotation: 70 } },
+        y: { ticks: { color: '#8c94c6' } }
+      }
+    }
+  });
+}
+
 function updateUsageCards(monthTotals, creditState) {
   if (!usageCreditsMonth || !usageRequestsMonth || !usageLatencyMonth || !usageSuccessMonth) {
     return;
@@ -6272,6 +6382,8 @@ async function refreshUsageView() {
     renderCreditsChart(dailyRange, getCreditState(), false, '');
     renderRequestsChart(dailyRange);
     renderLatencyChart(dailyRange);
+    renderTokenModelChart(historyDaily, overview?.admin_summary || null);
+    renderRequestTokenChart(historyDaily);
     buildUsageHistory(historyDaily, false);
 
     if (usageLoadMore) {
@@ -6340,6 +6452,8 @@ function closeUsageModal() {
   usageState.charts.credits = null;
   usageState.charts.requests = null;
   usageState.charts.latency = null;
+  usageState.charts.tokenModel = null;
+  usageState.charts.tokenRequest = null;
   clearAnalyticsModalWatchdog();
   usageModal.classList.add('hidden');
   document.body.style.overflow = '';

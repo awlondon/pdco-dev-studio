@@ -17,6 +17,7 @@ import {
   fetchUsageDailySummary,
   fetchUsageEventsByRange,
   fetchUsageOverview,
+  fetchAdminUsageSummary,
   getUsageAnalyticsPool,
   insertLlmTurnLog,
   insertRouteDecision,
@@ -78,6 +79,59 @@ import {
 import { getDbPool } from './utils/queryLayer.js';
 
 const app = express();
+
+async function recordUsageEventToDb({
+  user,
+  sessionId,
+  intentType,
+  model,
+  inputTokens,
+  outputTokens,
+  creditsCharged,
+  latencyMs,
+  status
+}) {
+  if (!user || !model) {
+    return;
+  }
+  const planTier = user.plan_tier || 'free';
+  const [pricing, creditNormFactorRaw] = await Promise.all([
+    fetchModelPricing({ model }),
+    fetchPlanNormalizationFactor({ plan: planTier })
+  ]);
+  const creditNormFactor = Number.isFinite(Number(creditNormFactorRaw))
+    ? Number(creditNormFactorRaw)
+    : 1;
+  const inputTokenValue = Number(inputTokens) || 0;
+  const outputTokenValue = Number(outputTokens) || 0;
+  const modelCostUsd = pricing
+    ? (
+      (inputTokenValue / 1000) * Number(pricing.cost_per_1k_input_tokens)
+      + (outputTokenValue / 1000) * Number(pricing.cost_per_1k_output_tokens)
+    ) * Number(pricing.credit_multiplier)
+    : 0;
+
+  await insertUsageEvent({
+    userId: user.user_id,
+    sessionId: sessionId || crypto.randomUUID(),
+    intentType,
+    model,
+    inputTokens: inputTokenValue,
+    outputTokens: outputTokenValue,
+    creditsUsed: Number(creditsCharged) || 0,
+    creditNormFactor,
+    modelCostUsd,
+    latencyMs: latencyMs ?? 0,
+    success: status === 'success'
+  });
+}
+
+function usageEventLoggingMiddleware(req, _res, next) {
+  req.logUsageEventToDb = (payload) => recordUsageEventToDb(payload);
+  next();
+}
+
+app.use(usageEventLoggingMiddleware);
 
 const CREDIT_MONTHLY_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const CREDIT_DAILY_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -1430,7 +1484,7 @@ app.get('/api/usage/daily', async (req, res) => {
   }
 });
 
-app.get('/api/usage/history', async (req, res) => {
+async function handleUserUsageHistory(req, res) {
   try {
     const session = await getSessionFromRequest(req);
     if (!session) {
@@ -1457,7 +1511,10 @@ app.get('/api/usage/history', async (req, res) => {
     console.error('Failed to load usage history.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load usage history' });
   }
-});
+}
+
+app.get('/api/usage/history', handleUserUsageHistory);
+app.get('/user/usage/history', handleUserUsageHistory);
 
 app.get('/api/usage/summary', async (req, res) => {
   try {
@@ -1511,6 +1568,44 @@ app.get('/api/usage/summary', async (req, res) => {
   } catch (error) {
     console.error('Failed to load usage summary.', error);
     return res.status(500).json({ ok: false, error: 'Failed to load usage summary' });
+  }
+});
+
+app.get('/admin/usage/summary', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const user = await getUserById(session.sub);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    if (!user.is_internal) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+
+    const days = parseRangeDays(req.query.range) ?? (Number(req.query.days) || 30);
+    const startDate = req.query.start_date ? String(req.query.start_date) : '';
+    const endDate = req.query.end_date ? String(req.query.end_date) : '';
+    const targetUserId = req.query.user_id ? String(req.query.user_id) : '';
+    const limit = Number(req.query.limit) || 12;
+    const pool = getUsageAnalyticsPool();
+    if (!pool) {
+      return res.json({ ok: true, summary: { total_requests: 0, total_tokens: 0, models: [] } });
+    }
+
+    const summary = await fetchAdminUsageSummary({
+      days,
+      startDate,
+      endDate,
+      userId: targetUserId || null,
+      limit
+    });
+    return res.json({ ok: true, range_days: days, summary: summary || { models: [] } });
+  } catch (error) {
+    console.error('Failed to load admin usage summary.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load admin usage summary' });
   }
 });
 
@@ -3596,12 +3691,9 @@ async function appendUsageEntry({
   creditsCharged,
   latencyMs,
   status,
-  timestamp
+  timestamp,
+  req = null
 }) {
-  if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_REPO) {
-    return;
-  }
-
   const timestampValue = timestamp || new Date().toISOString();
   const entry = {
     timestamp_utc: timestampValue,
@@ -3630,39 +3722,38 @@ async function appendUsageEntry({
   };
 
   if (eventType !== 'session_close') {
-    const planTier = user.plan_tier || 'free';
-    const [pricing, creditNormFactorRaw] = await Promise.all([
-      fetchModelPricing({ model }),
-      fetchPlanNormalizationFactor({ plan: planTier })
-    ]);
-    const creditNormFactor = Number.isFinite(Number(creditNormFactorRaw))
-      ? Number(creditNormFactorRaw)
-      : 1;
-    const inputTokenValue = Number(inputTokens) || 0;
-    const outputTokenValue = Number(outputTokens) || 0;
-    const modelCostUsd = pricing
-      ? (
-        (inputTokenValue / 1000) * Number(pricing.cost_per_1k_input_tokens)
-        + (outputTokenValue / 1000) * Number(pricing.cost_per_1k_output_tokens)
-      ) * Number(pricing.credit_multiplier)
-      : 0;
-    await insertUsageEvent({
-      userId: user.user_id,
-      sessionId: sessionId || crypto.randomUUID(),
-      intentType,
-      model,
-      inputTokens: inputTokenValue,
-      outputTokens: outputTokenValue,
-      creditsUsed: creditsCharged,
-      creditNormFactor,
-      modelCostUsd,
-      latencyMs: latencyMs ?? 0,
-      success: status === 'success'
-    });
+    if (typeof req?.logUsageEventToDb === 'function') {
+      await req.logUsageEventToDb({
+        user,
+        sessionId,
+        intentType,
+        model,
+        inputTokens,
+        outputTokens,
+        creditsCharged,
+        latencyMs,
+        status
+      });
+    } else {
+      await recordUsageEventToDb({
+        user,
+        sessionId,
+        intentType,
+        model,
+        inputTokens,
+        outputTokens,
+        creditsCharged,
+        latencyMs,
+        status
+      });
+    }
   }
 
-  const { appendUsageLog } = await import('./api/usageLog.js');
-  await appendUsageLog(process.env, entry);
+
+  if (process.env.GITHUB_TOKEN && process.env.GITHUB_REPO) {
+    const { appendUsageLog } = await import('./api/usageLog.js');
+    await appendUsageLog(process.env, entry);
+  }
 }
 
 

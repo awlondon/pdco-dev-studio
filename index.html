@@ -939,6 +939,15 @@
             </div>
             <canvas id="credits-chart" height="150"></canvas>
           </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Token consumption by model</h3>
+                <p>Input + output tokens grouped by model</p>
+              </div>
+            </div>
+            <canvas id="token-model-chart" height="150"></canvas>
+          </div>
         </div>
 
         <div class="usage-tab-panel" data-tab-panel="daily" role="tabpanel">
@@ -960,6 +969,15 @@
             </div>
             <canvas id="latency-chart" height="140"></canvas>
           </div>
+          <div class="usage-chart-card">
+            <div class="usage-chart-header">
+              <div>
+                <h3>Request token profile</h3>
+                <p>Latest requests by token size</p>
+              </div>
+            </div>
+            <canvas id="token-request-chart" height="140"></canvas>
+          </div>
           <button id="usage-load-more" class="ghost-button" type="button">Load more</button>
         </div>
 
@@ -972,6 +990,7 @@
                 <th>Credits</th>
                 <th>Avg latency</th>
                 <th>Failures</th>
+                <th>Tokens</th>
               </tr>
             </thead>
             <tbody id="usage-history-body"></tbody>
