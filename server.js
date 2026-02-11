@@ -72,6 +72,7 @@ import {
   getContextTokenBudget,
   resolveContextMode
 } from './utils/tokenEfficiency.js';
+import { getDbPool } from './utils/queryLayer.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -198,6 +199,112 @@ const DATA_DIR = path.join(__dirname, 'data');
 const ARTIFACT_UPLOADS_DIR = path.join(DATA_DIR, 'artifact_uploads');
 const PROFILE_UPLOADS_DIR = path.join(DATA_DIR, 'profile_uploads');
 const SESSION_STATE_DIR = path.join(DATA_DIR, 'session_state');
+const SESSION_STATE_MAX_BYTES = Number(process.env.SESSION_STATE_MAX_BYTES || 4_000_000);
+
+function getSessionStateDbPool() {
+  return getDbPool();
+}
+
+async function upsertSessionStateRecord({ userId, sessionId, state, summary = null }) {
+  const dbPool = getSessionStateDbPool();
+  const updatedAt = new Date().toISOString();
+  if (dbPool) {
+    const serialized = JSON.stringify(state || {});
+    if (Buffer.byteLength(serialized, 'utf8') > SESSION_STATE_MAX_BYTES) {
+      throw new Error('Session state exceeds max allowed size');
+    }
+    await dbPool.query(
+      `
+      INSERT INTO sessions (session_id, user_id, last_active, state_blob)
+      VALUES ($1, $2, NOW(), $3::jsonb)
+      ON CONFLICT (session_id)
+      DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        last_active = NOW(),
+        state_blob = EXCLUDED.state_blob
+      `,
+      [sessionId, userId, JSON.stringify({ summary, state, updated_at: updatedAt })]
+    );
+    return;
+  }
+  await fs.mkdir(SESSION_STATE_DIR, { recursive: true });
+  const payload = {
+    user_id: userId,
+    session_id: sessionId,
+    summary,
+    state,
+    updated_at: updatedAt
+  };
+  const filePath = path.join(SESSION_STATE_DIR, `${userId}-${sessionId}.json`);
+  await fs.writeFile(filePath, JSON.stringify(payload));
+}
+
+async function fetchSessionStateRecord({ userId, sessionId = '' }) {
+  const dbPool = getSessionStateDbPool();
+  if (dbPool) {
+    if (sessionId) {
+      const result = await dbPool.query(
+        `
+        SELECT session_id, user_id, last_active, state_blob
+        FROM sessions
+        WHERE session_id = $1 AND user_id = $2
+        LIMIT 1
+        `,
+        [sessionId, userId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        session_id: row.session_id,
+        user_id: row.user_id,
+        last_active: row.last_active,
+        ...(row.state_blob || {})
+      };
+    }
+    const result = await dbPool.query(
+      `
+      SELECT session_id, user_id, last_active, state_blob
+      FROM sessions
+      WHERE user_id = $1
+      ORDER BY last_active DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      session_id: row.session_id,
+      user_id: row.user_id,
+      last_active: row.last_active,
+      ...(row.state_blob || {})
+    };
+  }
+
+  if (sessionId) {
+    const filePath = path.join(SESSION_STATE_DIR, `${userId}-${sessionId}.json`);
+    const text = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(text);
+  }
+  await fs.mkdir(SESSION_STATE_DIR, { recursive: true });
+  const entries = await fs.readdir(SESSION_STATE_DIR).catch(() => []);
+  const prefix = `${userId}-`;
+  const files = entries.filter((name) => name.startsWith(prefix) && name.endsWith('.json'));
+  files.sort((a, b) => b.localeCompare(a));
+  for (const name of files) {
+    try {
+      const text = await fs.readFile(path.join(SESSION_STATE_DIR, name), 'utf8');
+      return JSON.parse(text);
+    } catch {
+      // try next file
+    }
+  }
+  return null;
+}
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
 const DEFAULT_MAX_CONTEXT_MESSAGES = 8;
 const DEFAULT_MAX_RELEVANT_MESSAGES = 8;
@@ -1913,25 +2020,80 @@ app.post('/api/session/state', async (req, res) => {
     if (!session) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
-    const sessionId = typeof req.body?.session_id === 'string' ? req.body.session_id : '';
+    const sessionId = typeof req.body?.session_id === 'string'
+      ? req.body.session_id
+      : (typeof req.body?.sessionId === 'string' ? req.body.sessionId : '');
     const state = req.body?.state;
     if (!sessionId || !state || typeof state !== 'object') {
       return res.status(400).json({ ok: false, error: 'Invalid session state payload' });
     }
-    await fs.mkdir(SESSION_STATE_DIR, { recursive: true });
-    const payload = {
-      user_id: session.sub,
-      session_id: sessionId,
+    await upsertSessionStateRecord({
+      userId: session.sub,
+      sessionId,
       summary: req.body?.summary || null,
-      state,
-      updated_at: new Date().toISOString()
-    };
-    const filePath = path.join(SESSION_STATE_DIR, `${session.sub}-${sessionId}.json`);
-    await fs.writeFile(filePath, JSON.stringify(payload));
-    return res.json({ ok: true });
+      state
+    });
+    return res.json({ ok: true, session_id: sessionId });
   } catch (error) {
     console.error('Failed to persist session state.', error);
+    if (error?.message?.includes('max allowed size')) {
+      return res.status(413).json({ ok: false, error: error.message });
+    }
     return res.status(500).json({ ok: false, error: 'Failed to persist session state' });
+  }
+});
+
+app.put('/api/session/state', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const sessionId = typeof req.body?.session_id === 'string'
+      ? req.body.session_id
+      : (typeof req.body?.sessionId === 'string' ? req.body.sessionId : '');
+    const state = req.body?.state;
+    if (!sessionId || !state || typeof state !== 'object') {
+      return res.status(400).json({ ok: false, error: 'Invalid session state payload' });
+    }
+    await upsertSessionStateRecord({
+      userId: session.sub,
+      sessionId,
+      summary: req.body?.summary || null,
+      state
+    });
+    return res.json({ ok: true, session_id: sessionId });
+  } catch (error) {
+    console.error('Failed to persist session state.', error);
+    if (error?.message?.includes('max allowed size')) {
+      return res.status(413).json({ ok: false, error: error.message });
+    }
+    return res.status(500).json({ ok: false, error: 'Failed to persist session state' });
+  }
+});
+
+app.get('/api/session/state', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const sessionId = typeof req.query?.session_id === 'string'
+      ? req.query.session_id
+      : (typeof req.query?.sessionId === 'string' ? req.query.sessionId : '');
+    const payload = await fetchSessionStateRecord({ userId: session.sub, sessionId });
+    if (!payload) {
+      return res.status(404).json({ ok: false, error: 'Session state not found' });
+    }
+    return res.json({
+      ok: true,
+      session_id: payload.session_id || sessionId || null,
+      session_state: payload?.state || null,
+      summary: payload?.summary || null,
+      updated_at: payload?.updated_at || payload?.last_active || null
+    });
+  } catch {
+    return res.status(404).json({ ok: false, error: 'Session state not found' });
   }
 });
 
@@ -1945,10 +2107,17 @@ app.get('/api/session/state/:sessionId', async (req, res) => {
     if (!sessionId) {
       return res.status(400).json({ ok: false, error: 'Missing sessionId' });
     }
-    const filePath = path.join(SESSION_STATE_DIR, `${session.sub}-${sessionId}.json`);
-    const text = await fs.readFile(filePath, 'utf8');
-    const payload = JSON.parse(text);
-    return res.json({ ok: true, session_state: payload?.state || null, summary: payload?.summary || null });
+    const payload = await fetchSessionStateRecord({ userId: session.sub, sessionId });
+    if (!payload) {
+      return res.status(404).json({ ok: false, error: 'Session state not found' });
+    }
+    return res.json({
+      ok: true,
+      session_id: payload.session_id || sessionId,
+      session_state: payload?.state || null,
+      summary: payload?.summary || null,
+      updated_at: payload?.updated_at || payload?.last_active || null
+    });
   } catch {
     return res.status(404).json({ ok: false, error: 'Session state not found' });
   }

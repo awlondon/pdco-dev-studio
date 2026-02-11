@@ -12,7 +12,6 @@ const API_BASE =
     ? 'http://localhost:8080'
     : 'https://maya-api-136741418395.us-central1.run.app';
 
-const MAX_LOCALSTORAGE_JSON_CHARS = 500_000;
 const SESSION_STATE_SERVER_PERSIST_THRESHOLD = 200_000;
 
 if (!window.__sessionState || typeof window.__sessionState !== 'object') {
@@ -21,24 +20,6 @@ if (!window.__sessionState || typeof window.__sessionState !== 'object') {
 if (!Array.isArray(window.__versionStack)) {
   window.__versionStack = [];
 }
-
-function setLocalStorageJsonIfSmall(key, value) {
-  if (!window.localStorage || !key) {
-    return false;
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    if (serialized.length < MAX_LOCALSTORAGE_JSON_CHARS) {
-      window.localStorage.setItem(key, serialized);
-      return true;
-    }
-    window.localStorage.removeItem(key);
-  } catch (error) {
-    console.warn(`Skipping localStorage write for ${key}:`, error);
-  }
-  return false;
-}
-
 
 
 async function persistSessionStateToServer(payload) {
@@ -1496,7 +1477,6 @@ function clearChatState() {
 }
 
 const SESSION_STATE_SCHEMA_VERSION = '1.2';
-const SESSION_STATE_STORAGE_KEY_PREFIX = 'maya_session_state:';
 const SESSION_STATE_DB_NAME = 'maya_dev_ui';
 const SESSION_STATE_DB_VERSION = 3;
 const SESSION_STATE_STORE_NAME = 'sessions';
@@ -1523,14 +1503,6 @@ function getSessionIndexRange(sessionId, value) {
     return null;
   }
   return window.IDBKeyRange.bound([sessionId, value], [sessionId, '\uffff']);
-}
-
-function getVersionStorageKey(id = sessionId) {
-  return `maya_code_versions:${id || 'default'}`;
-}
-
-function getSessionStateStorageKey(id = sessionId) {
-  return `${SESSION_STATE_STORAGE_KEY_PREFIX}${id || 'default'}`;
 }
 
 function generateVersionId() {
@@ -1854,29 +1826,14 @@ function persistSessionStateNow() {
     session_state: sessionState
   };
   window.__sessionState = payload;
-  const key = getSessionStateStorageKey();
   const payloadSize = JSON.stringify(payload).length;
-  if (payloadSize < SESSION_STATE_SERVER_PERSIST_THRESHOLD) {
-    setLocalStorageJsonIfSmall(key, payload);
-  } else {
-    const lightweight = {
-      schema_version: SESSION_STATE_SCHEMA_VERSION,
-      saved_at: payload.saved_at,
-      session_state: {
-        session_id: sessionState.session_id,
-        started_at: sessionState.started_at,
-        current_editor: {
-          version_id: sessionState.current_editor?.version_id || '',
-          language: sessionState.current_editor?.language || 'html'
-        },
-        messages_count: sessionState.messages?.length || 0,
-        code_versions_count: sessionState.code_versions?.length || 0,
-        active_version_index: sessionState.active_version_index
-      }
-    };
-    setLocalStorageJsonIfSmall(key, lightweight);
-    persistSessionStateToServer(payload);
+  if (payloadSize >= SESSION_STATE_SERVER_PERSIST_THRESHOLD) {
+    console.info('Persisting large session state to server.', {
+      session_id: sessionState.session_id,
+      bytes: payloadSize
+    });
   }
+  persistSessionStateToServer(payload);
   saveSessionSnapshotToIndexedDb(sessionState);
 }
 
@@ -1890,28 +1847,37 @@ function scheduleSessionStatePersist() {
   }, SESSION_STATE_PERSIST_DEBOUNCE_MS);
 }
 
-function loadSessionStateFromLocalStorage() {
-  if (window.__sessionState) {
-    const inMemoryState = normalizeSessionState(window.__sessionState);
-    if (inMemoryState) {
-      return inMemoryState;
-    }
-  }
-  if (!window.localStorage) {
+async function loadSessionStateFromServer(id = '') {
+  if (!API_BASE) {
     return null;
   }
+  const query = id ? `?session_id=${encodeURIComponent(id)}` : '';
   try {
-    const stored = JSON.parse(window.localStorage.getItem(getSessionStateStorageKey()) || 'null');
-    return normalizeSessionState(stored);
+    const response = await fetch(`${API_BASE}/api/session/state${query}`, {
+      method: 'GET',
+      credentials: 'include'
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    return normalizeSessionState(payload);
   } catch {
     return null;
   }
 }
 
 async function initializeSessionState() {
-  const localState = loadSessionStateFromLocalStorage();
-  if (localState) {
-    sessionState = localState;
+  const inMemoryState = normalizeSessionState(window.__sessionState);
+  if (inMemoryState) {
+    sessionState = inMemoryState;
+    return;
+  }
+  const serverState = await loadSessionStateFromServer(sessionId);
+  if (serverState) {
+    sessionState = serverState;
+    sessionId = serverState.session_id || sessionId;
+    window.sessionStorage?.setItem('mayaSessionId', sessionId);
     return;
   }
   const indexed = await loadSessionStateFromIndexedDb(sessionId);
@@ -1943,8 +1909,6 @@ async function initializeSessionState() {
 
 function persistVersionStack() {
   window.__versionStack = codeVersionStack.map((entry) => ({ ...entry }));
-  const key = getVersionStorageKey();
-  setLocalStorageJsonIfSmall(key, window.__versionStack);
 }
 
 function normalizeStoredVersion(entry) {
@@ -1988,19 +1952,7 @@ function loadVersionStack() {
   if (Array.isArray(window.__versionStack) && window.__versionStack.length) {
     return window.__versionStack.map(normalizeStoredVersion).filter(Boolean);
   }
-  if (!window.localStorage) {
-    return [];
-  }
-  const key = getVersionStorageKey();
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(key) || '[]');
-    if (!Array.isArray(stored)) {
-      return [];
-    }
-    return stored.map(normalizeStoredVersion).filter(Boolean);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 function setActiveVersionByIndex(index) {
@@ -8794,6 +8746,7 @@ async function sendChat() {
       body: JSON.stringify({
         messages,
         sessionId,
+        session_id: sessionId,
         intentType: resolvedIntent.type,
         contextMode: (Auth.user?.preferences?.context_mode || 'balanced'),
         user: getUserContext()
