@@ -64,7 +64,14 @@ import {
   upsertProfile
 } from './utils/profileDb.js';
 import { createObjectStorageAdapter } from './utils/objectStorage.js';
-import { buildTrimmedContext, estimateMessageTokens, estimateTokensWithTokenizer } from './utils/tokenEfficiency.js';
+import {
+  applyUsageAwareReduction,
+  buildTrimmedContext,
+  estimateMessageTokens,
+  estimateTokensWithTokenizer,
+  getContextTokenBudget,
+  resolveContextMode
+} from './utils/tokenEfficiency.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -192,14 +199,22 @@ const ARTIFACT_UPLOADS_DIR = path.join(DATA_DIR, 'artifact_uploads');
 const PROFILE_UPLOADS_DIR = path.join(DATA_DIR, 'profile_uploads');
 const SESSION_STATE_DIR = path.join(DATA_DIR, 'session_state');
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
-const MAX_PROMPT_TOKENS = 6000;
-const MAX_CONTEXT_MESSAGES = 6;
-const MAX_CODE_CONTEXT_CHARS = 3000;
-const SUMMARY_TRIGGER_TOKENS = 5000;
+const DEFAULT_MAX_CONTEXT_MESSAGES = 8;
+const DEFAULT_MAX_RELEVANT_MESSAGES = 8;
+const DEFAULT_MAX_CODE_CONTEXT_CHARS = 3000;
 const storageAdapter = createObjectStorageAdapter({
   artifactUploadsDir: ARTIFACT_UPLOADS_DIR,
   profileUploadsDir: PROFILE_UPLOADS_DIR
 });
+
+const tokenEfficiencyTelemetry = {
+  totalRequests: 0,
+  totalTokensBeforeTrim: 0,
+  totalTokensAfterTrim: 0,
+  totalTokensSaved: 0,
+  totalRelevanceSelected: 0,
+  summaryUsageCount: 0
+};
 
 const CHAT_SYSTEM_PROMPT = `You are a serious, capable engineering assistant.
 Be concise, direct, and practical.
@@ -308,13 +323,18 @@ app.patch('/api/account/preferences', async (req, res) => {
     }
 
     const newsletterOptIn = req.body?.newsletter_opt_in;
+    const contextMode = req.body?.context_mode;
     if (typeof newsletterOptIn !== 'boolean') {
       return res.status(400).json({ ok: false, error: 'Invalid preferences payload' });
+    }
+    if (contextMode !== undefined && !['aggressive', 'balanced', 'full'].includes(String(contextMode).toLowerCase())) {
+      return res.status(400).json({ ok: false, error: 'Invalid context mode' });
     }
 
     const nextPreferences = {
       ...(user.preferences || {}),
-      newsletter_opt_in: newsletterOptIn
+      newsletter_opt_in: newsletterOptIn,
+      context_mode: resolveContextMode(contextMode || user.preferences?.context_mode || 'balanced')
     };
 
     const updated = await updateUser(session.sub, {
@@ -1398,15 +1418,31 @@ app.post('/api/chat', async (req, res) => {
       : typeof req.body?.code === 'string'
         ? req.body.code
         : '';
+    const contextMode = resolveContextMode(
+      req.body?.contextMode
+      || req.body?.context_mode
+      || user.preferences?.context_mode
+      || 'balanced'
+    );
+    const planTier = user.plan_tier || 'free';
+    const baseContextBudget = getContextTokenBudget({ planTier, intentType });
+    const adjustedContextBudget = applyUsageAwareReduction({
+      contextBudget: baseContextBudget,
+      recentUsage: Number(user.credits_used || 0),
+      monthlyLimit: Number(user.credits_total || FREE_PLAN.monthly_credits)
+    });
     const trimmedContext = await buildTrimmedContext({
       systemPrompt: CHAT_SYSTEM_PROMPT,
       messages,
-      codeSegments: rawCodeContext ? [{ name: 'editor', content: rawCodeContext.slice(0, MAX_CODE_CONTEXT_CHARS) }] : [],
-      maxTokens: MAX_PROMPT_TOKENS,
+      query: messages[messages.length - 1]?.content || '',
+      codeSegments: rawCodeContext ? [{ name: 'editor', content: rawCodeContext }] : [],
+      maxTokens: adjustedContextBudget,
       model: requestedModel,
-      maxRecentMessages: MAX_CONTEXT_MESSAGES,
-      summaryTriggerTokens: SUMMARY_TRIGGER_TOKENS,
-      maxCodeChars: MAX_CODE_CONTEXT_CHARS,
+      maxRecentMessages: DEFAULT_MAX_CONTEXT_MESSAGES,
+      maxRelevantMessages: DEFAULT_MAX_RELEVANT_MESSAGES,
+      contextMode,
+      summaryTriggerTokens: Math.floor(adjustedContextBudget * 0.65),
+      maxCodeChars: DEFAULT_MAX_CODE_CONTEXT_CHARS,
       llmProxyUrl: LLM_PROXY_URL
     });
     req.body.messages = trimmedContext.messages;
@@ -1416,8 +1452,17 @@ app.post('/api/chat', async (req, res) => {
     req.body.token_estimate = {
       actual_tokens: trimmedContext.tokenCount,
       naive_tokens: trimmedContext.naiveTokenCount,
-      saved_tokens: trimmedContext.savedTokens
+      saved_tokens: trimmedContext.savedTokens,
+      context_mode: contextMode,
+      budget_tokens: adjustedContextBudget
     };
+    recordTokenEfficiency(trimmedContext.metrics || {});
+    logStructured('info', 'token_efficiency', {
+      request_id: requestId,
+      user_id: user.user_id,
+      session_id: req.body?.sessionId || '',
+      ...trimmedContext.metrics
+    });
     const promptText = buildPromptText(trimmedContext.messages);
     const inputChars = promptText.length;
     const inputTokensEstimate = trimmedContext.tokenCount;
@@ -1946,6 +1991,39 @@ app.get('/api/usage/token-overview', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'Failed to load token overview' });
   }
 });
+app.get('/api/usage/token-efficiency', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const totalRequests = tokenEfficiencyTelemetry.totalRequests || 0;
+    const before = tokenEfficiencyTelemetry.totalTokensBeforeTrim || 0;
+    const after = tokenEfficiencyTelemetry.totalTokensAfterTrim || 0;
+    const averageTokensPerRequest = totalRequests > 0
+      ? Number((after / totalRequests).toFixed(2))
+      : 0;
+    const reductionPercent = before > 0
+      ? Number((((before - after) / before) * 100).toFixed(2))
+      : 0;
+
+    return res.json({
+      ok: true,
+      total_requests: totalRequests,
+      average_tokens_per_request: averageTokensPerRequest,
+      percent_reduction_vs_naive: reductionPercent,
+      tokens_saved_total: tokenEfficiencyTelemetry.totalTokensSaved || 0,
+      summary_usage_count: tokenEfficiencyTelemetry.summaryUsageCount || 0,
+      relevance_selected_average: totalRequests > 0
+        ? Number((tokenEfficiencyTelemetry.totalRelevanceSelected / totalRequests).toFixed(2))
+        : 0
+    });
+  } catch (error) {
+    console.error('Failed to load token efficiency usage.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load token efficiency usage' });
+  }
+});
+
 
 
 /**
@@ -3087,6 +3165,17 @@ function buildSessionSummariesFromUsage(rows) {
   return Array.from(map.values()).sort((a, b) => {
     return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
   });
+}
+
+function recordTokenEfficiency(metrics = {}) {
+  tokenEfficiencyTelemetry.totalRequests += 1;
+  tokenEfficiencyTelemetry.totalTokensBeforeTrim += Number(metrics.totalTokensBeforeTrim || 0);
+  tokenEfficiencyTelemetry.totalTokensAfterTrim += Number(metrics.totalTokensAfterTrim || 0);
+  tokenEfficiencyTelemetry.totalTokensSaved += Number(metrics.tokensSaved || 0);
+  tokenEfficiencyTelemetry.totalRelevanceSelected += Number(metrics.relevanceSelectedCount || 0);
+  if (metrics.summarized) {
+    tokenEfficiencyTelemetry.summaryUsageCount += 1;
+  }
 }
 
 function csvEscape(value) {

@@ -242,6 +242,7 @@ const accountViewGalleryButton = document.getElementById('accountViewGallery');
 const accountViewPublicGalleryButton = document.getElementById('accountViewPublicGallery');
 const accountViewProfileButton = document.getElementById('accountViewProfile');
 const accountNewsletterOptIn = document.getElementById('accountNewsletterOptIn');
+const accountContextMode = document.getElementById('accountContextMode');
 const accountPreferencesStatus = document.getElementById('accountPreferencesStatus');
 const accountSessionHistoryBody = document.getElementById('accountSessionHistoryBody');
 const accountSessionHistoryEmpty = document.getElementById('accountSessionHistoryEmpty');
@@ -2418,15 +2419,21 @@ function updateAccountPreferences() {
   const newsletterOptIn = typeof preferences.newsletter_opt_in === 'boolean'
     ? preferences.newsletter_opt_in
     : false;
+  const contextMode = ['aggressive', 'balanced', 'full'].includes(preferences.context_mode)
+    ? preferences.context_mode
+    : 'balanced';
   if (accountNewsletterOptIn) {
     accountNewsletterOptIn.checked = newsletterOptIn;
+  }
+  if (accountContextMode) {
+    accountContextMode.value = contextMode;
   }
   if (accountPreferencesStatus) {
     accountPreferencesStatus.textContent = 'Preferences sync automatically.';
   }
 }
 
-async function saveAccountPreferences({ newsletterOptIn }) {
+async function saveAccountPreferences({ newsletterOptIn, contextMode }) {
   if (!API_BASE) {
     return false;
   }
@@ -2438,13 +2445,19 @@ async function saveAccountPreferences({ newsletterOptIn }) {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newsletter_opt_in: newsletterOptIn })
+      body: JSON.stringify({
+        newsletter_opt_in: newsletterOptIn,
+        context_mode: contextMode
+      })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(data?.error || 'Preference update failed');
     }
-    const nextPreferences = data?.preferences || { newsletter_opt_in: newsletterOptIn };
+    const nextPreferences = data?.preferences || {
+      newsletter_opt_in: newsletterOptIn,
+      context_mode: contextMode || 'balanced'
+    };
     if (Auth.user) {
       Auth.user.preferences = nextPreferences;
     }
@@ -8782,6 +8795,7 @@ async function sendChat() {
         messages,
         sessionId,
         intentType: resolvedIntent.type,
+        contextMode: (Auth.user?.preferences?.context_mode || 'balanced'),
         user: getUserContext()
       })
     });
@@ -9469,7 +9483,10 @@ if (accountNewsletterOptIn) {
     if (accountPreferencesStatus) {
       accountPreferencesStatus.textContent = 'Saving preferences...';
     }
-    const saved = await saveAccountPreferences({ newsletterOptIn: nextValue });
+    const saved = await saveAccountPreferences({
+      newsletterOptIn: nextValue,
+      contextMode: accountContextMode?.value || 'balanced'
+    });
     if (!saved) {
       accountNewsletterOptIn.checked = previousValue;
       if (accountPreferencesStatus) {
@@ -9480,6 +9497,32 @@ if (accountNewsletterOptIn) {
       accountPreferencesStatus.textContent = 'Preferences saved.';
     }
     accountNewsletterOptIn.disabled = false;
+  });
+}
+
+
+if (accountContextMode) {
+  accountContextMode.addEventListener('change', async () => {
+    const nextMode = accountContextMode.value;
+    const previousMode = Auth.user?.preferences?.context_mode || 'balanced';
+    accountContextMode.disabled = true;
+    if (accountPreferencesStatus) {
+      accountPreferencesStatus.textContent = 'Saving preferences...';
+    }
+    const saved = await saveAccountPreferences({
+      newsletterOptIn: Boolean(accountNewsletterOptIn?.checked),
+      contextMode: nextMode
+    });
+    if (!saved) {
+      accountContextMode.value = previousMode;
+      if (accountPreferencesStatus) {
+        accountPreferencesStatus.textContent = 'Unable to save preferences.';
+      }
+      showToast('We could not save your preferences. Please try again.', { variant: 'error' });
+    } else if (accountPreferencesStatus) {
+      accountPreferencesStatus.textContent = 'Preferences saved.';
+    }
+    accountContextMode.disabled = false;
   });
 }
 
