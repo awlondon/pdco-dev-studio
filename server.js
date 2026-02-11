@@ -71,6 +71,7 @@ import {
   estimateMessageTokens,
   estimateTokensWithTokenizer,
   getContextTokenBudget,
+  hasAccurateTokenizer,
   resolveContextMode
 } from './utils/tokenEfficiency.js';
 import { getDbPool } from './utils/queryLayer.js';
@@ -1642,7 +1643,8 @@ app.post('/api/chat', async (req, res) => {
       naive_tokens: trimmedContext.naiveTokenCount,
       saved_tokens: trimmedContext.savedTokens,
       context_mode: contextMode,
-      budget_tokens: adjustedContextBudget
+      budget_tokens: adjustedContextBudget,
+      estimator: hasAccurateTokenizer() ? 'tiktoken' : 'fallback'
     };
     recordTokenEfficiency(trimmedContext.metrics || {});
     logStructured('info', 'token_efficiency', {
@@ -1981,7 +1983,11 @@ app.post('/api/chat', async (req, res) => {
       credits_charged: actualCredits,
       remainingCredits: nextRemaining,
       credits_remaining: nextRemaining,
-      token_estimate: req.body?.token_estimate || null
+      token_estimate: {
+        ...(req.body?.token_estimate || {}),
+        input_tokens_estimated: resolvedInputTokens,
+        output_tokens_estimated: resolvedOutputTokens
+      }
     };
 
     logStructured('info', 'chat_tokens_consumed', {
@@ -2221,9 +2227,8 @@ app.get('/api/usage/token-overview', async (req, res) => {
       const sessionId = row.session_id || 'unknown';
       const inTokens = Number(row.input_tokens || 0) || 0;
       const outTokens = Number(row.output_tokens || 0) || 0;
-      const chars = Number(row.input_chars || 0) || 0;
-      const naive = Math.ceil(chars / 4);
-      naiveTokens += naive;
+      const estimatedInputTokens = Number(row.input_est_tokens || row.input_tokens || 0) || 0;
+      naiveTokens += estimatedInputTokens;
       actualTokens += inTokens;
       byModel[model] = (byModel[model] || 0) + inTokens + outTokens;
       bySession[sessionId] = (bySession[sessionId] || 0) + inTokens + outTokens;
@@ -2234,7 +2239,8 @@ app.get('/api/usage/token-overview', async (req, res) => {
       tokens_per_session: bySession,
       tokens_saved_vs_naive: Math.max(0, naiveTokens - actualTokens),
       actual_input_tokens: actualTokens,
-      naive_input_tokens: naiveTokens
+      naive_input_tokens: naiveTokens,
+      tokenizer: hasAccurateTokenizer() ? 'tiktoken' : 'fallback'
     });
   } catch (error) {
     console.error('Failed to load token overview.', error);
@@ -3582,9 +3588,9 @@ async function appendUsageEntry({
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     input_chars: inputChars,
-    input_est_tokens: '',
+    input_est_tokens: Number.isFinite(Number(inputTokens)) ? Number(inputTokens) : '',
     output_chars: outputChars,
-    output_est_tokens: '',
+    output_est_tokens: Number.isFinite(Number(outputTokens)) ? Number(outputTokens) : '',
     total_est_tokens: totalTokens,
     estimated_credits: reservedCredits,
     reserved_credits: reservedCredits,

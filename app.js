@@ -6269,19 +6269,17 @@ function closeUsageModal() {
   document.body.style.overflow = '';
 }
 
-function estimateTokensForRequest({ userInput, currentCode }) {
-  const chars = (userInput?.length || 0) + (currentCode?.length || 0);
-  if (chars <= 0) {
-    return 0;
-  }
-  return Math.ceil(chars / 4);
-}
-
 function estimateTokensForContent(content) {
   if (!content) {
     return 0;
   }
-  return Math.ceil(content.length / 4);
+  const text = typeof content === 'string' ? content : JSON.stringify(content);
+  const tokens = text.match(/[A-Za-z0-9_]+|\s+|[^\sA-Za-z0-9_]/g);
+  return tokens ? tokens.length : 0;
+}
+
+function estimateTokensForRequest({ userInput, currentCode }) {
+  return estimateTokensForContent(userInput) + estimateTokensForContent(currentCode);
 }
 
 function tokensToCredits(tokenCount) {

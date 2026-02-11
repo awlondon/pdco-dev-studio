@@ -1,3 +1,5 @@
+import { estimateTokens, isTokenizerAccurate } from './tokenEstimator.js';
+
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_VECTOR_SIZE = 96;
 const embeddingCache = new Map();
@@ -76,10 +78,13 @@ export function applyUsageAwareReduction({ contextBudget, recentUsage = 0, month
   return budget;
 }
 
+
+export function hasAccurateTokenizer() {
+  return isTokenizerAccurate();
+}
+
 export function estimateTokensWithTokenizer(text, model = DEFAULT_MODEL) {
-  const _model = model;
-  void _model;
-  return tokenizeText(text).length;
+  return estimateTokens(text, model);
 }
 
 export function estimateMessageTokens(messages = [], model = DEFAULT_MODEL) {
