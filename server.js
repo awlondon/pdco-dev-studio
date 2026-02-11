@@ -79,8 +79,102 @@ import {
 import { getDbPool } from './utils/queryLayer.js';
 import { buildPlayablePrompt } from './server/utils/playableWrapper.js';
 import { buildRetryPrompt } from './server/utils/retryWrapper.js';
+import { createHttpError, logStructured } from './utils/logger.js';
 
 const app = express();
+
+const REQUEST_LOG_EVENT = 'http_request';
+const MAX_CHAT_MESSAGE_CHARS = 12000;
+const MAX_CODE_CONTEXT_CHARS = 200000;
+const MAX_CHAT_HISTORY_COUNT = 60;
+const MAX_AUTH_TOKEN_LENGTH = 8192;
+const MAX_EMAIL_LENGTH = 320;
+
+function classifyError(error) {
+  const status = Number(error?.status || error?.statusCode || 500);
+  const safeStatus = Number.isInteger(status) ? status : 500;
+  const code = typeof error?.code === 'string' ? error.code : 'INTERNAL_ERROR';
+  return {
+    status: safeStatus,
+    code
+  };
+}
+
+function requestContextMiddleware(req, res, next) {
+  const requestStartedAt = Date.now();
+  const incomingRequestId = req.header('x-request-id');
+  req.requestId = incomingRequestId || crypto.randomUUID();
+  req.userId = null;
+  res.setHeader('x-request-id', req.requestId);
+
+  res.on('finish', () => {
+    logStructured('info', REQUEST_LOG_EVENT, {
+      request_id: req.requestId,
+      route: req.originalUrl,
+      method: req.method,
+      user_id: req.userId || null,
+      intent_type: req.body?.intentType || req.body?.intent_type || null,
+      credits_charged: Number(req.creditsCharged || 0),
+      latency_ms: Date.now() - requestStartedAt,
+      status: res.statusCode,
+      error_code: res.statusCode >= 400 ? (res.locals.errorCode || 'REQUEST_FAILED') : null
+    });
+  });
+
+  next();
+}
+
+function enforceRequestValidation(req, _res, next) {
+  const path = req.path || req.originalUrl || '';
+  if (path === '/api/chat') {
+    const body = req.body || {};
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    if (messages.length > MAX_CHAT_HISTORY_COUNT) {
+      return next(createHttpError({
+        status: 413,
+        code: 'MAX_HISTORY_EXCEEDED',
+        message: `messages exceeds max history count of ${MAX_CHAT_HISTORY_COUNT}`
+      }));
+    }
+    const oversizedMessage = messages.find((entry) => {
+      const content = typeof entry?.content === 'string'
+        ? entry.content
+        : JSON.stringify(entry?.content ?? '');
+      return content.length > MAX_CHAT_MESSAGE_CHARS;
+    });
+    if (oversizedMessage) {
+      return next(createHttpError({
+        status: 413,
+        code: 'MESSAGE_TOO_LARGE',
+        message: `Each message must be <= ${MAX_CHAT_MESSAGE_CHARS} chars`
+      }));
+    }
+    const codeContent = typeof body.currentCode === 'string'
+      ? body.currentCode
+      : (typeof body.code === 'string' ? body.code : '');
+    if (codeContent.length > MAX_CODE_CONTEXT_CHARS) {
+      return next(createHttpError({
+        status: 413,
+        code: 'CODE_CONTEXT_TOO_LARGE',
+        message: `Code context must be <= ${MAX_CODE_CONTEXT_CHARS} chars`
+      }));
+    }
+  }
+
+  if (path.startsWith('/api/auth/')) {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    const idToken = typeof req.body?.id_token === 'string' ? req.body.id_token.trim() : '';
+    if (email.length > MAX_EMAIL_LENGTH) {
+      return next(createHttpError({ status: 400, code: 'EMAIL_TOO_LONG', message: 'Email too long' }));
+    }
+    if (token.length > MAX_AUTH_TOKEN_LENGTH || idToken.length > MAX_AUTH_TOKEN_LENGTH) {
+      return next(createHttpError({ status: 413, code: 'TOKEN_TOO_LARGE', message: 'Token payload too large' }));
+    }
+  }
+
+  next();
+}
 
 async function recordUsageEventToDb({
   user,
@@ -134,6 +228,7 @@ function usageEventLoggingMiddleware(req, _res, next) {
 }
 
 app.use(usageEventLoggingMiddleware);
+app.use(requestContextMiddleware);
 
 const CREDIT_MONTHLY_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const CREDIT_DAILY_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -243,21 +338,6 @@ const STRIPE_CREDIT_PACKS = (() => {
   }
 })();
 
-function logStructured(level, message, context = {}) {
-  const payload = {
-    level,
-    message,
-    timestamp: new Date().toISOString(),
-    ...context
-  };
-  if (level === 'error') {
-    console.error(JSON.stringify(payload));
-  } else if (level === 'warn') {
-    console.warn(JSON.stringify(payload));
-  } else {
-    console.log(JSON.stringify(payload));
-  }
-}
 const PLAN_CATALOG = (() => {
   const catalog = {};
 
@@ -516,6 +596,7 @@ app.use((req, res, next) => {
 
 app.use('/uploads/artifacts', express.static(ARTIFACT_UPLOADS_DIR));
 app.use('/uploads/profiles', express.static(PROFILE_UPLOADS_DIR));
+app.use(enforceRequestValidation);
 
 /**
  * 🔍 DIAGNOSTIC HEADERS (prove code is live)
@@ -1799,7 +1880,7 @@ function applyPromptToLastUserMessage(messages = [], prompt = '') {
  */
 app.post('/api/chat', async (req, res) => {
   const requestStartedAt = Date.now();
-  const requestId = crypto.randomUUID();
+  const requestId = req.requestId || crypto.randomUUID();
   const intentType = req.body?.intentType || 'chat';
   let user = null;
   let routeDecision = null;
@@ -1841,6 +1922,7 @@ app.post('/api/chat', async (req, res) => {
       || req.body?.context_summary
       || ''
     ).trim();
+
     const trimmedContext = await buildTrimmedContext({
       systemPrompt: CHAT_SYSTEM_PROMPT,
       messages,
@@ -1857,6 +1939,15 @@ app.post('/api/chat', async (req, res) => {
       maxCodeChars: DEFAULT_MAX_CODE_CONTEXT_CHARS,
       llmProxyUrl: LLM_PROXY_URL
     });
+    if (Number(trimmedContext.tokenCount || 0) > adjustedContextBudget) {
+      return res.status(413).json({
+        ok: false,
+        error: 'Context budget exceeded for current plan',
+        error_code: 'CONTEXT_BUDGET_EXCEEDED',
+        budget_tokens: adjustedContextBudget,
+        token_count: Number(trimmedContext.tokenCount || 0)
+      });
+    }
     const playableMode = Boolean(req.body?.playableMode);
     const retryMode = Boolean(req.body?.retryMode);
     const originalPrompt = typeof req.body?.originalPrompt === 'string'
@@ -2267,6 +2358,7 @@ app.post('/api/chat', async (req, res) => {
       status: 'success'
     });
 
+    req.creditsCharged = actualCredits;
     data.usage = {
       ...usage,
       actual_credits: actualCredits,
@@ -2282,12 +2374,19 @@ app.post('/api/chat', async (req, res) => {
     };
 
     logStructured('info', 'chat_tokens_consumed', {
+      request_id: requestId,
+      route: req.originalUrl,
       user_id: user.user_id,
       session_id: sessionId,
+      intent_type: intentType,
       model: data?.model || req.body?.model || requestedModel,
       prompt_tokens: resolvedInputTokens,
       completion_tokens: resolvedOutputTokens,
       total_tokens: Number.isFinite(totalTokens) ? totalTokens : resolvedInputTokens + resolvedOutputTokens,
+      credits_charged: actualCredits,
+      latency_ms: Date.now() - requestStartedAt,
+      status: 200,
+      error_code: null,
       saved_tokens_vs_naive: Number(req.body?.token_estimate?.saved_tokens || 0) || 0
     });
 
@@ -2958,6 +3057,27 @@ app.post('/api/stripe/webhook', async (req, res) => {
   }
 });
 
+
+app.use((err, req, res, _next) => {
+  const { status, code } = classifyError(err);
+  const message = err?.message || 'Internal server error';
+  res.locals.errorCode = code;
+  logStructured(status >= 500 ? 'error' : 'warn', 'request_error', {
+    request_id: req.requestId || null,
+    route: req.originalUrl,
+    user_id: req.userId || null,
+    status,
+    error_code: code,
+    error_message: message
+  });
+
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ ok: false, error: 'Payload too large', error_code: 'PAYLOAD_TOO_LARGE' });
+  }
+
+  return res.status(status).json({ ok: false, error: message, error_code: code });
+});
+
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
   console.log('Maya API listening on', port);
@@ -3100,6 +3220,9 @@ async function getSessionFromRequest(req) {
   if (!token) return null;
   const payload = await verifySignedToken(token, process.env.SESSION_SECRET);
   if (!payload) return null;
+  if (payload.sub) {
+    req.userId = payload.sub;
+  }
   return { token, ...payload };
 }
 

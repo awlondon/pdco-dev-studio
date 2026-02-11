@@ -96,6 +96,22 @@ For multi-tier subscriptions, set Stripe price IDs so users can choose Starter, 
 
 You can also override plan metadata with `STRIPE_PLAN_CATALOG` or `STRIPE_PLAN_MAP` if needed.
 
+
+## Security and secrets posture
+
+Production no longer requires GitHub Contents API write credentials for user state.
+
+- `worker.js` now blocks GitHub user-state writes unless both `LEGACY_USERS_CSV=true` **and** `GITHUB_USER_WRITES_ENABLED=true` are set intentionally for legacy migrations.
+- Standard production deployments should use Postgres-backed user storage and leave `GITHUB_USER_WRITES_ENABLED` unset.
+- If legacy GitHub credentials were used previously (`GITHUB_TOKEN`, `GITHUB_REPO`), rotate/revoke those tokens after migration.
+
+Recommended secret inventory:
+
+- Core auth/session: `SESSION_SECRET`, `EMAIL_TOKEN_SECRET`, `GOOGLE_CLIENT_ID`, `APPLE_CLIENT_ID`
+- LLM + billing: `OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- Email delivery: `RESEND_API_KEY`, `MAGIC_EMAIL_FROM`
+- Optional object storage: `OBJECT_STORAGE_ACCESS_KEY_ID`, `OBJECT_STORAGE_SECRET_ACCESS_KEY`
+
 ## Next steps
 
 Consider swapping in a richer editor (CodeMirror/Monaco), capturing `console.error`/`console.warn`, or adding a server-side sandbox for safer code execution.

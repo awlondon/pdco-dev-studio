@@ -777,7 +777,14 @@ async function getUser(env, userId) {
 }
 
 async function upsertUserBillingState(env, userId, patch) {
-  return upsertUserToStore(env, userId, patch);
+  try {
+    return await upsertUserToStore(env, userId, patch);
+  } catch (error) {
+    if (String(error?.message || '').includes('GitHub user writes are disabled')) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function findUserIdByStripeCustomer(env, stripeCustomerId) {
@@ -791,6 +798,9 @@ async function getUserFromStore(env, userId) {
 
 async function upsertUserToStore(env, userId, patch) {
   assertLegacyUserStoreEnabled(env);
+  if (env.GITHUB_USER_WRITES_ENABLED !== 'true') {
+    throw new Error('GitHub user writes are disabled. Persist billing state in Postgres.');
+  }
   const repo = env.GITHUB_REPO;
   const branch = env.GITHUB_BRANCH || 'main';
 
