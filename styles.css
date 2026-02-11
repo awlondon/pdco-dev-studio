@@ -1399,8 +1399,9 @@ html, body {
 }
 
 #chat-form {
-  align-items: flex-end;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
 }
 
 .credit-banner,
@@ -1571,11 +1572,13 @@ html, body {
 }
 
 .playable-btn {
-  align-self: center;
+  font-size: 20px;
+  background: #222;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 10px;
   min-width: 40px;
   min-height: 40px;
-  color: var(--text);
-  z-index: 1;
 }
 
 .playable-btn:disabled {
@@ -1588,10 +1591,24 @@ html, body {
   border-radius: 4px;
 }
 
-.chat-submit-stack {
-  display: inline-flex;
+.chat-controls {
+  width: 100%;
+  display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.playable-wrapper-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+  width: 100%;
+}
+
+.chat-input-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
   gap: 6px;
 }
 
