@@ -779,6 +779,7 @@ const PLAN_DAILY_CAPS = {
   free: 100,
   starter: 500,
   pro: 2000,
+  enterprise: 10000,
   power: 10000
 };
 let planCatalog = [];
@@ -2277,7 +2278,7 @@ function normalizePlanTier(value) {
   const lower = value.toString().toLowerCase();
   if (lower === 'starter') return 'Starter';
   if (lower === 'pro') return 'Pro';
-  if (lower === 'power') return 'Power';
+  if (lower === 'enterprise' || lower === 'power') return 'Enterprise';
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
@@ -2324,7 +2325,7 @@ function updateAccountPlan() {
   }
   const resetAt = user?.monthly_reset_at || user?.monthlyResetAt;
   if (accountRenewalDateEl) {
-    const isPaid = ['Starter', 'Pro', 'Power'].includes(planTier);
+    const isPaid = ['Starter', 'Pro', 'Enterprise'].includes(planTier);
     accountRenewalDateEl.textContent = isPaid ? formatDateLong(resetAt) : '—';
   }
   const creditState = getCreditState();
@@ -2451,14 +2452,14 @@ function updateAccountActions(planTierValue) {
     return;
   }
   const resolvedPlan = (planTierValue || '').toString().toLowerCase();
-  const isPaid = ['starter', 'pro', 'power'].includes(resolvedPlan);
+  const isPaid = ['starter', 'pro', 'enterprise', 'power'].includes(resolvedPlan);
   if (accountPrimaryActionButton) {
     accountPrimaryActionButton.textContent = isPaid ? 'Manage subscription' : 'Upgrade plan';
     accountPrimaryActionButton.onclick = () => {
       if (isPaid) {
         openBillingPortal();
       } else {
-        openStripeCheckout('subscription', getDefaultPaidPlanTier());
+        openPlanSelectionPage();
       }
     };
   }
@@ -5149,6 +5150,13 @@ function buildFallbackPlanCatalog() {
       monthly_credits: 20000,
       daily_cap: PLAN_DAILY_CAPS.pro,
       price_label: '$29/mo'
+    },
+    {
+      tier: 'enterprise',
+      display_name: 'Enterprise',
+      monthly_credits: 100000,
+      daily_cap: PLAN_DAILY_CAPS.enterprise,
+      price_label: 'Contact sales'
     }
   ];
 }
@@ -5224,16 +5232,41 @@ function hidePaywall() {
   setPaywallVisibility(false, { dismissable: false });
 }
 
-function openStripeCheckout(mode, planTier) {
-  const checkoutUrl = mode === 'subscription'
-    ? `${API_BASE}/checkout/subscription?plan_tier=${encodeURIComponent(planTier || 'starter')}`
-    : `${API_BASE}/checkout/credits`;
+async function openStripeCheckout(mode, planTier) {
+  if (mode === 'subscription') {
+    try {
+      const res = await fetch(`${API_BASE}/api/billing/subscriptions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ plan_tier: planTier || 'starter' })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.url) {
+        throw new Error(data?.error || 'Unable to open checkout');
+      }
+      window.location.href = data.url;
+      return;
+    } catch (error) {
+      console.error('Failed to create subscription checkout session.', error);
+      showToast('Unable to open checkout right now. Please try again.');
+      return;
+    }
+  }
+
+  const checkoutUrl = `${API_BASE}/checkout/credits`;
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
 }
 
 function openBillingPortal() {
   const portalUrl = `${API_BASE}/billing/portal`;
   window.open(portalUrl, '_blank', 'noopener,noreferrer');
+}
+
+function openPlanSelectionPage() {
+  window.location.href = '/plans.html';
 }
 
 function setPaywallMode(mode) {
