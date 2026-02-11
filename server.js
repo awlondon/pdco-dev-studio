@@ -180,6 +180,10 @@ const PLAN_BY_PRICE_ID = Object.values(PLAN_CATALOG).reduce((acc, plan) => {
   return acc;
 }, {});
 
+function isUserPlanOverridden(user) {
+  return Boolean(user?.plan_override);
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
@@ -2341,7 +2345,9 @@ function mapUserForClient(user) {
     daily_credit_limit: resolveDailyCreditLimit(user),
     creditsRemaining: creditsRemaining,
     creditsTotal: creditsTotal,
-    preferences: user.preferences || {}
+    preferences: user.preferences || {},
+    is_internal: Boolean(user.is_internal),
+    plan_override: user.plan_override || null
   };
 }
 
@@ -3325,14 +3331,16 @@ async function onCheckoutSessionCompleted(session) {
     const plan = priceId ? PLAN_BY_PRICE_ID[priceId] : null;
     if (plan?.tier) {
       const user = await getUserById(userId);
-      const currentBalance = user ? resolveCreditsBalance(user) : 0;
-      const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
-      const nextBalance = Math.min(currentBalance, nextTotal);
-      patch.plan_tier = plan.tier;
-      patch.credits_total = String(nextTotal);
-      patch.credits_remaining = String(nextBalance);
-      patch.credits_balance = String(nextBalance);
-      patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
+      if (!isUserPlanOverridden(user)) {
+        const currentBalance = user ? resolveCreditsBalance(user) : 0;
+        const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
+        const nextBalance = Math.min(currentBalance, nextTotal);
+        patch.plan_tier = plan.tier;
+        patch.credits_total = String(nextTotal);
+        patch.credits_remaining = String(nextBalance);
+        patch.credits_balance = String(nextBalance);
+        patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
+      }
     }
   }
 
@@ -3349,18 +3357,23 @@ async function onSubscriptionUpsert(subscription) {
     throw new Error(`No user for stripe_customer_id=${stripeCustomerId}`);
   }
 
-  const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
-  const nextBalance = Math.min(resolveCreditsBalance(user), nextTotal);
-  await updateUser(user.user_id, {
+  const patch = {
     stripe_customer_id: stripeCustomerId,
     stripe_subscription_id: stripeSubscriptionId,
-    plan_tier: plan.tier,
-    credits_total: String(nextTotal),
-    credits_remaining: String(nextBalance),
-    credits_balance: String(nextBalance),
-    daily_credit_limit: String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? ''),
     billing_status: normalizeStripeSubStatus(subscription.status)
-  });
+  };
+
+  if (!isUserPlanOverridden(user)) {
+    const nextTotal = plan.monthly_credits || FREE_PLAN.monthly_credits;
+    const nextBalance = Math.min(resolveCreditsBalance(user), nextTotal);
+    patch.plan_tier = plan.tier;
+    patch.credits_total = String(nextTotal);
+    patch.credits_remaining = String(nextBalance);
+    patch.credits_balance = String(nextBalance);
+    patch.daily_credit_limit = String(plan.daily_cap ?? PLAN_DAILY_CAPS[plan.tier] ?? '');
+  }
+
+  await updateUser(user.user_id, patch);
 }
 
 async function onSubscriptionDeleted(subscription) {
@@ -3368,19 +3381,23 @@ async function onSubscriptionDeleted(subscription) {
   const user = await findUserByStripeCustomer(stripeCustomerId);
   if (!user) return;
 
-  const remaining = Math.min(
-    resolveCreditsBalance(user),
-    FREE_PLAN.monthly_credits
-  );
+  const patch = {
+    billing_status: 'canceled'
+  };
 
-  await updateUser(user.user_id, {
-    billing_status: 'canceled',
-    plan_tier: 'free',
-    credits_total: String(FREE_PLAN.monthly_credits),
-    credits_remaining: String(remaining),
-    credits_balance: String(remaining),
-    daily_credit_limit: String(PLAN_DAILY_CAPS.free ?? '')
-  });
+  if (!isUserPlanOverridden(user)) {
+    const remaining = Math.min(
+      resolveCreditsBalance(user),
+      FREE_PLAN.monthly_credits
+    );
+    patch.plan_tier = 'free';
+    patch.credits_total = String(FREE_PLAN.monthly_credits);
+    patch.credits_remaining = String(remaining);
+    patch.credits_balance = String(remaining);
+    patch.daily_credit_limit = String(PLAN_DAILY_CAPS.free ?? '');
+  }
+
+  await updateUser(user.user_id, patch);
 }
 
 async function onInvoicePaymentSucceeded(invoice) {

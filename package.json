@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test --import tsx api/tests/auth.*.test.ts",
-    "test:ui": "playwright test ui/tests/auth.rehydrate.spec.ts"
+    "test:ui": "playwright test ui/tests/auth.rehydrate.spec.ts",
+    "grant-plan": "node scripts/grant-plan.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

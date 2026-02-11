@@ -22,6 +22,8 @@ import { getUsageAnalyticsPool } from './usageAnalytics.js';
  * @property {string} billing_status
  * @property {string} stripe_customer_id
  * @property {string} stripe_subscription_id
+ * @property {boolean} is_internal
+ * @property {string | null} plan_override
  * @property {string} auth_provider
  * @property {string[] | null} auth_providers
  * @property {Record<string, unknown> | null} preferences
@@ -114,7 +116,7 @@ function mapUserRow(row) {
     display_name: row.display_name || '',
     created_at: toIsoString(row.created_at),
     last_login_at: toIsoString(row.last_seen_at),
-    plan_tier: row.plan_tier || 'free',
+    plan_tier: row.effective_plan_tier || row.plan_tier || 'free',
     credits_total: String(row.monthly_quota ?? 0),
     credits_remaining: String(row.balance ?? 0),
     credits_balance: String(row.balance ?? 0),
@@ -125,6 +127,8 @@ function mapUserRow(row) {
     billing_status: row.billing_status || 'active',
     stripe_customer_id: row.stripe_customer_id || '',
     stripe_subscription_id: row.stripe_subscription_id || '',
+    is_internal: Boolean(row.is_internal),
+    plan_override: row.plan_override || null,
     auth_provider: primaryProvider,
     auth_providers: providerNames.length ? providerNames : null,
     preferences: row.preferences || {},
@@ -190,8 +194,11 @@ async function fetchUserRowById(queryable, userId) {
       u.last_seen_at,
       u.auth_providers,
       u.preferences,
+      u.is_internal,
+      u.plan_override,
       u.deleted_at,
       b.plan_tier,
+      COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier,
       b.stripe_customer_id,
       b.stripe_subscription_id,
       b.status AS billing_status,
@@ -225,8 +232,11 @@ async function fetchUserRowByProviderOrEmail(queryable, provider, providerUserId
       u.last_seen_at,
       u.auth_providers,
       u.preferences,
+      u.is_internal,
+      u.plan_override,
       u.deleted_at,
       b.plan_tier,
+      COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier,
       b.stripe_customer_id,
       b.stripe_subscription_id,
       b.status AS billing_status,
@@ -312,8 +322,9 @@ export async function resetUserCreditsIfNeeded({ userId, now = new Date(), pool 
         c.daily_used,
         c.last_daily_reset_at,
         c.last_monthly_reset_at,
-        b.plan_tier
+        COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier
        FROM credits c
+       JOIN users u ON u.id = c.user_id
        JOIN billing b ON b.user_id = c.user_id
        WHERE c.user_id = $1
        FOR UPDATE OF c`,
@@ -325,7 +336,7 @@ export async function resetUserCreditsIfNeeded({ userId, now = new Date(), pool 
     }
 
     const resetState = computeResetState({ row, now });
-    const planTier = row.plan_tier || 'free';
+    const planTier = row.effective_plan_tier || 'free';
     const shouldResetMonthlyForPlan = planTier === 'free' && resetState.monthlyReset;
     let nextBalance = Number(row.balance ?? 0);
     let nextDailyUsed = Number(row.daily_used ?? 0);
@@ -503,6 +514,14 @@ export async function updateUser(userId, patch, { pool } = {}) {
       userUpdates.push(`preferences = $${index++}`);
       userValues.push(JSON.stringify(patch.preferences));
     }
+    if (patch.is_internal !== undefined) {
+      userUpdates.push(`is_internal = $${index++}`);
+      userValues.push(Boolean(patch.is_internal));
+    }
+    if (patch.plan_override !== undefined) {
+      userUpdates.push(`plan_override = $${index++}`);
+      userValues.push(patch.plan_override || null);
+    }
     if (patch.deleted_at !== undefined) {
       userUpdates.push(`deleted_at = $${index++}`);
       userValues.push(patch.deleted_at);
@@ -613,6 +632,71 @@ export async function findUserByStripeCustomer(stripeCustomerId, { pool } = {}) 
   return getUserById(row.id, { pool: activePool });
 }
 
+
+export async function grantPlanOverrideByEmail({
+  email,
+  planTier,
+  monthlyCredits,
+  dailyCap,
+  markInternal = true,
+  pool
+}) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedPlan = String(planTier || '').trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error('EMAIL_REQUIRED');
+  }
+  if (!normalizedPlan) {
+    throw new Error('PLAN_TIER_REQUIRED');
+  }
+
+  const activePool = pool || getUserDbPool();
+  const client = await activePool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const userResult = await client.query(
+      `SELECT id
+       FROM users
+       WHERE email = $1
+       LIMIT 1`,
+      [normalizedEmail]
+    );
+    const userId = userResult.rows[0]?.id;
+    if (!userId) {
+      throw new Error('USER_NOT_FOUND');
+    }
+
+    await client.query(
+      `UPDATE users
+       SET is_internal = $1,
+           plan_override = $2,
+           last_seen_at = $3
+       WHERE id = $4`,
+      [Boolean(markInternal), normalizedPlan, new Date(), userId]
+    );
+
+    await client.query(
+      `UPDATE credits
+       SET monthly_quota = $1,
+           balance = GREATEST(balance, $1),
+           daily_cap = $2,
+           last_monthly_reset_at = $3
+       WHERE user_id = $4`,
+      [Number(monthlyCredits), dailyCap === null ? null : Number(dailyCap), new Date(), userId]
+    );
+
+    const row = await fetchUserRowById(client, userId);
+    await client.query('COMMIT');
+    return mapUserRow(row);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function applyCreditDeduction({
   userId,
   sessionId,
@@ -640,8 +724,9 @@ export async function applyCreditDeduction({
         c.daily_used,
         c.last_daily_reset_at,
         c.last_monthly_reset_at,
-        b.plan_tier
+        COALESCE(NULLIF(u.plan_override, ''), b.plan_tier, 'free') AS effective_plan_tier
        FROM credits c
+       JOIN users u ON u.id = c.user_id
        JOIN billing b ON b.user_id = c.user_id
        WHERE c.user_id = $1
        FOR UPDATE OF c`,
@@ -653,7 +738,7 @@ export async function applyCreditDeduction({
     }
 
     const resetState = computeResetState({ row: creditsRow, now: new Date() });
-    const planTier = creditsRow.plan_tier || 'free';
+    const planTier = creditsRow.effective_plan_tier || 'free';
     const monthlyResetApplied = planTier === 'free' && resetState.monthlyReset;
     let currentBalance = Number(creditsRow.balance ?? 0);
     let dailyUsed = Number(creditsRow.daily_used ?? 0);
