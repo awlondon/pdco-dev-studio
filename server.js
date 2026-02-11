@@ -79,8 +79,60 @@ import {
 import { getDbPool } from './utils/queryLayer.js';
 import { buildPlayablePrompt } from './server/utils/playableWrapper.js';
 import { buildRetryPrompt } from './server/utils/retryWrapper.js';
+import { normalizeRole, resolveRoleForUser } from './auth/middleware.js';
 
 const app = express();
+const revokedSessionStore = new Map();
+const authRateLimitStore = new Map();
+
+function splitEmailList(value) {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function resolveUserRole(user) {
+  return resolveRoleForUser(user, {
+    adminEmails: splitEmailList(process.env.ADMIN_EMAILS),
+    internalEmails: splitEmailList(process.env.INTERNAL_EMAILS)
+  });
+}
+
+function revokeSessionJti(jti) {
+  if (!jti) return;
+  revokedSessionStore.set(jti, Date.now() + (SESSION_REVOCATION_TTL_SECONDS * 1000));
+}
+
+function isSessionRevoked(jti) {
+  if (!jti) return false;
+  const expiresAt = revokedSessionStore.get(jti);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    revokedSessionStore.delete(jti);
+    return false;
+  }
+  return true;
+}
+
+function enforceLocalAuthRateLimit({ key, limit, windowMs }) {
+  const now = Date.now();
+  const current = authRateLimitStore.get(key);
+  if (!current || current.resetAt <= now) {
+    authRateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= limit) {
+    return false;
+  }
+  current.count += 1;
+  return true;
+}
+
+function getRequestIp(req) {
+  return req.header('cf-connecting-ip') || req.header('x-forwarded-for') || req.ip || 'unknown';
+}
+
 
 async function recordUsageEventToDb({
   user,
@@ -184,6 +236,8 @@ const LLM_PROXY_URL =
   process.env.LLM_PROXY_URL
   || 'https://text-code.primarydesigncompany.workers.dev';
 const SESSION_COOKIE_NAME = 'maya_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const SESSION_REVOCATION_TTL_SECONDS = 60 * 60 * 24 * 35;
 const FREE_PLAN = { tier: 'free', monthly_credits: 500 };
 const PLAN_DAILY_CAPS = {
   free: 100,
@@ -555,9 +609,25 @@ app.get('/api/me', async (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
+  const session = await getSessionFromRequest(req);
+  if (session?.jti) {
+    revokeSessionJti(session.jti);
+  }
   clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+app.post('/api/auth/session/revoke', async (req, res) => {
+  const session = await getSessionFromRequest(req);
+  if (!session) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  }
+  if (session.jti) {
+    revokeSessionJti(session.jti);
+  }
+  clearSessionCookie(res);
+  return res.json({ ok: true, revoked: Boolean(session.jti) });
 });
 
 app.patch('/api/account/preferences', async (req, res) => {
@@ -2582,6 +2652,13 @@ app.get('/api/usage/token-efficiency', async (req, res) => {
  */
 app.post('/api/auth/google', async (req, res) => {
   try {
+    const ip = getRequestIp(req);
+    const googleLimit = Number(process.env.AUTH_RATE_LIMIT_GOOGLE || 20);
+    const googleWindowMs = Number(process.env.AUTH_RATE_LIMIT_GOOGLE_WINDOW_MS || 60_000);
+    if (!enforceLocalAuthRateLimit({ key: `auth:google:${ip}`, limit: googleLimit, windowMs: googleWindowMs })) {
+      return res.status(429).json({ ok: false, error: 'Too many requests' });
+    }
+
     const idToken = typeof req.body?.id_token === 'string' ? req.body.id_token.trim() : '';
     if (!idToken) {
       return res.status(400).json({ ok: false, error: 'Missing id_token' });
@@ -2629,6 +2706,13 @@ app.post('/api/auth/google', async (req, res) => {
 app.post(['/api/auth/email/request', '/api/v1/auth/email/request'], async (req, res) => {
   try {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const ip = getRequestIp(req);
+    const magicLimit = Number(process.env.AUTH_RATE_LIMIT_MAGIC || 6);
+    const magicWindowMs = Number(process.env.AUTH_RATE_LIMIT_MAGIC_WINDOW_MS || 60_000);
+    const rateKey = `auth:magic:${email || ip}`;
+    if (!enforceLocalAuthRateLimit({ key: rateKey, limit: magicLimit, windowMs: magicWindowMs })) {
+      return res.status(429).json({ ok: false, error: 'Too many requests' });
+    }
     if (!email) {
       return res.status(400).json({ ok: false, error: 'Email required' });
     }
@@ -3029,12 +3113,18 @@ async function issueSessionCookie(res, req, user, options = {}) {
     res.status(500).json({ ok: false, error: 'Missing SESSION_SECRET' });
     return;
   }
+  const role = resolveUserRole(user);
+  const jti = crypto.randomUUID();
   const token = await createSignedToken(
     {
       sub: user.user_id,
       email: user.email,
       provider: user.auth_provider,
-      iat: Math.floor(Date.now() / 1000)
+      role,
+      jti,
+      session_version: Number(user.session_version || 1),
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS
     },
     process.env.SESSION_SECRET
   );
@@ -3044,7 +3134,8 @@ async function issueSessionCookie(res, req, user, options = {}) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=None'
+    'SameSite=Lax',
+    `Max-Age=${SESSION_MAX_AGE_SECONDS}`
   ];
 
   if (process.env.COOKIE_DOMAIN) {
@@ -3074,7 +3165,7 @@ function clearSessionCookie(res) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=None',
+    'SameSite=Lax',
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT'
   ];
 
@@ -3094,7 +3185,9 @@ async function getSessionFromRequest(req) {
   if (!token) return null;
   const payload = await verifySignedToken(token, process.env.SESSION_SECRET);
   if (!payload) return null;
-  return { token, ...payload };
+  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+  if (isSessionRevoked(payload.jti)) return null;
+  return { token, ...payload, role: normalizeRole(payload.role) };
 }
 
 function parseCookie(cookieHeader, name) {
@@ -3130,6 +3223,7 @@ function mapUserForClient(user) {
     created_at: user.created_at,
     plan: user.plan_tier,
     plan_tier: user.plan_tier,
+    role: resolveUserRole(user),
     billing_status: user.billing_status,
     credits_remaining: creditsRemaining,
     credits_total: creditsTotal,
