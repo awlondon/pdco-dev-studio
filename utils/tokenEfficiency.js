@@ -9,6 +9,7 @@ import {
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_VECTOR_SIZE = 96;
 const embeddingCache = new Map();
+const messageEmbeddingStore = new WeakMap();
 
 function tokenizeText(text) {
   if (!text) {
@@ -195,6 +196,26 @@ export function getEmbeddingCacheStats() {
   };
 }
 
+export async function storeEmbeddingsForMessages(messages = []) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+  return Promise.all(messages.map(async (message) => {
+    if (!message || typeof message !== 'object') {
+      return message;
+    }
+    const content = typeof message.content === 'string'
+      ? message.content
+      : JSON.stringify(message.content ?? '');
+    const embedding = await embedCached(content);
+    messageEmbeddingStore.set(message, embedding);
+    if (!Array.isArray(message.embedding)) {
+      message.embedding = embedding;
+    }
+    return message;
+  }));
+}
+
 function normalizeMessageForScoring(message) {
   return {
     role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
@@ -204,14 +225,17 @@ function normalizeMessageForScoring(message) {
   };
 }
 
-export async function selectRelevantMessages(currentQuery, sessionMessages, maxMessages = 5) {
-  if (!Array.isArray(sessionMessages) || sessionMessages.length === 0 || maxMessages <= 0) {
+export async function selectRelevantMessages(query, messages, topK = 5) {
+  if (!Array.isArray(messages) || messages.length === 0 || topK <= 0) {
     return [];
   }
-  const queryEmbedding = await embedCached(currentQuery);
-  const scored = await Promise.all(sessionMessages.map(async (message, index) => {
+  await storeEmbeddingsForMessages(messages);
+  const queryEmbedding = await embedCached(query);
+  const scored = await Promise.all(messages.map(async (message, index) => {
     const normalized = normalizeMessageForScoring(message);
-    const embedding = normalized.embedding || await embedCached(normalized.content);
+    const embedding = normalized.embedding
+      || messageEmbeddingStore.get(message)
+      || await embedCached(normalized.content);
     const score = cosineSimilarity(queryEmbedding, embedding);
     return {
       ...normalized,
@@ -223,9 +247,29 @@ export async function selectRelevantMessages(currentQuery, sessionMessages, maxM
 
   return scored
     .sort((a, b) => b.score - a.score)
-    .slice(0, maxMessages)
+    .slice(0, topK)
     .sort((a, b) => a._index - b._index)
     .map(({ _index, score, ...message }) => ({ ...message, score }));
+}
+
+export async function selectRecentAndRelevantMessages({
+  query = '',
+  messages = [],
+  recentCount = 3,
+  topK = 5
+} = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+  const safeRecentCount = Math.max(1, Number(recentCount) || 1);
+  const recentMessages = messages.slice(-safeRecentCount);
+  const olderMessages = messages.slice(0, Math.max(0, messages.length - safeRecentCount));
+  const relevantMessages = await selectRelevantMessages(
+    query || recentMessages[recentMessages.length - 1]?.content || '',
+    olderMessages,
+    topK
+  );
+  return dedupeMessages([...relevantMessages, ...recentMessages]);
 }
 
 export function chunkCode(code = '') {
@@ -320,13 +364,13 @@ export async function buildTrimmedContext({
   const relevantPool = historySplit.shouldSummarize
     ? historySplit.olderMessages
     : normalizedMessages.slice(0, Math.max(0, normalizedMessages.length - effectiveRecentCount));
-  const relevantMessages = await selectRelevantMessages(
-    query || recentMessages[recentMessages.length - 1]?.content || '',
-    relevantPool,
-    effectiveRelevantCount
-  );
-
-  const hybridMessages = dedupeMessages([...relevantMessages, ...recentMessages]);
+  const hybridMessages = await selectRecentAndRelevantMessages({
+    query: query || recentMessages[recentMessages.length - 1]?.content || '',
+    messages: [...relevantPool, ...recentMessages],
+    recentCount: recentMessages.length,
+    topK: effectiveRelevantCount
+  });
+  const relevantMessages = hybridMessages.filter((message) => Number.isFinite(message?.score));
   const olderTokens = estimateMessageTokens(relevantPool, model);
 
   let summaryText = String(historySummary || '').trim();
