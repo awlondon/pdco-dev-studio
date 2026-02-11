@@ -13,6 +13,7 @@ const API_BASE =
     : 'https://maya-api-136741418395.us-central1.run.app';
 
 const MAX_LOCALSTORAGE_JSON_CHARS = 500_000;
+const SESSION_STATE_SERVER_PERSIST_THRESHOLD = 200_000;
 
 if (!window.__sessionState || typeof window.__sessionState !== 'object') {
   window.__sessionState = {};
@@ -38,6 +39,33 @@ function setLocalStorageJsonIfSmall(key, value) {
   return false;
 }
 
+
+
+async function persistSessionStateToServer(payload) {
+  if (!payload || !payload.session_state?.session_id || !API_BASE) {
+    return false;
+  }
+  try {
+    const response = await fetch(`${API_BASE}/api/session/state`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: payload.session_state.session_id,
+        summary: {
+          messages: payload.session_state.messages?.length || 0,
+          code_versions: payload.session_state.code_versions?.length || 0,
+          active_version_index: payload.session_state.active_version_index
+        },
+        state: payload.session_state
+      })
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('Failed to persist session state to server.', error);
+    return false;
+  }
+}
 
 const AuthController = (() => {
   const providers = new Map();
@@ -1826,7 +1854,28 @@ function persistSessionStateNow() {
   };
   window.__sessionState = payload;
   const key = getSessionStateStorageKey();
-  setLocalStorageJsonIfSmall(key, payload);
+  const payloadSize = JSON.stringify(payload).length;
+  if (payloadSize < SESSION_STATE_SERVER_PERSIST_THRESHOLD) {
+    setLocalStorageJsonIfSmall(key, payload);
+  } else {
+    const lightweight = {
+      schema_version: SESSION_STATE_SCHEMA_VERSION,
+      saved_at: payload.saved_at,
+      session_state: {
+        session_id: sessionState.session_id,
+        started_at: sessionState.started_at,
+        current_editor: {
+          version_id: sessionState.current_editor?.version_id || '',
+          language: sessionState.current_editor?.language || 'html'
+        },
+        messages_count: sessionState.messages?.length || 0,
+        code_versions_count: sessionState.code_versions?.length || 0,
+        active_version_index: sessionState.active_version_index
+      }
+    };
+    setLocalStorageJsonIfSmall(key, lightweight);
+    persistSessionStateToServer(payload);
+  }
   saveSessionSnapshotToIndexedDb(sessionState);
 }
 

@@ -64,6 +64,7 @@ import {
   upsertProfile
 } from './utils/profileDb.js';
 import { createObjectStorageAdapter } from './utils/objectStorage.js';
+import { buildTrimmedContext, estimateMessageTokens, estimateTokensWithTokenizer } from './utils/tokenEfficiency.js';
 
 const app = express();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -189,8 +190,12 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const ARTIFACT_UPLOADS_DIR = path.join(DATA_DIR, 'artifact_uploads');
 const PROFILE_UPLOADS_DIR = path.join(DATA_DIR, 'profile_uploads');
+const SESSION_STATE_DIR = path.join(DATA_DIR, 'session_state');
 const ARTIFACT_EVENTS_FILE = path.join(DATA_DIR, 'artifact_events.csv');
-const MAX_PROMPT_CHARS = 8000;
+const MAX_PROMPT_TOKENS = 6000;
+const MAX_CONTEXT_MESSAGES = 6;
+const MAX_CODE_CONTEXT_CHARS = 3000;
+const SUMMARY_TRIGGER_TOKENS = 5000;
 const storageAdapter = createObjectStorageAdapter({
   artifactUploadsDir: ARTIFACT_UPLOADS_DIR,
   profileUploadsDir: PROFILE_UPLOADS_DIR
@@ -1388,22 +1393,43 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-    const promptText = capPromptText(
-      typeof req.body?.promptText === 'string'
-        ? req.body.promptText
-        : buildPromptText(messages)
-    );
-    const inputChars = messages
-      .map((entry) => (entry?.content ? String(entry.content) : ''))
-      .join('').length;
+    const rawCodeContext = typeof req.body?.currentCode === 'string'
+      ? req.body.currentCode
+      : typeof req.body?.code === 'string'
+        ? req.body.code
+        : '';
+    const trimmedContext = await buildTrimmedContext({
+      systemPrompt: CHAT_SYSTEM_PROMPT,
+      messages,
+      codeSegments: rawCodeContext ? [{ name: 'editor', content: rawCodeContext.slice(0, MAX_CODE_CONTEXT_CHARS) }] : [],
+      maxTokens: MAX_PROMPT_TOKENS,
+      model: requestedModel,
+      maxRecentMessages: MAX_CONTEXT_MESSAGES,
+      summaryTriggerTokens: SUMMARY_TRIGGER_TOKENS,
+      maxCodeChars: MAX_CODE_CONTEXT_CHARS,
+      llmProxyUrl: LLM_PROXY_URL
+    });
+    req.body.messages = trimmedContext.messages;
+    if (trimmedContext.summaryText) {
+      req.body.context_summary = trimmedContext.summaryText;
+    }
+    req.body.token_estimate = {
+      actual_tokens: trimmedContext.tokenCount,
+      naive_tokens: trimmedContext.naiveTokenCount,
+      saved_tokens: trimmedContext.savedTokens
+    };
+    const promptText = buildPromptText(trimmedContext.messages);
+    const inputChars = promptText.length;
+    const inputTokensEstimate = trimmedContext.tokenCount;
     const estimatedCredits = calculateCreditsUsed({
-      inputChars,
-      outputChars: 0,
-      intentType
+      inputTokens: inputTokensEstimate,
+      outputTokens: 0,
+      intentType,
+      inputText: promptText,
+      model: requestedModel
     });
     const creditsRemaining = resolveCreditsBalance(user);
     const creditsTotal = Number(user.credits_total || 0);
-    const inputTokensEstimate = estimateTokensFromChars(inputChars);
     const dailyLimit = resolveDailyCreditLimit(user);
     const creditsUsedToday = Number.isFinite(dailyLimit)
       ? Number(resetState.daily_used || 0)
@@ -1603,22 +1629,25 @@ app.post('/api/chat', async (req, res) => {
     const resolvedInputTokens = Number.isFinite(usageInputTokens)
       ? usageInputTokens
       : inputTokensEstimate;
-    const resolvedOutputTokens = Number.isFinite(usageOutputTokens)
-      ? usageOutputTokens
-      : Number.isFinite(totalTokens)
-        ? Math.max(0, totalTokens - resolvedInputTokens)
-        : estimateTokensFromChars(outputChars);
     const outputText =
       data?.choices?.[0]?.message?.content
       ?? data?.candidates?.[0]?.content
       ?? data?.output_text
       ?? '';
     const outputChars = outputText ? String(outputText).length : 0;
+    const resolvedOutputTokens = Number.isFinite(usageOutputTokens)
+      ? usageOutputTokens
+      : Number.isFinite(totalTokens)
+        ? Math.max(0, totalTokens - resolvedInputTokens)
+        : estimateTokensWithTokenizer(outputText, requestedModel);
     const actualCredits = calculateCreditsUsed({
-      inputChars,
-      outputChars,
+      inputTokens: resolvedInputTokens,
+      outputTokens: resolvedOutputTokens,
       intentType,
-      totalTokens
+      totalTokens,
+      inputText: promptText,
+      outputText,
+      model: requestedModel
     });
     let nextRemaining = clampCredits(creditsRemaining - actualCredits, creditsTotal);
 
@@ -1718,8 +1747,19 @@ app.post('/api/chat', async (req, res) => {
       reserved_credits: estimatedCredits,
       credits_charged: actualCredits,
       remainingCredits: nextRemaining,
-      credits_remaining: nextRemaining
+      credits_remaining: nextRemaining,
+      token_estimate: req.body?.token_estimate || null
     };
+
+    logStructured('info', 'chat_tokens_consumed', {
+      user_id: user.user_id,
+      session_id: sessionId,
+      model: data?.model || req.body?.model || requestedModel,
+      prompt_tokens: resolvedInputTokens,
+      completion_tokens: resolvedOutputTokens,
+      total_tokens: Number.isFinite(totalTokens) ? totalTokens : resolvedInputTokens + resolvedOutputTokens,
+      saved_tokens_vs_naive: Number(req.body?.token_estimate?.saved_tokens || 0) || 0
+    });
 
     if (routeDecision?.reason && routeDecision.reason !== 'policy_default') {
       data.routing = {
@@ -1736,14 +1776,15 @@ app.post('/api/chat', async (req, res) => {
     console.error('Worker proxy error:', err);
     if (user) {
       const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-      const inputChars = messages
-        .map((entry) => (entry?.content ? String(entry.content) : ''))
-        .join('').length;
-      const inputTokens = estimateTokensFromChars(inputChars);
+      const promptText = buildPromptText(messages);
+      const inputChars = promptText.length;
+      const inputTokens = estimateMessageTokens(messages, requestedModel);
       const estimatedCredits = calculateCreditsUsed({
-        inputChars,
-        outputChars: 0,
-        intentType
+        inputTokens,
+        outputTokens: 0,
+        intentType,
+        inputText: promptText,
+        model: requestedModel
       });
       try {
         await appendUsageEntry({
@@ -1819,6 +1860,93 @@ app.post('/api/session/close', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'Failed to log session close' });
   }
 });
+
+
+app.post('/api/session/state', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const sessionId = typeof req.body?.session_id === 'string' ? req.body.session_id : '';
+    const state = req.body?.state;
+    if (!sessionId || !state || typeof state !== 'object') {
+      return res.status(400).json({ ok: false, error: 'Invalid session state payload' });
+    }
+    await fs.mkdir(SESSION_STATE_DIR, { recursive: true });
+    const payload = {
+      user_id: session.sub,
+      session_id: sessionId,
+      summary: req.body?.summary || null,
+      state,
+      updated_at: new Date().toISOString()
+    };
+    const filePath = path.join(SESSION_STATE_DIR, `${session.sub}-${sessionId}.json`);
+    await fs.writeFile(filePath, JSON.stringify(payload));
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Failed to persist session state.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to persist session state' });
+  }
+});
+
+app.get('/api/session/state/:sessionId', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const sessionId = typeof req.params?.sessionId === 'string' ? req.params.sessionId : '';
+    if (!sessionId) {
+      return res.status(400).json({ ok: false, error: 'Missing sessionId' });
+    }
+    const filePath = path.join(SESSION_STATE_DIR, `${session.sub}-${sessionId}.json`);
+    const text = await fs.readFile(filePath, 'utf8');
+    const payload = JSON.parse(text);
+    return res.json({ ok: true, session_state: payload?.state || null, summary: payload?.summary || null });
+  } catch {
+    return res.status(404).json({ ok: false, error: 'Session state not found' });
+  }
+});
+
+app.get('/api/usage/token-overview', async (req, res) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    const rows = await loadUsageLogRows();
+    const filtered = rows.filter((row) => row.user_id === session.sub);
+    const byModel = {};
+    const bySession = {};
+    let naiveTokens = 0;
+    let actualTokens = 0;
+    for (const row of filtered) {
+      const model = row.model || 'unknown';
+      const sessionId = row.session_id || 'unknown';
+      const inTokens = Number(row.input_tokens || 0) || 0;
+      const outTokens = Number(row.output_tokens || 0) || 0;
+      const chars = Number(row.input_chars || 0) || 0;
+      const naive = Math.ceil(chars / 4);
+      naiveTokens += naive;
+      actualTokens += inTokens;
+      byModel[model] = (byModel[model] || 0) + inTokens + outTokens;
+      bySession[sessionId] = (bySession[sessionId] || 0) + inTokens + outTokens;
+    }
+    return res.json({
+      ok: true,
+      tokens_per_model: byModel,
+      tokens_per_session: bySession,
+      tokens_saved_vs_naive: Math.max(0, naiveTokens - actualTokens),
+      actual_input_tokens: actualTokens,
+      naive_input_tokens: naiveTokens
+    });
+  } catch (error) {
+    console.error('Failed to load token overview.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load token overview' });
+  }
+});
+
 
 /**
  * GOOGLE AUTH STUB
@@ -2377,16 +2505,6 @@ function buildPromptText(messages) {
     .join('\n\n');
 }
 
-function capPromptText(promptText) {
-  if (!promptText) {
-    return promptText;
-  }
-  if (promptText.length > MAX_PROMPT_CHARS) {
-    return `${promptText.slice(0, MAX_PROMPT_CHARS)}\n…[truncated]`;
-  }
-  return promptText;
-}
-
 function normalizeTurnIntent(intentType) {
   if (intentType === 'code') {
     return 'code';
@@ -2397,18 +2515,18 @@ function normalizeTurnIntent(intentType) {
   return 'text';
 }
 
-function estimateTokensFromChars(chars) {
-  return Math.ceil((chars || 0) / 4);
-}
-
-function calculateCreditsUsed({ inputChars, outputChars, intentType, totalTokens }) {
+function calculateCreditsUsed({ inputTokens, outputTokens, intentType, totalTokens, inputText, outputText, model }) {
   if (Number.isFinite(totalTokens)) {
     return Math.ceil(totalTokens / 250);
   }
-  const inputTokens = estimateTokensFromChars(inputChars);
-  const outputTokens = Math.ceil((outputChars || 0) / 3);
+  const resolvedInputTokens = Number.isFinite(inputTokens)
+    ? inputTokens
+    : estimateTokensWithTokenizer(inputText || '', model || OPENAI_MODEL);
+  const resolvedOutputTokens = Number.isFinite(outputTokens)
+    ? outputTokens
+    : estimateTokensWithTokenizer(outputText || '', model || OPENAI_MODEL);
   const multiplier = intentType === 'code' ? 1.0 : 0.6;
-  const tokenEstimate = Math.ceil((inputTokens + outputTokens) * multiplier);
+  const tokenEstimate = Math.ceil((resolvedInputTokens + resolvedOutputTokens) * multiplier);
   return Math.ceil(tokenEstimate / 250);
 }
 
@@ -2582,7 +2700,7 @@ function buildChatPlusCodePrompt(messages = [], code = {}) {
     .map((entry) => String(entry.content || '').trim())
     .filter(Boolean)
     .join('\n');
-  const codeSnippet = typeof code?.content === 'string' ? code.content : '';
+  const codeSnippet = typeof code?.content === 'string' ? code.content.slice(0, MAX_CODE_CONTEXT_CHARS) : '';
   return `You are generating metadata for a saved code artifact.
 
 Use BOTH the user chat context and the code.
@@ -2606,7 +2724,7 @@ Output JSON ONLY:
 
 function buildCodeOnlyPrompt(code = {}) {
   const codeLanguage = typeof code?.language === 'string' ? code.language : '';
-  const codeSnippet = typeof code?.content === 'string' ? code.content : '';
+  const codeSnippet = typeof code?.content === 'string' ? code.content.slice(0, MAX_CODE_CONTEXT_CHARS) : '';
   return `You are generating metadata for a saved code artifact.
 
 There is NO chat context.
