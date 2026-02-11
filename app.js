@@ -12,6 +12,32 @@ const API_BASE =
     ? 'http://localhost:8080'
     : 'https://maya-api-136741418395.us-central1.run.app';
 
+const MAX_LOCALSTORAGE_JSON_CHARS = 500_000;
+
+if (!window.__sessionState || typeof window.__sessionState !== 'object') {
+  window.__sessionState = {};
+}
+if (!Array.isArray(window.__versionStack)) {
+  window.__versionStack = [];
+}
+
+function setLocalStorageJsonIfSmall(key, value) {
+  if (!window.localStorage || !key) {
+    return false;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length < MAX_LOCALSTORAGE_JSON_CHARS) {
+      window.localStorage.setItem(key, serialized);
+      return true;
+    }
+    window.localStorage.removeItem(key);
+  } catch (error) {
+    console.warn(`Skipping localStorage write for ${key}:`, error);
+  }
+  return false;
+}
+
 
 const AuthController = (() => {
   const providers = new Map();
@@ -1790,7 +1816,7 @@ function normalizeSessionState(raw) {
 }
 
 function persistSessionStateNow() {
-  if (!sessionState || !window.localStorage) {
+  if (!sessionState) {
     return;
   }
   const payload = {
@@ -1798,8 +1824,9 @@ function persistSessionStateNow() {
     saved_at: new Date().toISOString(),
     session_state: sessionState
   };
+  window.__sessionState = payload;
   const key = getSessionStateStorageKey();
-  window.localStorage.setItem(key, JSON.stringify(payload));
+  setLocalStorageJsonIfSmall(key, payload);
   saveSessionSnapshotToIndexedDb(sessionState);
 }
 
@@ -1814,6 +1841,12 @@ function scheduleSessionStatePersist() {
 }
 
 function loadSessionStateFromLocalStorage() {
+  if (window.__sessionState) {
+    const inMemoryState = normalizeSessionState(window.__sessionState);
+    if (inMemoryState) {
+      return inMemoryState;
+    }
+  }
   if (!window.localStorage) {
     return null;
   }
@@ -1859,11 +1892,9 @@ async function initializeSessionState() {
 }
 
 function persistVersionStack() {
-  if (!window.localStorage) {
-    return;
-  }
+  window.__versionStack = codeVersionStack.map((entry) => ({ ...entry }));
   const key = getVersionStorageKey();
-  window.localStorage.setItem(key, JSON.stringify(codeVersionStack));
+  setLocalStorageJsonIfSmall(key, window.__versionStack);
 }
 
 function normalizeStoredVersion(entry) {
@@ -1904,6 +1935,9 @@ function normalizeStoredVersion(entry) {
 }
 
 function loadVersionStack() {
+  if (Array.isArray(window.__versionStack) && window.__versionStack.length) {
+    return window.__versionStack.map(normalizeStoredVersion).filter(Boolean);
+  }
   if (!window.localStorage) {
     return [];
   }
