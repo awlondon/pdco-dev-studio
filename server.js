@@ -78,6 +78,7 @@ import {
 } from './utils/tokenEfficiency.js';
 import { getDbPool } from './utils/queryLayer.js';
 import { buildPlayablePrompt } from './server/utils/playableWrapper.js';
+import { buildRetryPrompt } from './server/utils/retryWrapper.js';
 
 const app = express();
 
@@ -1764,6 +1765,35 @@ function applyPlayablePromptToMessages(messages = [], { prompt, code } = {}) {
   return updated;
 }
 
+function applyPromptToLastUserMessage(messages = [], prompt = '') {
+  const safePrompt = typeof prompt === 'string' ? prompt : '';
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [
+      { role: 'system', content: CHAT_SYSTEM_PROMPT },
+      { role: 'user', content: safePrompt }
+    ];
+  }
+
+  let replaced = false;
+  const updated = messages.map((message, index) => {
+    const isLast = index === messages.length - 1;
+    if (isLast && message?.role === 'user') {
+      replaced = true;
+      return {
+        ...message,
+        content: safePrompt
+      };
+    }
+    return message;
+  });
+
+  if (!replaced) {
+    updated.push({ role: 'user', content: safePrompt });
+  }
+
+  return updated;
+}
+
 /**
  * CHAT (FULL IMPLEMENTATION — DO NOT STUB)
  */
@@ -1828,18 +1858,40 @@ app.post('/api/chat', async (req, res) => {
       llmProxyUrl: LLM_PROXY_URL
     });
     const playableMode = Boolean(req.body?.playableMode);
+    const retryMode = Boolean(req.body?.retryMode);
+    const originalPrompt = typeof req.body?.originalPrompt === 'string'
+      ? req.body.originalPrompt
+      : '';
+    const previousResponse = typeof req.body?.previousResponse === 'string'
+      ? req.body.previousResponse
+      : '';
     const playablePromptText = typeof req.body?.userPrompt === 'string'
       ? req.body.userPrompt
       : trimmedContext.messages[trimmedContext.messages.length - 1]?.content || '';
     const playableCodeText = typeof req.body?.currentCode === 'string'
       ? req.body.currentCode
       : rawCodeContext;
-    const trimmedMessages = playableMode
+    let finalPrompt = playablePromptText;
+    if (retryMode) {
+      finalPrompt = buildRetryPrompt({
+        originalPrompt,
+        previousResponse
+      });
+      if (playableMode) {
+        finalPrompt += '\n\nAlso improve gameplay depth and mechanics.';
+      }
+    }
+
+    let trimmedMessages = playableMode
       ? applyPlayablePromptToMessages(trimmedContext.messages, {
-        prompt: playablePromptText,
+        prompt: finalPrompt,
         code: playableCodeText
       })
       : trimmedContext.messages;
+
+    if (retryMode) {
+      trimmedMessages = applyPromptToLastUserMessage(trimmedMessages, finalPrompt);
+    }
 
     req.body.messages = trimmedMessages;
     if (trimmedContext.summaryText) {
@@ -1860,9 +1912,10 @@ app.post('/api/chat', async (req, res) => {
       session_id: req.body?.sessionId || '',
       ...trimmedContext.metrics
     });
-    const promptText = buildPromptText(trimmedContext.messages);
+    const promptText = buildPromptText(trimmedMessages);
     const inputChars = promptText.length;
-    const inputTokensEstimate = trimmedContext.tokenCount;
+    const inputTokensEstimate = estimateMessageTokens(trimmedMessages, requestedModel);
+    req.body.token_estimate.actual_tokens = inputTokensEstimate;
     const estimatedCredits = calculateCreditsUsed({
       inputTokens: inputTokensEstimate,
       outputTokens: 0,

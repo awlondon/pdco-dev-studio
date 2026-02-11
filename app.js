@@ -7229,6 +7229,9 @@ let chatAbortController = null;
 let chatAbortSilent = false;
 let clearChatInProgress = false;
 let saveArtifactInProgress = false;
+let lastRetryContext = null;
+let sessionRetryCount = 0;
+const RETRY_LIMIT = 3;
 const DEBUG_INTENT = false;
 const chatState = {
   locked: false,
@@ -8854,6 +8857,7 @@ function stopLoading() {
   }
   loadingInterval = null;
   loadingStartTime = null;
+  updateRetryButton();
 }
 
 function setSendDisabled(isDisabled) {
@@ -8872,11 +8876,13 @@ function unlockChat() {
     chatState.unlockTimerId = null;
   }
   updateSendButton(lastThrottleState);
+  updateRetryButton();
 }
 
 function lockChat() {
   chatState.locked = true;
   setSendDisabled(true);
+  updateRetryButton();
   if (chatState.unlockTimerId) {
     clearTimeout(chatState.unlockTimerId);
   }
@@ -8886,6 +8892,61 @@ function lockChat() {
       unlockChat();
     }
   }, 15000);
+}
+
+function getLastConversationMessage() {
+  if (!chatMessages) {
+    return null;
+  }
+  const messages = Array.from(chatMessages.querySelectorAll('.message'));
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const role = message?.dataset?.role;
+    if (role === 'user' || role === 'assistant') {
+      return message;
+    }
+  }
+  return null;
+}
+
+function getRetryButton() {
+  let button = document.getElementById('retry-btn');
+  if (!button) {
+    button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'retry-btn';
+    button.textContent = '↻ Try Again';
+  }
+  return button;
+}
+
+function updateRetryButton() {
+  const button = document.getElementById('retry-btn');
+  if (button) {
+    button.remove();
+  }
+
+  const lastMessage = getLastConversationMessage();
+  const canRetry = Boolean(
+    lastRetryContext
+      && lastMessage?.dataset?.role === 'assistant'
+      && !isGenerating
+      && !chatState.locked
+      && sessionRetryCount < RETRY_LIMIT
+  );
+
+  if (!canRetry) {
+    return;
+  }
+
+  const retryButton = getRetryButton();
+  retryButton.onclick = () => {
+    sendChat({
+      playableMode: Boolean(lastRetryContext?.playableMode),
+      retryMode: true
+    });
+  };
+  lastMessage.appendChild(retryButton);
 }
 
 
@@ -8926,14 +8987,20 @@ function updatePlayableButtonState() {
   playableButton.title = 'Make it a Game';
 }
 
-async function sendChat({ playableMode = false } = {}) {
+async function sendChat({ playableMode = false, retryMode = false } = {}) {
   if (chatState.locked) {
     return;
   }
 
   const userInput = chatInput.value.trim();
+  const effectiveInput = retryMode
+    ? (lastRetryContext?.originalPrompt || '').trim()
+    : userInput;
   const hasCodeInput = Boolean((currentCode || '').trim());
-  if (!userInput && !hasCodeInput) {
+  if (!effectiveInput && !hasCodeInput) {
+    return;
+  }
+  if (retryMode && (!lastRetryContext || sessionRetryCount >= RETRY_LIMIT)) {
     return;
   }
 
@@ -8967,7 +9034,7 @@ async function sendChat({ playableMode = false } = {}) {
     );
     if (estimatedNextCost > remainingToday) {
       const estimate = estimateCreditsPreview({
-        userInput,
+        userInput: effectiveInput,
         currentCode
       });
       showPaywall({
@@ -8980,7 +9047,7 @@ async function sendChat({ playableMode = false } = {}) {
   }
 
   const startedAt = performance.now();
-  const resolvedIntent = resolveIntent(userInput);
+  const resolvedIntent = resolveIntent(effectiveInput);
   if (!intentAnchor && !resolvedIntent.inferred) {
     intentAnchor = resolvedIntent.type;
   }
@@ -8992,7 +9059,7 @@ async function sendChat({ playableMode = false } = {}) {
     });
   }
 
-  let intentAdjustedInput = userInput;
+  let intentAdjustedInput = effectiveInput;
   if (
     resolvedIntent.inferred
     && pendingAssistantProposal
@@ -9003,12 +9070,16 @@ async function sendChat({ playableMode = false } = {}) {
   }
 
   lockChat();
-  chatInput.value = '';
+  if (!retryMode) {
+    chatInput.value = '';
+  }
   updateCreditPreview({ force: true });
   updatePlayableButtonState();
-  appendMessage('user', userInput || '[Use current editor code]');
+  if (!retryMode) {
+    appendMessage('user', userInput || '[Use current editor code]');
+  }
 
-  const tokenEstimate = estimateTokensForRequest({ userInput, currentCode });
+  const tokenEstimate = estimateTokensForRequest({ userInput: effectiveInput, currentCode });
   recordLargeGeneration(getUserContext().id, tokenEstimate);
 
   const pendingMessageId = addMessage(
@@ -9071,7 +9142,10 @@ async function sendChat({ playableMode = false } = {}) {
         historySummary: sessionState?.history_summary?.text || '',
         user: getUserContext(),
         playableMode,
+        retryMode,
         userPrompt: intentAdjustedInput,
+        originalPrompt: lastRetryContext?.originalPrompt || intentAdjustedInput,
+        previousResponse: lastRetryContext?.previousResponse || '',
         currentCode
       })
     });
@@ -9168,7 +9242,7 @@ async function sendChat({ playableMode = false } = {}) {
     'Text-only response attempted to modify UI'
   );
   if (hasCode && (!extractedText || !extractedText.trim())) {
-    extractedText = `Updated interface generated for: “${userInput}”.`;
+    extractedText = `Updated interface generated for: “${effectiveInput}”.`;
   }
   if (!hasCode) {
     const assistantProposal = getAssistantProposal(extractedText);
@@ -9217,6 +9291,17 @@ async function sendChat({ playableMode = false } = {}) {
   } catch (error) {
     console.error('Post-generation UI update failed.', error);
   }
+
+  if (retryMode) {
+    sessionRetryCount += 1;
+  }
+  lastRetryContext = {
+    originalPrompt: intentAdjustedInput,
+    previousResponse: rawReply,
+    playableMode: Boolean(playableMode),
+    intentType: resolvedIntent.type
+  };
+  updateRetryButton();
 
   unlockChat();
   stopLoading();

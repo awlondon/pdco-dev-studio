@@ -168,3 +168,48 @@ test('chat endpoint wraps latest user prompt when playable mode is enabled', asy
   if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = originalApiKey;
 });
+
+test('chat endpoint injects retry prompt when retry mode is enabled', async () => {
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalFetch = global.fetch;
+  process.env.OPENAI_API_KEY = 'test-key';
+
+  global.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    const latest = body.messages[body.messages.length - 1];
+    assert.equal(latest.role, 'user');
+    assert.match(latest.content, /significantly improved alternative response/i);
+    assert.match(latest.content, /Original user request:\nCreate onboarding copy/i);
+    assert.match(latest.content, /Previous response \(trimmed for efficiency\):/i);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { id: 'cmpl_retry', choices: [{ message: { role: 'assistant', content: 'ok' } }] };
+      }
+    };
+  };
+
+  const req = {
+    method: 'POST',
+    body: {
+      retryMode: true,
+      originalPrompt: 'Create onboarding copy',
+      previousResponse: 'Short answer',
+      messages: [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'Create onboarding copy' }
+      ]
+    }
+  };
+  const res = createMockRes();
+
+  await handler(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.id, 'cmpl_retry');
+
+  global.fetch = originalFetch;
+  if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalApiKey;
+});

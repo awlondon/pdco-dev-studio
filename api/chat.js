@@ -1,4 +1,5 @@
 import { buildPlayablePrompt } from '../server/utils/playableWrapper.js';
+import { buildRetryPrompt } from '../server/utils/retryWrapper.js';
 
 function applyPlayableWrapper(messages, { userPrompt = '', code = '' } = {}) {
   const wrappedPrompt = buildPlayablePrompt({ prompt: userPrompt, code });
@@ -25,7 +26,15 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { messages, playableMode = false, userPrompt = '', currentCode = '' } = req.body || {};
+  const {
+    messages,
+    playableMode = false,
+    retryMode = false,
+    userPrompt = '',
+    originalPrompt = '',
+    previousResponse = '',
+    currentCode = ''
+  } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     res.status(400).json({ error: 'Missing messages.' });
     return;
@@ -38,9 +47,28 @@ export default async function handler(req, res) {
   }
 
   try {
+    let finalPrompt = userPrompt;
+    if (retryMode) {
+      finalPrompt = buildRetryPrompt({ originalPrompt, previousResponse });
+      if (playableMode) {
+        finalPrompt += '\n\nAlso improve gameplay depth and mechanics.';
+      }
+    }
+
     const outboundMessages = playableMode
-      ? applyPlayableWrapper(messages, { userPrompt, code: currentCode })
-      : messages;
+      ? applyPlayableWrapper(messages, { userPrompt: finalPrompt, code: currentCode })
+      : (() => {
+        if (!retryMode) {
+          return messages;
+        }
+        const next = [...messages];
+        if (next[next.length - 1]?.role === 'user') {
+          next[next.length - 1] = { ...next[next.length - 1], content: finalPrompt };
+        } else {
+          next.push({ role: 'user', content: finalPrompt });
+        }
+        return next;
+      })();
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
