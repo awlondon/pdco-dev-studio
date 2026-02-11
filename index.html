@@ -452,9 +452,11 @@
               <textarea id="chat-input" placeholder="Describe what you want to build or change."></textarea>
               <div id="credit-preview" class="credit-preview" aria-live="polite"></div>
             </div>
-            <button id="playable-btn" class="icon-button playable-button" title="Make it a Game" type="button" disabled>🎮</button>
             <button id="btn-mic" title="Speak" type="button">🎙️</button>
-            <button id="btn-send" type="submit">Send Chat</button>
+            <div class="chat-submit-stack">
+              <button id="playable-btn" class="icon-button playable-button" title="Make it a Game" type="button" disabled>🎮</button>
+              <button id="btn-send" type="submit">Send Chat</button>
+            </div>
           </form>
         </section>
 
