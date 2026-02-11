@@ -37,7 +37,9 @@ async function persistSessionStateToServer(payload) {
         summary: {
           messages: payload.session_state.messages?.length || 0,
           code_versions: payload.session_state.code_versions?.length || 0,
-          active_version_index: payload.session_state.active_version_index
+          active_version_index: payload.session_state.active_version_index,
+          has_history_summary: Boolean(payload.session_state.history_summary?.text),
+          history_summary_updated_at: payload.session_state.history_summary?.updated_at || null
         },
         state: payload.session_state
       })
@@ -1494,7 +1496,11 @@ function createInitialSessionState() {
     },
     messages: [],
     code_versions: [],
-    active_version_index: -1
+    active_version_index: -1,
+    history_summary: {
+      text: '',
+      updated_at: null
+    }
   };
 }
 
@@ -1772,7 +1778,15 @@ function normalizeSessionState(raw) {
     code_versions: Array.isArray(state.code_versions) ? state.code_versions : [],
     active_version_index: Number.isFinite(state.active_version_index)
       ? state.active_version_index
-      : -1
+      : -1,
+    history_summary: {
+      text: typeof state.history_summary?.text === 'string'
+        ? state.history_summary.text
+        : typeof state.context_summary === 'string'
+          ? state.context_summary
+          : '',
+      updated_at: state.history_summary?.updated_at || null
+    }
   };
 }
 
@@ -8739,6 +8753,7 @@ async function sendChat() {
         session_id: sessionId,
         intentType: resolvedIntent.type,
         contextMode: (Auth.user?.preferences?.context_mode || 'balanced'),
+        historySummary: sessionState?.history_summary?.text || '',
         user: getUserContext()
       })
     });
@@ -8767,6 +8782,13 @@ async function sendChat() {
       throw new Error('No model output returned');
     }
     rawReply = content;
+    if (sessionState && typeof data?.context_summary === 'string' && data.context_summary.trim()) {
+      sessionState.history_summary = {
+        text: data.context_summary.trim(),
+        updated_at: new Date().toISOString()
+      };
+      scheduleSessionStatePersist();
+    }
     outputTokensEstimate = estimateTokensForContent(rawReply);
     applyUsageToCredits(data?.usage);
     updateSessionStatsFromUsage({
