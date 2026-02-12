@@ -3743,12 +3743,16 @@ button:disabled {
 .agent-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   max-height: 160px;
   overflow: auto;
 }
 
 .agent-item {
+  height: 34px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
   text-align: left;
   font-size: 12px;
   padding: 6px;
@@ -3761,6 +3765,15 @@ button:disabled {
 
 .agent-item.active {
   border-color: #66a3ff;
+}
+
+.agent-item.focused {
+  outline: 1px solid #8ab4f8;
+  outline-offset: -1px;
+}
+
+.agent-list-spacer {
+  flex: 0 0 auto;
 }
 
 .agent-focus {

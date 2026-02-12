@@ -3560,27 +3560,148 @@ function showErrorState() {
   setStatus('Agent failed');
 }
 
+const AGENT_LIST_VIRTUAL_ROW_HEIGHT = 34;
+const AGENT_LIST_OVERSCAN_ROWS = 8;
+const agentListVirtualState = {
+  scrollTop: 0,
+  focusedIndex: -1,
+  listenersBound: false
+};
+
+function ensureAgentVisible(index, listEl) {
+  const itemTop = index * AGENT_LIST_VIRTUAL_ROW_HEIGHT;
+  const itemBottom = itemTop + AGENT_LIST_VIRTUAL_ROW_HEIGHT;
+  const viewTop = listEl.scrollTop;
+  const viewBottom = viewTop + listEl.clientHeight;
+
+  if (itemTop < viewTop) {
+    listEl.scrollTop = itemTop;
+  } else if (itemBottom > viewBottom) {
+    listEl.scrollTop = itemBottom - listEl.clientHeight;
+  }
+}
+
+function bindAgentListListeners(listEl) {
+  if (agentListVirtualState.listenersBound) {
+    return;
+  }
+
+  listEl.addEventListener('scroll', () => {
+    agentListVirtualState.scrollTop = listEl.scrollTop;
+    renderAgents();
+  });
+
+  listEl.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-agent-id]');
+    if (!button) {
+      return;
+    }
+    const agentId = button.getAttribute('data-agent-id');
+    const index = Number(button.getAttribute('data-agent-index'));
+    if (Number.isFinite(index)) {
+      agentListVirtualState.focusedIndex = index;
+    }
+    if (agentId) {
+      appMachine.setActiveAgent(agentId);
+    }
+  });
+
+  listEl.addEventListener('keydown', (event) => {
+    const agents = appMachine.getAllAgents();
+    if (!agents.length) {
+      return;
+    }
+
+    const pageDelta = Math.max(1, Math.floor(listEl.clientHeight / AGENT_LIST_VIRTUAL_ROW_HEIGHT));
+    const current = Math.max(0, agentListVirtualState.focusedIndex);
+    let next = current;
+
+    if (event.key === 'ArrowDown') {
+      next = Math.min(agents.length - 1, current + 1);
+    } else if (event.key === 'ArrowUp') {
+      next = Math.max(0, current - 1);
+    } else if (event.key === 'PageDown') {
+      next = Math.min(agents.length - 1, current + pageDelta);
+    } else if (event.key === 'PageUp') {
+      next = Math.max(0, current - pageDelta);
+    } else if (event.key === 'Home') {
+      next = 0;
+    } else if (event.key === 'End') {
+      next = agents.length - 1;
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      const focused = agents[current];
+      if (focused?.agentId) {
+        event.preventDefault();
+        appMachine.setActiveAgent(focused.agentId);
+      }
+      return;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    agentListVirtualState.focusedIndex = next;
+    ensureAgentVisible(next, listEl);
+    renderAgents();
+  });
+
+  agentListVirtualState.listenersBound = true;
+}
+
 function renderAgents() {
   const listEl = document.getElementById('agent-list');
   if (!listEl) {
     return;
   }
 
+  bindAgentListListeners(listEl);
+
+  const agents = appMachine.getAllAgents();
+  const totalAgents = agents.length;
+
+  if (!totalAgents) {
+    listEl.innerHTML = '<div class="agent-empty">No agents yet.</div>';
+    agentListVirtualState.focusedIndex = -1;
+    listEl.removeAttribute('aria-activedescendant');
+    return;
+  }
+
+  listEl.setAttribute('role', 'listbox');
+  listEl.tabIndex = 0;
+
   const activeAgentId = appMachine.state.agents.activeAgentId;
-  const rows = appMachine.getAllAgents().map((agent) => {
+  const activeIndex = agents.findIndex((agent) => agent.agentId === activeAgentId);
+  if (agentListVirtualState.focusedIndex < 0 || agentListVirtualState.focusedIndex >= totalAgents) {
+    agentListVirtualState.focusedIndex = activeIndex >= 0 ? activeIndex : 0;
+  }
+
+  const viewportHeight = Math.max(listEl.clientHeight, AGENT_LIST_VIRTUAL_ROW_HEIGHT);
+  const scrollTop = Math.min(agentListVirtualState.scrollTop, Math.max(0, totalAgents * AGENT_LIST_VIRTUAL_ROW_HEIGHT - viewportHeight));
+  if (listEl.scrollTop !== scrollTop) {
+    listEl.scrollTop = scrollTop;
+  }
+  agentListVirtualState.scrollTop = scrollTop;
+
+  const visibleCount = Math.ceil(viewportHeight / AGENT_LIST_VIRTUAL_ROW_HEIGHT);
+  const startIndex = Math.max(0, Math.floor(scrollTop / AGENT_LIST_VIRTUAL_ROW_HEIGHT) - AGENT_LIST_OVERSCAN_ROWS);
+  const endIndex = Math.min(totalAgents, startIndex + visibleCount + AGENT_LIST_OVERSCAN_ROWS * 2);
+  const topSpacer = startIndex * AGENT_LIST_VIRTUAL_ROW_HEIGHT;
+  const bottomSpacer = (totalAgents - endIndex) * AGENT_LIST_VIRTUAL_ROW_HEIGHT;
+
+  const rows = agents.slice(startIndex, endIndex).map((agent, offset) => {
+    const index = startIndex + offset;
     const isActive = activeAgentId === agent.agentId;
-    return `<button type="button" class="agent-item ${isActive ? 'active' : ''}" data-agent-id="${agent.agentId}">${agent.agentId.slice(0, 8)} · ${agent.root}${agent.streamPhase ? `/${agent.streamPhase}` : ''}</button>`;
+    const isFocused = index === agentListVirtualState.focusedIndex;
+    const rowId = `agent-option-${index}`;
+    return `<button id="${rowId}" type="button" role="option" aria-selected="${isActive ? 'true' : 'false'}" class="agent-item ${isActive ? 'active' : ''} ${isFocused ? 'focused' : ''}" data-agent-id="${agent.agentId}" data-agent-index="${index}">${agent.agentId.slice(0, 8)} · ${agent.root}${agent.streamPhase ? `/${agent.streamPhase}` : ''}</button>`;
   });
 
-  listEl.innerHTML = rows.join('') || '<div class="agent-empty">No agents yet.</div>';
-  listEl.querySelectorAll('[data-agent-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const agentId = button.getAttribute('data-agent-id');
-      if (agentId) {
-        appMachine.setActiveAgent(agentId);
-      }
-    });
-  });
+  listEl.setAttribute('aria-activedescendant', `agent-option-${agentListVirtualState.focusedIndex}`);
+  listEl.innerHTML = `
+    <div class="agent-list-spacer" style="height:${topSpacer}px"></div>
+    ${rows.join('')}
+    <div class="agent-list-spacer" style="height:${bottomSpacer}px"></div>
+  `;
 }
 
 function renderActiveAgent() {
