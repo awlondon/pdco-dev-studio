@@ -11,6 +11,11 @@ import {
   AGENT_STREAM_PHASES,
   EVENTS
 } from './core/appStateMachine.js';
+import {
+  clearAgentState,
+  loadAgentState,
+  persistAgentState
+} from './core/persistence.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -39,6 +44,8 @@ function resolveApiBase() {
 
 const API_BASE = resolveApiBase();
 const appMachine = new AppStateMachine();
+const MAX_RESUME_AGE = 1000 * 60 * 10;
+let resumeMessageId = null;
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
@@ -651,19 +658,9 @@ function initComposerControls() {
       if (appMachine.getAgentRoot() !== AGENT_ROOT_STATES.IDLE) {
         appMachine.dispatch(EVENTS.AGENT_RESET);
       }
-      appMachine.dispatch(EVENTS.AGENT_START);
 
       try {
-        await prepareAgent();
-        appMachine.dispatch(EVENTS.AGENT_READY);
-
-        const stream = startAgentTask();
-        appMachine.dispatch(EVENTS.AGENT_STREAM);
-        appMachine.dispatch(EVENTS.STREAM_TOKEN);
-
-        await stream;
-        appMachine.dispatch(EVENTS.STREAM_DONE);
-        appMachine.dispatch(EVENTS.AGENT_COMPLETE);
+        await startAgentExecution();
       } catch (error) {
         appMachine.dispatch(EVENTS.AGENT_FAIL);
       }
@@ -694,16 +691,163 @@ async function prepareAgent() {
   return Promise.resolve();
 }
 
+async function startAgentExecution() {
+  appMachine.dispatch(EVENTS.AGENT_START);
+  await prepareAgent();
+  appMachine.dispatch(EVENTS.AGENT_READY);
+
+  const { taskId, resumeToken, stream } = await startAgentTask();
+  appMachine.state.agent.taskId = taskId;
+  appMachine.state.agent.resumeToken = resumeToken;
+  appMachine.state.agent.startedAt = Date.now();
+  appMachine.state.agent.partialOutput = '';
+  persistAgentState(appMachine.state.agent);
+
+  appMachine.dispatch(EVENTS.AGENT_STREAM);
+  appMachine.dispatch(EVENTS.STREAM_CHUNK);
+
+  for await (const chunk of stream) {
+    appMachine.state.agent.partialOutput += chunk;
+    persistAgentState(appMachine.state.agent);
+    renderChunk(chunk);
+  }
+
+  appMachine.dispatch(EVENTS.STREAM_DONE);
+  appMachine.dispatch(EVENTS.AGENT_COMPLETE);
+}
+
 async function startAgentTask() {
-  return sendChat({
+  const stream = sendChat({
     playableMode: true,
     userPrompt: getPromptInput(),
     code: getEditorCode()
-  });
+  }).then((result) => ({ finalText: result?.text || '' }));
+
+  let taskId = `agent_${Date.now()}`;
+  let resumeToken = `resume_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  try {
+    const startResponse = await safeFetchJSON('/api/agent/start', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: getPromptInput(),
+        code: getEditorCode()
+      })
+    }, null);
+    if (startResponse?.taskId && startResponse?.resumeToken) {
+      taskId = startResponse.taskId;
+      resumeToken = startResponse.resumeToken;
+    }
+  } catch (error) {
+    console.warn('Agent start token negotiation failed; using local token.', error);
+  }
+
+  async function* streamChunks() {
+    const { finalText } = await stream;
+    if (finalText) {
+      yield finalText;
+    }
+  }
+
+  return { taskId, resumeToken, stream: streamChunks() };
 }
 
 function cancelAgent() {
   abortActiveChat({ silent: true });
+}
+
+function renderChunk(chunk) {
+  if (!chunk) {
+    return;
+  }
+
+  if (!resumeMessageId) {
+    resumeMessageId = addMessage('assistant', '<em>Resuming agent stream…</em>', { pending: true });
+  }
+
+  const content = appMachine.state.agent.partialOutput || chunk;
+  renderAssistantMessage(resumeMessageId, content);
+}
+
+async function* streamTextChunks(response) {
+  if (!response?.body) {
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    const text = decoder.decode(value, { stream: true });
+    if (text) {
+      yield text;
+    }
+  }
+  const trailing = decoder.decode();
+  if (trailing) {
+    yield trailing;
+  }
+}
+
+async function resumeAgentStream(resumeToken) {
+  const response = await fetch(`${API_BASE}/api/agent/resume`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resumeToken })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Resume failed (${response.status})`);
+  }
+
+  if (response.body) {
+    return streamTextChunks(response);
+  }
+
+  const payload = await response.json();
+  const chunks = Array.isArray(payload?.chunks)
+    ? payload.chunks
+    : (payload?.content ? [payload.content] : []);
+
+  async function* fallbackChunks() {
+    for (const chunk of chunks) {
+      yield chunk;
+    }
+  }
+
+  return fallbackChunks();
+}
+
+async function attemptResume(agentState) {
+  if (!agentState?.resumeToken) {
+    console.warn('No resume token. Resetting agent.');
+    appMachine.dispatch(EVENTS.AGENT_RESET);
+    return;
+  }
+
+  try {
+    const stream = await resumeAgentStream(agentState.resumeToken);
+
+    appMachine.dispatch(EVENTS.AGENT_STREAM);
+    appMachine.dispatch(EVENTS.STREAM_CHUNK);
+
+    for await (const chunk of stream) {
+      appMachine.state.agent.partialOutput += chunk;
+      persistAgentState(appMachine.state.agent);
+      renderChunk(chunk);
+    }
+
+    appMachine.dispatch(EVENTS.STREAM_DONE);
+    appMachine.dispatch(EVENTS.AGENT_COMPLETE);
+  } catch (e) {
+    console.warn('Resume failed. Resetting.');
+    appMachine.dispatch(EVENTS.AGENT_FAIL);
+  }
 }
 
 function setEditorValue(value = '') {
@@ -3256,6 +3400,7 @@ function handleAgentState(agentState) {
 
   switch (root) {
     case AGENT_ROOT_STATES.IDLE:
+      resumeMessageId = null;
       runBtn.disabled = false;
       stopBtn.disabled = true;
       break;
@@ -3269,6 +3414,7 @@ function handleAgentState(agentState) {
     case AGENT_ROOT_STATES.COMPLETED:
     case AGENT_ROOT_STATES.FAILED:
     case AGENT_ROOT_STATES.CANCELLED:
+      resumeMessageId = null;
       runBtn.disabled = false;
       stopBtn.disabled = true;
       break;
@@ -3292,6 +3438,20 @@ if (location.hostname === 'localhost') {
 }
 
 async function bootApp() {
+  const persistedAgent = loadAgentState();
+  if (persistedAgent?.root === AGENT_ROOT_STATES.ACTIVE) {
+    if (!persistedAgent.startedAt || Date.now() - persistedAgent.startedAt > MAX_RESUME_AGE) {
+      clearAgentState();
+      appMachine.dispatch(EVENTS.AGENT_RESET);
+    } else {
+      appMachine.state.agent = {
+        ...appMachine.state.agent,
+        ...persistedAgent
+      };
+      attemptResume(persistedAgent);
+    }
+  }
+
   appMachine.dispatch(EVENTS.START);
 
   try {
@@ -9576,6 +9736,8 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     }
     rawReply = content;
     if (playableMode) {
+      appMachine.state.agent.partialOutput = rawReply;
+      persistAgentState(appMachine.state.agent);
       appMachine.dispatch(EVENTS.STREAM_CHUNK);
     }
     if (sessionState && typeof data?.context_summary === 'string' && data.context_summary.trim()) {
@@ -9609,7 +9771,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
         stopLoading();
         chatAbortController = null;
         chatAbortSilent = false;
-        return;
+        return { text: '', code: '' };
       }
     }
     console.error(error);
@@ -9624,7 +9786,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     stopLoading();
     chatAbortController = null;
     chatAbortSilent = false;
-    return;
+    return { text: '', code: '' };
   }
   chatAbortController = null;
   chatAbortSilent = false;
@@ -9673,7 +9835,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     });
     unlockChat();
     stopLoading();
-    return;
+    return { text: extractedText, code: '' };
   }
 
   if (playableMode) {
@@ -9717,6 +9879,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
   unlockChat();
   stopLoading();
   maybeShowUsagePaywall({ reason: 'usage' });
+  return { text: extractedText, code: extractedCode };
 }
 
 chatForm.addEventListener('submit', (event) => {
