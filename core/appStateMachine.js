@@ -1,3 +1,5 @@
+import { clearAgentState, persistAgentState } from './persistence.js';
+
 export const APP_STATES = {
   BOOTING: 'BOOTING',
   INIT_NETWORK: 'INIT_NETWORK',
@@ -111,7 +113,11 @@ export class AppStateMachine {
       agent: {
         root: AGENT_ROOT_STATES.IDLE,
         active: null,
-        streamPhase: null
+        streamPhase: null,
+        taskId: null,
+        startedAt: null,
+        resumeToken: null,
+        partialOutput: ''
       }
     };
     this.listeners = [];
@@ -134,6 +140,17 @@ export class AppStateMachine {
       if (rootNext !== AGENT_ROOT_STATES.ACTIVE) {
         this.state.agent.active = null;
         this.state.agent.streamPhase = null;
+      }
+
+      if (rootNext === AGENT_ROOT_STATES.IDLE) {
+        this.state.agent.taskId = null;
+        this.state.agent.startedAt = null;
+        this.state.agent.resumeToken = null;
+        this.state.agent.partialOutput = '';
+      }
+
+      if ([AGENT_ROOT_STATES.COMPLETED, AGENT_ROOT_STATES.FAILED, AGENT_ROOT_STATES.CANCELLED].includes(rootNext)) {
+        clearAgentState();
       }
 
       changed = true;
@@ -168,6 +185,8 @@ export class AppStateMachine {
   }
 
   notify() {
+    persistAgentState(this.state.agent);
+
     for (const fn of this.listeners) {
       fn(this.state);
     }
