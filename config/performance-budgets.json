@@ -1,0 +1,20 @@
+{
+  "bundle": {
+    "pdcoFrontend": {
+      "distDir": "pdco-frontend/dist/assets",
+      "maxEntryJsBytes": 250000,
+      "maxTotalJsBytes": 400000,
+      "maxTotalCssBytes": 100000
+    }
+  },
+  "runtime": {
+    "routeTransition": {
+      "maxP95Ms": 120,
+      "sampleCount": 10,
+      "warmupSamples": 2,
+      "fromRoute": "/",
+      "toRoute": "/gallery/public",
+      "baselineMachine": "GitHub Actions ubuntu-latest (2 vCPU)"
+    }
+  }
+}
