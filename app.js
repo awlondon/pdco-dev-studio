@@ -3,7 +3,14 @@
 import { createSandboxController } from './sandboxController.js';
 import { formatNumber } from './utils/formatNumber.js';
 import { editorManager } from './editorManager.js';
-import { AppStateMachine, APP_STATES, AGENT_STATES, EVENTS } from './core/appStateMachine.js';
+import {
+  AppStateMachine,
+  APP_STATES,
+  AGENT_ROOT_STATES,
+  AGENT_ACTIVE_SUBSTATES,
+  AGENT_STREAM_PHASES,
+  EVENTS
+} from './core/appStateMachine.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -641,7 +648,7 @@ function initComposerControls() {
         return;
       }
 
-      if (appMachine.getAgentState() !== AGENT_STATES.IDLE) {
+      if (appMachine.getAgentRoot() !== AGENT_ROOT_STATES.IDLE) {
         appMachine.dispatch(EVENTS.AGENT_RESET);
       }
       appMachine.dispatch(EVENTS.AGENT_START);
@@ -650,10 +657,12 @@ function initComposerControls() {
         await prepareAgent();
         appMachine.dispatch(EVENTS.AGENT_READY);
 
-        const stream = await startAgentTask();
+        const stream = startAgentTask();
         appMachine.dispatch(EVENTS.AGENT_STREAM);
+        appMachine.dispatch(EVENTS.STREAM_TOKEN);
 
         await stream;
+        appMachine.dispatch(EVENTS.STREAM_DONE);
         appMachine.dispatch(EVENTS.AGENT_COMPLETE);
       } catch (error) {
         appMachine.dispatch(EVENTS.AGENT_FAIL);
@@ -3196,6 +3205,33 @@ function handleAppState(appState) {
   }
 }
 
+function showStreamingIndicator(phase) {
+  switch (phase) {
+    case AGENT_STREAM_PHASES.TOKENIZING:
+      setStatus('Analyzing input...');
+      break;
+    case AGENT_STREAM_PHASES.RECEIVING:
+      setStatus('Receiving response...');
+      break;
+    case AGENT_STREAM_PHASES.RENDERING:
+      setStatus('Rendering output...');
+      break;
+    case AGENT_STREAM_PHASES.FINALIZING:
+      setStatus('Finalizing...');
+      break;
+    default:
+      break;
+  }
+}
+
+function showSuccessState() {
+  setStatus('Completed');
+}
+
+function showErrorState() {
+  setStatus('Agent failed');
+}
+
 function handleAgentState(agentState) {
   const runBtn = document.getElementById('playable-controller-btn');
   const stopBtn = document.getElementById('stop-agent-btn');
@@ -3204,22 +3240,35 @@ function handleAgentState(agentState) {
     return;
   }
 
-  switch (agentState) {
-    case AGENT_STATES.IDLE:
+  const { root, active, streamPhase } = agentState;
+
+  if (root === AGENT_ROOT_STATES.ACTIVE && active === AGENT_ACTIVE_SUBSTATES.STREAMING) {
+    showStreamingIndicator(streamPhase);
+  }
+
+  if (root === AGENT_ROOT_STATES.COMPLETED) {
+    showSuccessState();
+  }
+
+  if (root === AGENT_ROOT_STATES.FAILED) {
+    showErrorState();
+  }
+
+  switch (root) {
+    case AGENT_ROOT_STATES.IDLE:
       runBtn.disabled = false;
       stopBtn.disabled = true;
       break;
 
-    case AGENT_STATES.PREPARING:
-    case AGENT_STATES.RUNNING:
-    case AGENT_STATES.STREAMING:
+    case AGENT_ROOT_STATES.PREPARING:
+    case AGENT_ROOT_STATES.ACTIVE:
       runBtn.disabled = true;
       stopBtn.disabled = false;
       break;
 
-    case AGENT_STATES.COMPLETED:
-    case AGENT_STATES.FAILED:
-    case AGENT_STATES.CANCELLED:
+    case AGENT_ROOT_STATES.COMPLETED:
+    case AGENT_ROOT_STATES.FAILED:
+    case AGENT_ROOT_STATES.CANCELLED:
       runBtn.disabled = false;
       stopBtn.disabled = true;
       break;
@@ -9325,9 +9374,9 @@ function updatePlayableButtonState() {
   featureState.creditsRemaining = Number.isFinite(remainingCredits) ? remainingCredits : 0;
 
   const appState = appMachine.getAppState();
-  const agentState = appMachine.getAgentState();
+  const agentRoot = appMachine.getAgentRoot();
   const appReady = appState === APP_STATES.READY;
-  const agentBusy = [AGENT_STATES.PREPARING, AGENT_STATES.RUNNING, AGENT_STATES.STREAMING].includes(agentState);
+  const agentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(agentRoot);
 
   runBtn.disabled = !appReady || featureState.creditsRemaining <= 0 || agentBusy;
 
@@ -9526,6 +9575,9 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
       throw new Error('No model output returned');
     }
     rawReply = content;
+    if (playableMode) {
+      appMachine.dispatch(EVENTS.STREAM_CHUNK);
+    }
     if (sessionState && typeof data?.context_summary === 'string' && data.context_summary.trim()) {
       sessionState.history_summary = {
         text: data.context_summary.trim(),
@@ -9613,12 +9665,19 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     metadataParts.push({ text: usageMetadata.warningText, className: 'assistant-meta-warning' });
   }
   if (!hasCode) {
+    if (playableMode) {
+      appMachine.dispatch(EVENTS.STREAM_RENDER);
+    }
     finalizeChatOnce(() => {
       renderAssistantMessage(pendingMessageId, extractedText, metadataParts);
     });
     unlockChat();
     stopLoading();
     return;
+  }
+
+  if (playableMode) {
+    appMachine.dispatch(EVENTS.STREAM_RENDER);
   }
 
   finalizeChatOnce(() => {
