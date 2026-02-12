@@ -3,6 +3,7 @@
 import { createSandboxController } from './sandboxController.js';
 import { formatNumber } from './utils/formatNumber.js';
 import { editorManager } from './editorManager.js';
+import { AppStateMachine, APP_STATES, EVENTS } from './core/appStateMachine.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -30,19 +31,17 @@ function resolveApiBase() {
 }
 
 const API_BASE = resolveApiBase();
-let hasDegradedApi = false;
+const appMachine = new AppStateMachine();
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
     const res = await fetch(`${API_BASE}${url}`, options);
     if (!res.ok) {
-      hasDegradedApi = true;
       console.warn(`API error ${res.status} for ${url}`);
       return fallback;
     }
     return await res.json();
   } catch (err) {
-    hasDegradedApi = true;
     console.warn(`Network error for ${url}`, err);
     return fallback;
   }
@@ -3095,55 +3094,6 @@ async function checkEmailVerification() {
   }
 }
 
-async function loadPlans() {
-  const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, { plans: [] });
-  if (Array.isArray(plans?.plans)) {
-    planCatalog = plans.plans.map((plan) => ({
-      ...plan,
-      tier: plan.tier?.toString().toLowerCase()
-    }));
-  }
-  const resolvedPlans = getAvailablePlans();
-  renderPricingPlans(resolvedPlans);
-  renderPaywallPlans(resolvedPlans);
-  const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
-  updatePaywallPlanSelection(initialSelectedPlan);
-  updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
-}
-
-async function loadSession() {
-  const session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, {
-    authenticated: false,
-    user: null
-  });
-
-  if (!session) {
-    console.warn('Session unavailable. Continuing in anonymous mode.');
-  }
-
-  featureState.authenticated = !!session?.authenticated;
-  if (session?.user) {
-    onAuthSuccess({
-      user: session.user,
-      token: session.token,
-      provider: session.user?.provider || session.provider,
-      credits: session.credits,
-      deferRender: true
-    });
-  }
-  return session;
-}
-
-async function loadUsage() {
-  const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, {
-    creditsRemaining: 0,
-    usage: []
-  });
-  featureState.creditsRemaining = usage?.creditsRemaining ?? 0;
-  featureState.playableModeEnabled = true;
-  return usage;
-}
-
 function showOfflineBanner() {
   if (document.querySelector('.degraded-banner')) {
     return;
@@ -3154,31 +3104,116 @@ function showOfflineBanner() {
   document.body.prepend(banner);
 }
 
-function finalizeUI() {
-  updatePlayableButtonState();
-  if (hasDegradedApi) {
-    showOfflineBanner();
-  }
-  console.log('UI initialized in safe mode.');
+function enableFullFeatures() {
+  featureState.playableModeEnabled = true;
 }
 
-async function initializeApp() {
-  try {
-    await loadPlans();
-    await loadSession();
-    await loadUsage();
-  } catch (e) {
-    console.warn('Initialization degraded:', e);
-  } finally {
-    appReady = true;
-    finalizeUI();
+function enableLimitedMode() {
+  featureState.playableModeEnabled = false;
+}
+
+function disableNetworkFeatures() {
+  featureState.playableModeEnabled = false;
+  showOfflineBanner();
+}
+
+function showFatalErrorScreen() {
+  console.error('Application entered a fatal state.');
+}
+
+appMachine.subscribe((state) => {
+  switch (state) {
+    case APP_STATES.READY:
+      enableFullFeatures();
+      break;
+
+    case APP_STATES.DEGRADED:
+      enableLimitedMode();
+      showOfflineBanner();
+      break;
+
+    case APP_STATES.OFFLINE:
+      disableNetworkFeatures();
+      break;
+
+    case APP_STATES.ERROR:
+      showFatalErrorScreen();
+      break;
+
+    default:
+      break;
   }
+
+  updatePlayableButtonState();
+});
+
+if (location.hostname === 'localhost') {
+  appMachine.subscribe((state) => {
+    console.log('App state:', state);
+  });
+}
+
+async function bootApp() {
+  appMachine.dispatch(EVENTS.START);
+
+  try {
+    const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, null);
+    if (plans) {
+      appMachine.dispatch(EVENTS.NETWORK_OK);
+      if (Array.isArray(plans.plans)) {
+        planCatalog = plans.plans.map((plan) => ({
+          ...plan,
+          tier: plan.tier?.toString().toLowerCase()
+        }));
+      }
+      const resolvedPlans = getAvailablePlans();
+      renderPricingPlans(resolvedPlans);
+      renderPaywallPlans(resolvedPlans);
+      const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
+      updatePaywallPlanSelection(initialSelectedPlan);
+      updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
+    } else {
+      appMachine.dispatch(EVENTS.NETWORK_FAIL);
+      return;
+    }
+  } catch {
+    appMachine.dispatch(EVENTS.NETWORK_FAIL);
+    return;
+  }
+
+  const session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
+  if (session) {
+    appMachine.dispatch(EVENTS.SESSION_OK);
+    featureState.authenticated = !!session.authenticated;
+    if (session.user) {
+      onAuthSuccess({
+        user: session.user,
+        token: session.token,
+        provider: session.user?.provider || session.provider,
+        credits: session.credits,
+        deferRender: true
+      });
+    }
+  } else {
+    appMachine.dispatch(EVENTS.SESSION_FAIL);
+    return;
+  }
+
+  const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, null);
+  if (usage) {
+    featureState.creditsRemaining = usage?.creditsRemaining ?? 0;
+    appMachine.dispatch(EVENTS.USAGE_OK);
+  } else {
+    appMachine.dispatch(EVENTS.USAGE_FAIL);
+  }
+
+  appReady = true;
 }
 
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
-  await initializeApp();
+  await bootApp();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
   if (!user) {
@@ -9188,12 +9223,10 @@ function updateRetryButton() {
 
 
 function updatePlayableButtonState() {
-  const playableButton = getPlayableButtonElement();
-  if (!playableButton) {
+  const btn = document.getElementById('playable-controller-btn');
+  if (!btn) {
     return;
   }
-
-  console.debug('Controller button rendered:', playableButton, 'disabled:', playableButton.disabled);
 
   const creditState = getCreditState();
   const remainingCredits = Number.isFinite(creditState.remainingCredits)
@@ -9201,26 +9234,15 @@ function updatePlayableButtonState() {
     : featureState.creditsRemaining;
   featureState.creditsRemaining = Number.isFinite(remainingCredits) ? remainingCredits : 0;
 
-  const enabled =
-    featureState.playableModeEnabled
-    && featureState.creditsRemaining > 0
-    && !chatState?.locked
-    && lastThrottleState?.state !== 'blocked';
+  const state = appMachine.getState();
 
-  playableButton.disabled = !enabled;
-  if (chatState?.locked) {
-    playableButton.title = 'Wait for the current response to finish';
-    return;
+  if (state === APP_STATES.READY) {
+    btn.disabled = featureState.creditsRemaining <= 0;
+  } else if (state === APP_STATES.DEGRADED) {
+    btn.disabled = true;
+  } else {
+    btn.disabled = true;
   }
-  if (lastThrottleState?.state === 'blocked') {
-    playableButton.title = 'Daily credit limit reached';
-    return;
-  }
-  if (featureState.creditsRemaining <= 0) {
-    playableButton.title = 'Credit limit reached';
-    return;
-  }
-  playableButton.title = 'Make it a game';
 }
 
 async function sendChat({ playableMode = false, retryMode = false, userPrompt = null, code = null } = {}) {
