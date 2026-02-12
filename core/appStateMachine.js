@@ -9,14 +9,25 @@ export const APP_STATES = {
   ERROR: 'ERROR'
 };
 
-export const AGENT_STATES = {
+export const AGENT_ROOT_STATES = {
   IDLE: 'IDLE',
   PREPARING: 'PREPARING',
-  RUNNING: 'RUNNING',
-  STREAMING: 'STREAMING',
+  ACTIVE: 'ACTIVE',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED'
+};
+
+export const AGENT_ACTIVE_SUBSTATES = {
+  RUNNING: 'RUNNING',
+  STREAMING: 'STREAMING'
+};
+
+export const AGENT_STREAM_PHASES = {
+  TOKENIZING: 'TOKENIZING',
+  RECEIVING: 'RECEIVING',
+  RENDERING: 'RENDERING',
+  FINALIZING: 'FINALIZING'
 };
 
 export const EVENTS = {
@@ -31,6 +42,10 @@ export const EVENTS = {
   AGENT_START: 'AGENT_START',
   AGENT_READY: 'AGENT_READY',
   AGENT_STREAM: 'AGENT_STREAM',
+  STREAM_TOKEN: 'STREAM_TOKEN',
+  STREAM_CHUNK: 'STREAM_CHUNK',
+  STREAM_RENDER: 'STREAM_RENDER',
+  STREAM_DONE: 'STREAM_DONE',
   AGENT_COMPLETE: 'AGENT_COMPLETE',
   AGENT_FAIL: 'AGENT_FAIL',
   AGENT_CANCEL: 'AGENT_CANCEL',
@@ -61,33 +76,31 @@ const appTransitions = {
   ERROR: {}
 };
 
-const agentTransitions = {
-  IDLE: {
-    AGENT_START: 'PREPARING'
-  },
+const agentRootTransitions = {
+  IDLE: { AGENT_START: 'PREPARING' },
   PREPARING: {
-    AGENT_READY: 'RUNNING',
+    AGENT_READY: 'ACTIVE',
     AGENT_FAIL: 'FAILED'
   },
-  RUNNING: {
-    AGENT_STREAM: 'STREAMING',
+  ACTIVE: {
     AGENT_COMPLETE: 'COMPLETED',
     AGENT_FAIL: 'FAILED',
     AGENT_CANCEL: 'CANCELLED'
+  },
+  COMPLETED: { AGENT_RESET: 'IDLE' },
+  FAILED: { AGENT_RESET: 'IDLE' },
+  CANCELLED: { AGENT_RESET: 'IDLE' }
+};
+
+const agentActiveTransitions = {
+  RUNNING: {
+    AGENT_STREAM: AGENT_ACTIVE_SUBSTATES.STREAMING
   },
   STREAMING: {
-    AGENT_COMPLETE: 'COMPLETED',
-    AGENT_FAIL: 'FAILED',
-    AGENT_CANCEL: 'CANCELLED'
-  },
-  COMPLETED: {
-    AGENT_RESET: 'IDLE'
-  },
-  FAILED: {
-    AGENT_RESET: 'IDLE'
-  },
-  CANCELLED: {
-    AGENT_RESET: 'IDLE'
+    STREAM_TOKEN: AGENT_STREAM_PHASES.TOKENIZING,
+    STREAM_CHUNK: AGENT_STREAM_PHASES.RECEIVING,
+    STREAM_RENDER: AGENT_STREAM_PHASES.RENDERING,
+    STREAM_DONE: AGENT_STREAM_PHASES.FINALIZING
   }
 };
 
@@ -95,7 +108,11 @@ export class AppStateMachine {
   constructor() {
     this.state = {
       app: APP_STATES.BOOTING,
-      agent: AGENT_STATES.IDLE
+      agent: {
+        root: AGENT_ROOT_STATES.IDLE,
+        active: null,
+        streamPhase: null
+      }
     };
     this.listeners = [];
   }
@@ -109,10 +126,36 @@ export class AppStateMachine {
       changed = true;
     }
 
-    const agentNext = agentTransitions[this.state.agent]?.[event];
-    if (agentNext) {
-      this.state.agent = agentNext;
+    const root = this.state.agent.root;
+    const rootNext = agentRootTransitions[root]?.[event];
+    if (rootNext) {
+      this.state.agent.root = rootNext;
+
+      if (rootNext !== AGENT_ROOT_STATES.ACTIVE) {
+        this.state.agent.active = null;
+        this.state.agent.streamPhase = null;
+      }
+
       changed = true;
+    }
+
+    if (root === AGENT_ROOT_STATES.PREPARING && event === EVENTS.AGENT_READY) {
+      this.state.agent.active = AGENT_ACTIVE_SUBSTATES.RUNNING;
+      changed = true;
+    }
+
+    if (this.state.agent.root === AGENT_ROOT_STATES.ACTIVE) {
+      const active = this.state.agent.active;
+      const activeNext = agentActiveTransitions[active]?.[event];
+
+      if (activeNext) {
+        if (active === AGENT_ACTIVE_SUBSTATES.RUNNING && activeNext === AGENT_ACTIVE_SUBSTATES.STREAMING) {
+          this.state.agent.active = AGENT_ACTIVE_SUBSTATES.STREAMING;
+        } else {
+          this.state.agent.streamPhase = activeNext;
+        }
+        changed = true;
+      }
     }
 
     if (changed) {
@@ -140,5 +183,17 @@ export class AppStateMachine {
 
   getAgentState() {
     return this.state.agent;
+  }
+
+  getAgentRoot() {
+    return this.state.agent.root;
+  }
+
+  getAgentActive() {
+    return this.state.agent.active;
+  }
+
+  getAgentStreamPhase() {
+    return this.state.agent.streamPhase;
   }
 }
