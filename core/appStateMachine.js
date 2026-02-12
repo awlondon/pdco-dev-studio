@@ -57,6 +57,8 @@ export const EVENTS = {
 export function createAgentState(agentId) {
   return {
     agentId,
+    serverRunId: null,
+    lastServerEventId: 0,
     root: AGENT_ROOT_STATES.IDLE,
     active: null,
     streamPhase: null,

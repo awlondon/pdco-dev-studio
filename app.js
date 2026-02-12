@@ -17,6 +17,7 @@ import {
   migrateLegacyAgentState
 } from './core/persistence.js';
 import { runWithConcurrencyLimit } from './core/concurrency.js';
+import { createAgentSyncManager } from './agent/syncManager.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -48,6 +49,7 @@ const appMachine = new AppStateMachine();
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
 const activeAgentAbortControllers = new Map();
+let agentSyncIntervalId = null;
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
@@ -96,6 +98,7 @@ function safeStorageClear(storage) {
 }
 
 const unsupportedApiEndpoints = new Set();
+const agentSyncManager = createAgentSyncManager({ apiBase: API_BASE, appMachine });
 
 async function fetchOptionalApi(path, options = {}) {
   const endpointKey = typeof path === 'string' ? path.split('?')[0] : '';
@@ -3524,6 +3527,21 @@ appMachine.subscribe((state) => {
   updatePlayableButtonState();
 });
 
+appMachine.subscribe((state) => {
+  if (state.app === APP_STATES.READY) {
+    if (!agentSyncIntervalId) {
+      agentSyncIntervalId = window.setInterval(() => {
+        agentSyncManager.syncAllRuns().catch((error) => {
+          console.warn('Periodic agent sync failed', error);
+        });
+      }, 7000);
+    }
+  } else if (agentSyncIntervalId) {
+    window.clearInterval(agentSyncIntervalId);
+    agentSyncIntervalId = null;
+  }
+});
+
 if (location.hostname === 'localhost') {
   appMachine.subscribe((state) => {
     console.log('App state:', state.app, 'Agents:', state.agents);
@@ -3618,6 +3636,11 @@ async function bootApp() {
   }
 
   const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, null);
+  try {
+    await agentSyncManager.syncAllRuns();
+  } catch (error) {
+    console.warn('Initial agent sync failed', error);
+  }
   if (usage) {
     featureState.creditsRemaining = usage?.creditsRemaining ?? 0;
     appMachine.dispatch(EVENTS.USAGE_OK);
