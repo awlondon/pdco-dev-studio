@@ -20,6 +20,9 @@ import {
 } from './core/persistence.js';
 import { runWithConcurrencyLimit } from './core/concurrency.js';
 import { createAgentSyncManager } from './agent/syncManager.js';
+import { createAgentRun, compareRunOutputs } from './agent/runModel.js';
+import { executeAgentScenarioRun } from './agent/runHarness.js';
+import { listAgentRunsLocal, saveAgentRunLocal, exportAgentRunBundle, saveAgentRunServer } from './agent/runStorage.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -3858,6 +3861,150 @@ function renderActiveAgent() {
   outputEl.textContent = agent.partialOutput || '';
 }
 
+
+
+let agentSimulationRuns = [];
+
+function formatHarnessRunLabel(run) {
+  if (!run) return 'Unknown run';
+  const scenario = run.inputs?.scenario || 'untitled';
+  const shortId = String(run.id || '').slice(0, 8);
+  return `${shortId} · ${scenario} · seed ${run.inputs?.seed}`;
+}
+
+function getHarnessSelectValue(id) {
+  const el = document.getElementById(id);
+  return el?.value || '';
+}
+
+function renderHarnessResult(payload) {
+  const resultEl = document.getElementById('agent-sim-result');
+  if (!resultEl) {
+    return;
+  }
+  resultEl.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+}
+
+function renderHarnessRunSelectors() {
+  const left = document.getElementById('agent-compare-left');
+  const right = document.getElementById('agent-compare-right');
+  if (!left || !right) {
+    return;
+  }
+
+  const options = ['<option value="">Select run</option>']
+    .concat(agentSimulationRuns.map((run) => `<option value="${run.id}">${formatHarnessRunLabel(run)}</option>`))
+    .join('');
+
+  left.innerHTML = options;
+  right.innerHTML = options;
+
+  if (agentSimulationRuns.length >= 2) {
+    left.value = agentSimulationRuns[1].id;
+    right.value = agentSimulationRuns[0].id;
+  }
+}
+
+async function runAgentSimulationScenario() {
+  const scenarioInput = document.getElementById('agent-scenario-input');
+  const seedInput = document.getElementById('agent-seed-input');
+  const envInput = document.getElementById('agent-environment-input');
+  const saveServerInput = document.getElementById('agent-save-server');
+
+  const run = createAgentRun({
+    scenario: scenarioInput?.value || 'default scenario',
+    seed: Number(seedInput?.value || 1),
+    environment: envInput?.value || 'local'
+  });
+
+  await executeAgentScenarioRun(run);
+  await saveAgentRunLocal(run);
+  const serverSaved = saveServerInput?.checked ? await saveAgentRunServer(run) : false;
+
+  agentSimulationRuns = [run, ...agentSimulationRuns.filter((entry) => entry.id !== run.id)];
+  renderHarnessRunSelectors();
+
+  renderHarnessResult({
+    runId: run.id,
+    status: run.status,
+    serverSaved,
+    outputs: {
+      screenshots: run.outputs.screenshots.length,
+      diffs: run.outputs.diffs.length,
+      issues: run.outputs.issues.length
+    },
+    issueList: run.outputs.issues
+  });
+}
+
+function compareAgentSimulationRuns() {
+  const leftId = getHarnessSelectValue('agent-compare-left');
+  const rightId = getHarnessSelectValue('agent-compare-right');
+  const leftRun = agentSimulationRuns.find((run) => run.id === leftId);
+  const rightRun = agentSimulationRuns.find((run) => run.id === rightId);
+
+  if (!leftRun || !rightRun) {
+    renderHarnessResult('Select two runs to compare.');
+    return;
+  }
+
+  const comparison = compareRunOutputs(leftRun, rightRun);
+  renderHarnessResult({
+    left: formatHarnessRunLabel(leftRun),
+    right: formatHarnessRunLabel(rightRun),
+    comparison
+  });
+}
+
+async function exportAgentSimulationRuns() {
+  const bundle = await exportAgentRunBundle();
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = `agent-runs-${Date.now()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+  renderHarnessResult({ exportedRuns: bundle.runs.length, exportedAt: bundle.exportedAt });
+}
+
+async function initAgentSimulationHarness() {
+  const runBtn = document.getElementById('agent-run-sim-btn');
+  const compareBtn = document.getElementById('agent-compare-btn');
+  const exportBtn = document.getElementById('agent-export-btn');
+  if (!runBtn || !compareBtn || !exportBtn) {
+    return;
+  }
+
+  agentSimulationRuns = await listAgentRunsLocal();
+  renderHarnessRunSelectors();
+
+  if (runBtn.dataset.bound !== 'true') {
+    runBtn.dataset.bound = 'true';
+    runBtn.addEventListener('click', () => {
+      runAgentSimulationScenario().catch((error) => {
+        renderHarnessResult({ error: error?.message || 'Failed to run scenario' });
+      });
+    });
+  }
+
+  if (compareBtn.dataset.bound !== 'true') {
+    compareBtn.dataset.bound = 'true';
+    compareBtn.addEventListener('click', compareAgentSimulationRuns);
+  }
+
+  if (exportBtn.dataset.bound !== 'true') {
+    exportBtn.dataset.bound = 'true';
+    exportBtn.addEventListener('click', () => {
+      exportAgentSimulationRuns().catch((error) => {
+        renderHarnessResult({ error: error?.message || 'Export failed' });
+      });
+    });
+  }
+}
+
 function handleAgentState(agentState) {
   if (!agentState) {
     return;
@@ -3959,6 +4106,7 @@ async function bootApp() {
 
   await syncAllRuns();
   await resumeAllAgents();
+  await initAgentSimulationHarness();
 
   appMachine.dispatch(EVENTS.START);
 
