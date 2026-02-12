@@ -14,6 +14,26 @@ const API_BASE =
     ? 'http://localhost:8080'
     : 'https://maya-api-136741418395.us-central1.run.app');
 
+const unsupportedApiEndpoints = new Set();
+
+async function fetchOptionalApi(path, options = {}) {
+  const endpointKey = typeof path === 'string' ? path.split('?')[0] : '';
+  if (!endpointKey || unsupportedApiEndpoints.has(endpointKey)) {
+    return null;
+  }
+  try {
+    const response = await fetch(`${API_BASE}${path}`, options);
+    if (response.status === 404 || response.status === 405 || response.status === 501) {
+      unsupportedApiEndpoints.add(endpointKey);
+      console.info(`API endpoint not available: ${endpointKey}`);
+      return null;
+    }
+    return response;
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
 const SESSION_STATE_SERVER_PERSIST_THRESHOLD = 200_000;
 
 if (!window.__sessionState || typeof window.__sessionState !== 'object') {
@@ -29,7 +49,7 @@ async function persistSessionStateToServer(payload) {
     return false;
   }
   try {
-    const response = await fetch(`${API_BASE}/api/session/state`, {
+    const response = await fetchOptionalApi('/api/session/state', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -45,7 +65,7 @@ async function persistSessionStateToServer(payload) {
         state: payload.session_state
       })
     });
-    return response.ok;
+    return response?.ok || false;
   } catch (error) {
     console.warn('Failed to persist session state to server.', error);
     return false;
@@ -1920,11 +1940,11 @@ async function loadSessionStateFromServer(id = '') {
   }
   const query = id ? `?session_id=${encodeURIComponent(id)}` : '';
   try {
-    const response = await fetch(`${API_BASE}/api/session/state${query}`, {
+    const response = await fetchOptionalApi(`/api/session/state${query}`, {
       method: 'GET',
       credentials: 'include'
     });
-    if (!response.ok) {
+    if (!response?.ok) {
       return null;
     }
     const payload = await response.json();
@@ -5648,9 +5668,12 @@ function renderPaywallPlans(plans) {
 
 async function hydratePlanCatalog() {
   try {
-    const res = await fetch(`${API_BASE}/api/plans`, {
+    const res = await fetchOptionalApi('/api/plans', {
       credentials: 'include'
     });
+    if (!res) {
+      throw new Error('plans endpoint unavailable');
+    }
     const data = await res.json().catch(() => ({}));
     if (res.ok && Array.isArray(data?.plans)) {
       planCatalog = data.plans.map((plan) => ({
@@ -5896,13 +5919,17 @@ async function fetchUsageAnalytics({ force = false } = {}) {
 
   try {
     const res = await withTimeout(
-      fetch(`${API_BASE}/api/usage/overview`, {
+      fetchOptionalApi('/api/usage/overview', {
         cache: 'no-store',
         credentials: 'include'
       }),
       ANALYTICS_TIMEOUT_MS,
       'Analytics request timed out'
     );
+
+    if (!res) {
+      return null;
+    }
 
     if (!res.ok) {
       return null;
