@@ -142,6 +142,54 @@ const MAX_CHAT_HISTORY_COUNT = 60;
 const MAX_AUTH_TOKEN_LENGTH = 8192;
 const MAX_EMAIL_LENGTH = 320;
 
+
+const DEV_PERF_ENABLED = process.env.NODE_ENV !== 'production';
+const DEV_PERF_WINDOW_SIZE = 200;
+const DEV_PERF_ENDPOINTS = new Set([
+  '/api/chat',
+  '/api/agent/start',
+  '/api/session/state'
+]);
+const devPerfMetrics = new Map();
+
+function percentile(values = [], p = 50) {
+  if (!Array.isArray(values) || !values.length) {
+    return null;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[index];
+}
+
+function recordDevPerfMetric(pathname, latencyMs, statusCode) {
+  if (!DEV_PERF_ENABLED || !DEV_PERF_ENDPOINTS.has(pathname)) {
+    return;
+  }
+  const bucket = devPerfMetrics.get(pathname) || [];
+  bucket.push({
+    latencyMs: Number(latencyMs) || 0,
+    statusCode: Number(statusCode) || 0,
+    at: Date.now()
+  });
+  if (bucket.length > DEV_PERF_WINDOW_SIZE) {
+    bucket.splice(0, bucket.length - DEV_PERF_WINDOW_SIZE);
+  }
+  devPerfMetrics.set(pathname, bucket);
+}
+
+function summarizeDevPerfMetric(pathname) {
+  const samples = devPerfMetrics.get(pathname) || [];
+  const latencies = samples.map((sample) => sample.latencyMs).filter(Number.isFinite);
+  const errors = samples.filter((sample) => sample.statusCode >= 400).length;
+  const total = samples.length;
+  return {
+    count: total,
+    p50Ms: percentile(latencies, 50),
+    p95Ms: percentile(latencies, 95),
+    errorRate: total > 0 ? (errors / total) * 100 : 0
+  };
+}
+
 function classifyError(error) {
   const status = Number(error?.status || error?.statusCode || 500);
   const safeStatus = Number.isInteger(status) ? status : 500;
@@ -160,6 +208,9 @@ function requestContextMiddleware(req, res, next) {
   res.setHeader('x-request-id', req.requestId);
 
   res.on('finish', () => {
+    const latencyMs = Date.now() - requestStartedAt;
+    const requestPathname = req.path || req.originalUrl || '';
+    recordDevPerfMetric(requestPathname, latencyMs, res.statusCode);
     logStructured('info', REQUEST_LOG_EVENT, {
       request_id: req.requestId,
       route: req.originalUrl,
@@ -167,7 +218,7 @@ function requestContextMiddleware(req, res, next) {
       user_id: req.userId || null,
       intent_type: req.body?.intentType || req.body?.intent_type || null,
       credits_charged: Number(req.creditsCharged || 0),
-      latency_ms: Date.now() - requestStartedAt,
+      latency_ms: latencyMs,
       status: res.statusCode,
       error_code: res.statusCode >= 400 ? (res.locals.errorCode || 'REQUEST_FAILED') : null
     });
@@ -674,6 +725,23 @@ app.use((req, res, next) => {
  */
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+
+
+app.get('/api/dev/perf', (_req, res) => {
+  if (!DEV_PERF_ENABLED) {
+    return res.status(404).json({ ok: false, error: 'Not available' });
+  }
+  const metrics = {};
+  for (const endpoint of DEV_PERF_ENDPOINTS) {
+    metrics[endpoint] = summarizeDevPerfMetric(endpoint);
+  }
+  return res.json({
+    ok: true,
+    windowSize: DEV_PERF_WINDOW_SIZE,
+    metrics,
+    generatedAt: new Date().toISOString()
+  });
 });
 
 app.use('/agent', createAgentRouter({
