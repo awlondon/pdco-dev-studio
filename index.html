@@ -476,6 +476,29 @@
                 <pre id="active-agent-output" class="agent-active-output"></pre>
               </div>
             </div>
+            <section class="agent-sim" aria-label="Agent simulation harness">
+              <div class="agent-sim-controls">
+                <input id="agent-scenario-input" type="text" placeholder="Scenario (e.g. auth artifact race)" />
+                <input id="agent-seed-input" type="number" min="1" step="1" value="42" />
+                <select id="agent-environment-input">
+                  <option value="local" selected>local</option>
+                  <option value="ci">ci</option>
+                  <option value="staging">staging</option>
+                </select>
+                <label class="agent-sim-option">
+                  <input id="agent-save-server" type="checkbox" />
+                  Save to server
+                </label>
+                <button id="agent-run-sim-btn" type="button">Run scenario</button>
+              </div>
+              <div class="agent-sim-compare">
+                <select id="agent-compare-left"></select>
+                <select id="agent-compare-right"></select>
+                <button id="agent-compare-btn" type="button">Compare runs</button>
+                <button id="agent-export-btn" type="button">Export JSON bundle</button>
+              </div>
+              <pre id="agent-sim-result" class="agent-sim-result"></pre>
+            </section>
           </form>
         </section>
 
