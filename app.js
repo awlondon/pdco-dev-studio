@@ -8,11 +8,28 @@ if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
 }
 
-const API_BASE =
-  window.API_BASE
-  || (location.hostname.includes('localhost')
-    ? 'http://localhost:8080'
-    : 'https://maya-api-136741418395.us-central1.run.app');
+function resolveApiBase() {
+  const configuredBase =
+    window.API_BASE
+    || window.__MAYA_API_BASE
+    || '';
+
+  if (typeof configuredBase === 'string') {
+    const trimmed = configuredBase.trim();
+    const isPlaceholder = trimmed.includes('xxxxx');
+    if (trimmed && !isPlaceholder) {
+      return trimmed.replace(/\/$/, '');
+    }
+  }
+
+  if (location.hostname.includes('localhost')) {
+    return 'http://localhost:8080';
+  }
+
+  return window.location.origin;
+}
+
+const API_BASE = resolveApiBase();
 
 const unsupportedApiEndpoints = new Set();
 

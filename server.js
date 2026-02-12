@@ -665,6 +665,7 @@ app.use(enforceRequestValidation);
  */
 app.use((req, res, next) => {
   res.setHeader('X-MAYA-BACKEND', 'alive');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   next();
 });
 
