@@ -483,8 +483,41 @@ function getPromptInputElement() {
   return document.getElementById('chat-input') || chatInput;
 }
 
+function ensurePlayableButtonPresence() {
+  let playableButton = document.getElementById('playable-controller-btn');
+  if (playableButton) {
+    return playableButton;
+  }
+
+  const chatControls = document.querySelector('.chat-controls');
+  if (!chatControls) {
+    return null;
+  }
+
+  const chatInputRow = chatControls.querySelector('.chat-input-row');
+  if (!chatInputRow) {
+    return null;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'playable-wrapper-container';
+
+  playableButton = document.createElement('button');
+  playableButton.id = 'playable-controller-btn';
+  playableButton.className = 'playable-btn';
+  playableButton.type = 'button';
+  playableButton.disabled = true;
+  playableButton.title = 'Make it a game';
+  playableButton.setAttribute('aria-label', 'Make it a game');
+  playableButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">🎮</span><span class="playable-btn-label">Game mode</span>';
+
+  wrapper.appendChild(playableButton);
+  chatControls.insertBefore(wrapper, chatInputRow);
+  return playableButton;
+}
+
 function getPlayableButtonElement() {
-  return document.getElementById('playable-controller-btn');
+  return ensurePlayableButtonPresence();
 }
 
 function getPromptInput() {
