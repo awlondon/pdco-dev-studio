@@ -3167,6 +3167,23 @@ app.post('/api/stripe/webhook', async (req, res) => {
 });
 
 
+
+const frontendDistDir = path.join(__dirname, 'pdco-frontend', 'dist');
+
+try {
+  await fs.access(frontendDistDir);
+  app.use(express.static(frontendDistDir));
+
+  app.get(/^(?!\/api).*/, (req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/uploads/')) {
+      return next();
+    }
+    return res.sendFile(path.join(frontendDistDir, 'index.html'));
+  });
+} catch {
+  console.warn('pdco-frontend/dist not found. Static frontend serving is disabled.');
+}
+
 app.use((err, req, res, _next) => {
   const { status, code } = classifyError(err);
   const message = err?.message || 'Internal server error';

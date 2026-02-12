@@ -31,6 +31,24 @@ maya-dev-ui/
 
 3. Visit http://localhost:3000 in your browser.
 
+## React build pipeline (`pdco-frontend`)
+
+A Vite + React single-page app has been added at `pdco-frontend/` with standard scripts:
+
+```bash
+npm run frontend:dev      # start Vite dev server
+npm run frontend:build    # production build to pdco-frontend/dist
+npm run frontend:preview  # preview production bundle
+```
+
+Environment files are preconfigured:
+
+- `pdco-frontend/.env`
+- `pdco-frontend/.env.development`
+- `pdco-frontend/.env.production`
+
+The Express server now serves `pdco-frontend/dist` when it exists and falls back to `index.html` for non-API routes, so client-side routing works in production.
+
 ## Deployment notes (important)
 
 This UI **must** talk to a backend endpoint that proxies requests to OpenAI. A static host such as GitHub Pages can serve the HTML/CSS/JS, but it cannot call the OpenAI API directly. If you deploy the UI without a backend, you will see `405 Not Allowed` or CORS errors by design.

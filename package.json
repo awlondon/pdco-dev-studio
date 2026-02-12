@@ -9,7 +9,12 @@
     "test": "node --test --import tsx api/tests/auth.*.test.ts",
     "test:ui": "playwright test ui/tests/auth.rehydrate.spec.ts",
     "grant-plan": "node scripts/grant-plan.js",
-    "test:comprehensive": "node --test tests/*.test.js"
+    "test:comprehensive": "node --test tests/*.test.js",
+    "frontend:dev": "npm --prefix pdco-frontend run dev",
+    "frontend:build": "npm --prefix pdco-frontend run build",
+    "frontend:preview": "npm --prefix pdco-frontend run preview",
+    "frontend:lint": "npm --prefix pdco-frontend run lint",
+    "prepare": "husky"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,6 +27,9 @@
   "devDependencies": {
     "@playwright/test": "^1.47.2",
     "tsx": "^4.19.1",
-    "undici": "^6.19.2"
+    "undici": "^6.19.2",
+    "eslint": "^9.12.0",
+    "prettier": "^3.3.3",
+    "husky": "^9.1.6"
   }
 }
