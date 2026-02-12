@@ -4,6 +4,7 @@ import { createSandboxController } from './sandboxController.js';
 import { formatNumber } from './utils/formatNumber.js';
 import { editorManager } from './editorManager.js';
 import { createFrontendPerfStore } from './perf.js';
+import { computeLineDiffAsync } from './workers/artifactDiffClient.js';
 import {
   AppStateMachine,
   APP_STATES,
@@ -5006,53 +5007,8 @@ function renderArtifactChatHistory(messages = []) {
   `).join('');
 }
 
-function computeLineDiff(source = '', target = '') {
-  const sourceLines = String(source || '').split('\n');
-  const targetLines = String(target || '').split('\n');
-  if (!sourceLines.length && !targetLines.length) {
-    return [];
-  }
-  const sourceLength = sourceLines.length;
-  const targetLength = targetLines.length;
-  const dp = Array.from({ length: sourceLength + 1 }, () => Array(targetLength + 1).fill(0));
-  for (let i = sourceLength - 1; i >= 0; i -= 1) {
-    for (let j = targetLength - 1; j >= 0; j -= 1) {
-      if (sourceLines[i] === targetLines[j]) {
-        dp[i][j] = dp[i + 1][j + 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-      }
-    }
-  }
-  const diff = [];
-  let i = 0;
-  let j = 0;
-  while (i < sourceLength && j < targetLength) {
-    if (sourceLines[i] === targetLines[j]) {
-      diff.push({ type: 'equal', text: sourceLines[i] });
-      i += 1;
-      j += 1;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      diff.push({ type: 'remove', text: sourceLines[i] });
-      i += 1;
-    } else {
-      diff.push({ type: 'add', text: targetLines[j] });
-      j += 1;
-    }
-  }
-  while (i < sourceLength) {
-    diff.push({ type: 'remove', text: sourceLines[i] });
-    i += 1;
-  }
-  while (j < targetLength) {
-    diff.push({ type: 'add', text: targetLines[j] });
-    j += 1;
-  }
-  return diff;
-}
-
-function renderArtifactDiff(source = '', target = '') {
-  const diff = computeLineDiff(source, target);
+async function renderArtifactDiff(source = '', target = '', { signal } = {}) {
+  const diff = await computeLineDiffAsync(source, target, { signal });
   if (!diff.length) {
     return '<div class="artifact-diff-empty">No differences found.</div>';
   }
@@ -5137,13 +5093,18 @@ function openArtifactVersionsModal(artifactId) {
     };
 
     const versionCache = new Map();
+    let activeDiffAbortController = null;
+    let latestDetailRequestId = 0;
 
     const renderVersionDetail = (version, diffBaseContent = currentContent, diffLabel = 'current') => {
       if (!detailEl || !version) {
         return;
       }
+      latestDetailRequestId += 1;
+      const requestId = latestDetailRequestId;
+      activeDiffAbortController?.abort();
+      activeDiffAbortController = new AbortController();
       const label = version.label || `v${version.version_number || 1}`;
-      const diffHtml = renderArtifactDiff(diffBaseContent, version.code?.content || '');
       const chatHtml = version.chat?.included
         ? renderArtifactChatHistory(version.chat.messages || [])
         : '<div class="artifact-chat-empty">No chat history available.</div>';
@@ -5160,7 +5121,7 @@ function openArtifactVersionsModal(artifactId) {
         </div>
         <div class="artifact-version-section">
           <h4>Diff vs ${escapeHtml(diffLabel)}</h4>
-          <div class="artifact-diff">${diffHtml}</div>
+          <div class="artifact-diff" data-artifact-diff>Calculating diff…</div>
         </div>
         <div class="artifact-version-section">
           <h4>Chat history</h4>
@@ -5189,6 +5150,30 @@ function openArtifactVersionsModal(artifactId) {
         } catch (error) {
           console.error('Failed to restore version.', error);
           showToast('Unable to restore version.');
+        }
+      });
+
+      renderArtifactDiff(diffBaseContent, version.code?.content || '', {
+        signal: activeDiffAbortController.signal
+      }).then((diffHtml) => {
+        if (!detailEl || requestId !== latestDetailRequestId) {
+          return;
+        }
+        const diffContainer = detailEl.querySelector('[data-artifact-diff]');
+        if (diffContainer) {
+          diffContainer.innerHTML = diffHtml;
+        }
+      }).catch((error) => {
+        if (error?.name === 'AbortError') {
+          return;
+        }
+        console.error('Failed to render artifact diff.', error);
+        if (!detailEl || requestId !== latestDetailRequestId) {
+          return;
+        }
+        const diffContainer = detailEl.querySelector('[data-artifact-diff]');
+        if (diffContainer) {
+          diffContainer.innerHTML = '<div class="artifact-diff-empty">Unable to render diff.</div>';
         }
       });
     };
