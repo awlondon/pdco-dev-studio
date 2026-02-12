@@ -3,6 +3,7 @@
 import { createSandboxController } from './sandboxController.js';
 import { formatNumber } from './utils/formatNumber.js';
 import { editorManager } from './editorManager.js';
+import { createFrontendPerfStore } from './perf.js';
 import {
   AppStateMachine,
   APP_STATES,
@@ -715,6 +716,7 @@ async function prepareAgent() {
 }
 
 async function startAgentExecution() {
+  const agentPerf = frontendPerf.start('agent_run');
   const agentId = crypto.randomUUID();
   appMachine.dispatch({ type: EVENTS.AGENT_START, agentId });
   appMachine.setActiveAgent(agentId);
@@ -747,8 +749,10 @@ async function startAgentExecution() {
 
     appMachine.dispatch({ type: EVENTS.STREAM_DONE, agentId });
     appMachine.dispatch({ type: EVENTS.AGENT_COMPLETE, agentId });
+    agentPerf.end({ status: 'completed' });
   } catch (error) {
     appMachine.dispatch({ type: EVENTS.AGENT_FAIL, agentId, payload: { error: String(error) } });
+    agentPerf.end({ status: 'failed' });
   }
 }
 
@@ -1121,6 +1125,7 @@ async function initializeCodeEditor({ value, language }) {
   if (editorApi) {
     return;
   }
+  const editorPerf = frontendPerf.start('editor_mount', { language });
   await editorManager.whenReady();
   editorApi = await editorManager.mount('code-editor', {
     value,
@@ -1165,6 +1170,10 @@ async function initializeCodeEditor({ value, language }) {
   editorApi.onDidChangeModelContent(() => {
     handleEditorContentChange();
   });
+  const duration = editorPerf.end({ language });
+  if (Number.isFinite(duration)) {
+    console.debug(`[perf] editor_mount: ${duration.toFixed(1)}ms`);
+  }
 }
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
@@ -3307,7 +3316,7 @@ function renderApp() {
   ModalManager.close();
   root?.classList.remove('hidden');
   initializeAppForAuthenticatedUser();
-  updateRouteView();
+  trackedUpdateRouteView('renderApp');
 }
 
 function renderUI() {
@@ -3406,13 +3415,22 @@ function updateRouteView() {
   }
 }
 
+function trackedUpdateRouteView(source = 'unknown') {
+  const routePerf = frontendPerf.start('route_transition', { source, path: window.location.pathname });
+  updateRouteView();
+  const duration = routePerf.end({ source, path: window.location.pathname });
+  if (Number.isFinite(duration)) {
+    console.debug(`[perf] route_transition (${source}): ${duration.toFixed(1)}ms`);
+  }
+}
+
 function setRoute(path) {
   if (window.location.pathname === path) {
-    updateRouteView();
+    trackedUpdateRouteView('setRoute:no-change');
     return;
   }
   window.history.pushState({}, '', path);
-  updateRouteView();
+  trackedUpdateRouteView('setRoute:pushstate');
 }
 
 async function hydrateSessionFromServer() {
@@ -3762,7 +3780,6 @@ async function bootstrapApp() {
     showAnalytics = false;
     renderApp();
   }
-  updateRouteView();
 }
 
 function onAnalyticsClick() {
@@ -3848,6 +3865,125 @@ let systemPrompt = getSystemPromptForIntent({ type: 'chat' });
 
 const isDev = window.location.hostname === 'localhost'
   || window.location.hostname === '127.0.0.1';
+
+const frontendPerf = createFrontendPerfStore();
+const perfObservers = {
+  longTask: null
+};
+const perfHudState = {
+  backend: null,
+  lastBackendUpdateAt: 0,
+  backendError: null
+};
+
+function isPerfHudEnabled() {
+  if (!isDev) {
+    return window.__ENABLE_PERF_HUD === true;
+  }
+  return window.__DISABLE_PERF_HUD !== true;
+}
+
+function formatPerfValue(value, suffix = 'ms') {
+  if (!Number.isFinite(Number(value))) {
+    return '—';
+  }
+  return `${Number(value).toFixed(1)}${suffix}`;
+}
+
+function getBackendMetricSummary(name) {
+  const metric = perfHudState.backend?.metrics?.[name];
+  if (!metric) {
+    return `${name}: —`;
+  }
+  const p50 = formatPerfValue(metric.p50Ms || metric.p50_ms);
+  const p95 = formatPerfValue(metric.p95Ms || metric.p95_ms);
+  const errorRate = Number.isFinite(Number(metric.errorRate || metric.error_rate))
+    ? `${Number(metric.errorRate || metric.error_rate).toFixed(1)}%`
+    : '—';
+  return `${name}: p50 ${p50} · p95 ${p95} · err ${errorRate}`;
+}
+
+function buildPerfHud(frontendSnapshot) {
+  const hud = document.getElementById('perfHud');
+  if (!hud) {
+    return;
+  }
+  const route = frontendSnapshot?.measures?.route_transition;
+  const editor = frontendSnapshot?.measures?.editor_mount;
+  const iframe = frontendSnapshot?.measures?.preview_iframe_ready;
+  const agent = frontendSnapshot?.measures?.agent_run;
+  const longTasks = frontendSnapshot?.counters?.long_tasks || 0;
+
+  hud.innerHTML = `
+    <div class="perf-hud__header">Perf HUD <span>dev only</span></div>
+    <div class="perf-hud__section">
+      <div class="perf-hud__label">Frontend</div>
+      <div>Route transition: ${formatPerfValue(route?.lastMs)}</div>
+      <div>Editor mount: ${formatPerfValue(editor?.lastMs)}</div>
+      <div>Preview iframe ready: ${formatPerfValue(iframe?.lastMs)}</div>
+      <div>Agent run: ${formatPerfValue(agent?.lastMs)}</div>
+      <div>Long tasks: ${longTasks}</div>
+    </div>
+    <div class="perf-hud__section">
+      <div class="perf-hud__label">Backend</div>
+      <div>${getBackendMetricSummary('/api/chat')}</div>
+      <div>${getBackendMetricSummary('/api/agent/start')}</div>
+      <div>${getBackendMetricSummary('/api/session/state')}</div>
+      <div class="perf-hud__meta">${perfHudState.backendError || `Updated ${perfHudState.lastBackendUpdateAt ? new Date(perfHudState.lastBackendUpdateAt).toLocaleTimeString() : 'never'}`}</div>
+    </div>
+  `;
+}
+
+async function refreshBackendPerfMetrics() {
+  if (!isPerfHudEnabled()) {
+    return;
+  }
+  try {
+    const response = await fetch(`${API_BASE}/api/dev/perf`, { credentials: 'include' });
+    if (!response.ok) {
+      throw new Error(`Perf endpoint status ${response.status}`);
+    }
+    const payload = await response.json();
+    perfHudState.backend = payload;
+    perfHudState.lastBackendUpdateAt = Date.now();
+    perfHudState.backendError = null;
+    buildPerfHud(frontendPerf.getSnapshot());
+  } catch (error) {
+    perfHudState.backendError = `Backend metrics unavailable (${error?.message || 'request failed'})`;
+    buildPerfHud(frontendPerf.getSnapshot());
+  }
+}
+
+function initializePerfHud() {
+  if (!isPerfHudEnabled()) {
+    return;
+  }
+  const hud = document.createElement('aside');
+  hud.id = 'perfHud';
+  hud.className = 'perf-hud';
+  document.body.appendChild(hud);
+
+  frontendPerf.subscribe((snapshot) => {
+    buildPerfHud(snapshot);
+  });
+
+  if ('PerformanceObserver' in window) {
+    try {
+      perfObservers.longTask = new PerformanceObserver((entryList) => {
+        const count = entryList.getEntries().length;
+        if (count > 0) {
+          frontendPerf.addCount('long_tasks', count);
+        }
+      });
+      perfObservers.longTask.observe({ type: 'longtask', buffered: true });
+    } catch {
+      console.info('Long task API unsupported in this browser.');
+    }
+  }
+
+  refreshBackendPerfMetrics();
+  window.setInterval(refreshBackendPerfMetrics, 5000);
+}
 
 let lastThrottleState = { state: 'ok', remaining: 0 };
 
@@ -8035,6 +8171,7 @@ let pendingAssistantProposal = null;
 let intentAnchor = null;
 let chatAbortController = null;
 let chatAbortSilent = false;
+let pendingPreviewPerf = null;
 let clearChatInProgress = false;
 let saveArtifactInProgress = false;
 let lastRetryContext = null;
@@ -8078,6 +8215,7 @@ function resetSandboxFrame() {
   if (!previewFrameHost) {
     return sandboxFrame;
   }
+  pendingPreviewPerf = frontendPerf.start('preview_iframe_ready', { reason: 'resetSandboxFrame' });
   previewFrameHost.innerHTML = '';
   const nextFrame = document.createElement('iframe');
   nextFrame.id = 'sandbox';
@@ -8100,6 +8238,13 @@ const preview = {
 
     frame.addEventListener('load', () => {
       this.ready = true;
+      if (pendingPreviewPerf) {
+        const duration = pendingPreviewPerf.end({ ready: true });
+        if (Number.isFinite(duration)) {
+          console.debug(`[perf] preview_iframe_ready: ${duration.toFixed(1)}ms`);
+        }
+        pendingPreviewPerf = null;
+      }
       this.listeners.forEach((listener) => listener());
       this.listeners.clear();
     });
@@ -8789,6 +8934,10 @@ function waitForIframeReady(frame, timeoutMs = 800) {
       done = true;
       frame.removeEventListener('load', onLoad);
       clearTimeout(timer);
+      if (!ok && pendingPreviewPerf) {
+        pendingPreviewPerf.end({ ready: false, timeoutMs });
+        pendingPreviewPerf = null;
+      }
       resolve(ok);
     };
 
@@ -10373,7 +10522,7 @@ if (publicGalleryNextButton) {
 }
 
 window.addEventListener('popstate', () => {
-  updateRouteView();
+  trackedUpdateRouteView('popstate');
 });
 
 document.addEventListener('click', (event) => {
@@ -11056,6 +11205,7 @@ window.addEventListener('resize', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+  initializePerfHud();
   bootstrapApp();
 });
 
