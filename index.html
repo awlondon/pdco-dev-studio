@@ -544,7 +544,13 @@
           <div class="panel-body">
             <div id="console-output-log" class="console-output-log"></div>
             <div id="consoleOutput" class="console-output" data-artifact-screenshot="true">
+              <div id="previewErrorBanner" class="preview-error-banner hidden" role="alert"></div>
               <div id="sandbox-status" style="font-size:12px; opacity:0.7; font-family:monospace;">idle</div>
+              <div id="preview-controls" class="preview-controls" aria-label="Preview controls">
+                <button id="previewSoftReload" class="ghost-button" type="button">Soft Reload</button>
+                <button id="previewHardReload" class="ghost-button" type="button">Hard Reload</button>
+                <button id="previewFollowEditor" class="ghost-button" type="button" aria-pressed="true">Follow editor: ON</button>
+              </div>
               <div id="sandbox-controls" class="sandbox-controls hidden" aria-label="Sandbox controls">
                 <button id="sandboxPause" class="ghost-button" type="button">Pause</button>
                 <button id="sandboxResume" class="ghost-button hidden" type="button">Resume</button>

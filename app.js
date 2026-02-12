@@ -540,6 +540,10 @@ const sandboxPauseButton = document.getElementById('sandboxPause');
 const sandboxResumeButton = document.getElementById('sandboxResume');
 const sandboxResetButton = document.getElementById('sandboxReset');
 const sandboxStopButton = document.getElementById('sandboxStop');
+const previewSoftReloadButton = document.getElementById('previewSoftReload');
+const previewHardReloadButton = document.getElementById('previewHardReload');
+const previewFollowToggle = document.getElementById('previewFollowEditor');
+const previewErrorBanner = document.getElementById('previewErrorBanner');
 const runButton = document.getElementById('runCode');
 const revertButton = document.getElementById('revertButton');
 const forwardButton = document.getElementById('forwardButton');
@@ -547,6 +551,10 @@ const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
 const SANDBOX_TIMEOUT_MS = 4500;
+const PREVIEW_HANDSHAKE_TIMEOUT_MS = 1200;
+const PREVIEW_HANDSHAKE_MAX_RETRIES = 2;
+const PREVIEW_HANDSHAKE_PING_INTERVAL_MS = 220;
+const FOLLOW_EDITOR_STORAGE_KEY = 'maya_follow_editor_preview';
 const UI_STATE = {
   AUTH: 'auth',
   APP: 'app'
@@ -1281,15 +1289,38 @@ function getSystemPromptForIntent(resolvedIntent) {
 }
 
 const SESSION_BRIDGE_MARKER = '<!-- MAYA_SESSION_BRIDGE -->';
+const PREVIEW_BRIDGE_VERSION = '2.2';
 const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
 <script id="dev-session-bridge">
 
   window.__SESSION__ = window.__SESSION__ || null;
+  const PREVIEW_BRIDGE_VERSION = '${PREVIEW_BRIDGE_VERSION}';
+  const postPreviewReady = () => {
+    if (!window.parent) {
+      return;
+    }
+    try {
+      window.parent.postMessage({
+        type: 'READY',
+        channel: 'maya-preview',
+        version: PREVIEW_BRIDGE_VERSION,
+        route: window.location.pathname || '/',
+        href: window.location.href,
+        timestamp: Date.now()
+      }, '*');
+    } catch (err) {
+      console.warn('postMessage blocked by COOP');
+    }
+  };
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'SESSION') {
       window.__SESSION__ = event.data;
     }
+    if (event.data?.type === 'PING' && event.data?.channel === 'maya-preview') {
+      postPreviewReady();
+    }
   });
+  postPreviewReady();
   const notifyError = (payload) => {
     if (window.parent) {
       try {
@@ -1585,6 +1616,20 @@ function syncSessionToSandbox() {
   runWhenPreviewReady(() => postSessionToSandbox(sandboxFrame));
 }
 
+function handleSandboxReadyMessage(event) {
+  if (event?.data?.type !== 'READY' || event?.data?.channel !== 'maya-preview') {
+    return;
+  }
+  if (event.source !== sandboxFrame?.contentWindow) {
+    return;
+  }
+  preview.acknowledgeReady({
+    version: event.data.version || 'unknown',
+    route: event.data.route || '/',
+    href: event.data.href || ''
+  });
+}
+
 function handleSandboxErrorMessage(event) {
   if (event?.data?.type !== 'SANDBOX_ERROR') {
     return;
@@ -1601,7 +1646,12 @@ function handleSandboxErrorMessage(event) {
   showToast(`Execution failed on line ${editorError.line}`, { variant: 'error', duration: 4000 });
 }
 
-window.addEventListener('message', handleSandboxErrorMessage);
+function handleSandboxMessage(event) {
+  handleSandboxReadyMessage(event);
+  handleSandboxErrorMessage(event);
+}
+
+window.addEventListener('message', handleSandboxMessage);
 
 function onAuthSuccess({ user, token, provider, credits, deferRender = false }) {
   const resolvedRemaining = resolveCredits(
@@ -4241,12 +4291,30 @@ function handleEditorContentChange() {
   if (hasEdits) {
     markPreviewStale();
   }
+  scheduleFollowEditorRun(currentValue, hasEdits);
   scheduleUserCodeVersionSave();
   resetExecutionPreparation();
   updateLineNumbers();
   updateSaveCodeButtonState();
   requestCreditPreviewUpdate();
   updatePlayableButtonState();
+}
+
+function scheduleFollowEditorRun(code, hasEdits) {
+  if (followEditorTimer) {
+    clearTimeout(followEditorTimer);
+    followEditorTimer = null;
+  }
+  if (!followEditorEnabled || !hasEdits || !code?.trim()) {
+    return;
+  }
+  followEditorTimer = setTimeout(() => {
+    if (!followEditorEnabled) {
+      return;
+    }
+    handleLLMOutput(code, 'follow-editor');
+    setPreviewStatus('Following editor changes…');
+  }, 350);
 }
 
 function updateSaveCodeButtonState() {
@@ -8426,6 +8494,9 @@ let intentAnchor = null;
 let chatAbortController = null;
 let chatAbortSilent = false;
 let pendingPreviewPerf = null;
+let previewHandshakeAttempt = 0;
+let followEditorEnabled = safeStorageGet(FOLLOW_EDITOR_STORAGE_KEY) !== 'false';
+let followEditorTimer = null;
 let clearChatInProgress = false;
 let saveArtifactInProgress = false;
 let lastRetryContext = null;
@@ -8465,6 +8536,19 @@ const sandbox = createSandboxController({
   maxFiniteMs: SANDBOX_TIMEOUT_MS
 });
 
+function setPreviewErrorBanner(message = '') {
+  if (!previewErrorBanner) {
+    return;
+  }
+  if (!message) {
+    previewErrorBanner.classList.add('hidden');
+    previewErrorBanner.textContent = '';
+    return;
+  }
+  previewErrorBanner.textContent = message;
+  previewErrorBanner.classList.remove('hidden');
+}
+
 function resetSandboxFrame() {
   if (!previewFrameHost) {
     return sandboxFrame;
@@ -8486,26 +8570,106 @@ function resetSandboxFrame() {
 const preview = {
   ready: false,
   listeners: new Set(),
+  readyMeta: null,
+  activeFrame: null,
+  handshakeTimer: null,
+  handshakeRetryTimer: null,
+  pingTimer: null,
   attach(frame) {
     this.ready = false;
+    this.readyMeta = null;
     this.listeners.clear();
+    this.activeFrame = frame;
+    this.clearHandshakeTimers();
+    setPreviewErrorBanner('');
+    previewHandshakeAttempt = 0;
 
     frame.addEventListener('load', () => {
-      this.ready = true;
-      if (pendingPreviewPerf) {
-        const duration = pendingPreviewPerf.end({ ready: true });
-        if (Number.isFinite(duration)) {
-          console.debug(`[perf] preview_iframe_ready: ${duration.toFixed(1)}ms`);
-        }
-        pendingPreviewPerf = null;
-      }
-      this.listeners.forEach((listener) => listener());
-      this.listeners.clear();
+      this.ready = false;
+      this.readyMeta = null;
+      this.startHandshake('load');
     });
 
     if (frame.contentDocument?.readyState === 'complete') {
-      this.ready = true;
+      this.startHandshake('readyState');
+      return;
     }
+    this.startHandshake('attach');
+  },
+  startHandshake(reason = 'attach') {
+    if (!this.activeFrame || sandboxFrame !== this.activeFrame) {
+      return;
+    }
+    this.ready = false;
+    this.readyMeta = null;
+    this.clearHandshakeTimers();
+    const frame = this.activeFrame;
+
+    const sendPing = () => {
+      if (!frame?.contentWindow) {
+        return;
+      }
+      try {
+        frame.contentWindow.postMessage({
+          type: 'PING',
+          channel: 'maya-preview',
+          reason,
+          attempt: previewHandshakeAttempt,
+          timestamp: Date.now()
+        }, '*');
+      } catch {
+        console.warn('Preview handshake PING failed.');
+      }
+    };
+
+    sendPing();
+    this.pingTimer = window.setInterval(sendPing, PREVIEW_HANDSHAKE_PING_INTERVAL_MS);
+    this.handshakeTimer = window.setTimeout(() => {
+      this.clearHandshakeTimers();
+      if (this.ready) {
+        return;
+      }
+      if (previewHandshakeAttempt < PREVIEW_HANDSHAKE_MAX_RETRIES) {
+        previewHandshakeAttempt += 1;
+        console.warn(`Preview handshake timeout, retry ${previewHandshakeAttempt}/${PREVIEW_HANDSHAKE_MAX_RETRIES}`);
+        this.handshakeRetryTimer = window.setTimeout(() => this.startHandshake('retry'), 80);
+        return;
+      }
+      setPreviewErrorBanner('Preview is unresponsive. Try Soft Reload or Hard Reload.');
+      if (pendingPreviewPerf) {
+        pendingPreviewPerf.end({ ready: false, timeoutMs: PREVIEW_HANDSHAKE_TIMEOUT_MS });
+        pendingPreviewPerf = null;
+      }
+    }, PREVIEW_HANDSHAKE_TIMEOUT_MS);
+  },
+  clearHandshakeTimers() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
+    if (this.handshakeRetryTimer) {
+      clearTimeout(this.handshakeRetryTimer);
+      this.handshakeRetryTimer = null;
+    }
+  },
+  acknowledgeReady(meta = {}) {
+    this.ready = true;
+    this.readyMeta = meta;
+    this.clearHandshakeTimers();
+    setPreviewErrorBanner('');
+    if (pendingPreviewPerf) {
+      const duration = pendingPreviewPerf.end({ ready: true, ...meta });
+      if (Number.isFinite(duration)) {
+        console.debug(`[perf] preview_iframe_ready: ${duration.toFixed(1)}ms`);
+      }
+      pendingPreviewPerf = null;
+    }
+    this.listeners.forEach((listener) => listener(meta));
+    this.listeners.clear();
   },
   isReady() {
     return this.ready;
@@ -8515,7 +8679,7 @@ const preview = {
       return;
     }
     if (this.ready) {
-      listener();
+      listener(this.readyMeta || {});
       return;
     }
     this.listeners.add(listener);
@@ -9140,65 +9304,65 @@ function finalizeChatOnce(fn) {
   return true;
 }
 
-function runWhenPreviewReady(runFn) {
+function runWhenPreviewReady(runFn, { timeoutMs = PREVIEW_HANDSHAKE_TIMEOUT_MS } = {}) {
   if (preview.isReady()) {
     runFn();
     return;
   }
 
   let hasRun = false;
-  const runOnce = () => {
+  const timer = window.setTimeout(() => {
     if (hasRun) {
       return;
     }
     hasRun = true;
-    runFn();
-  };
+    setPreviewErrorBanner('Preview is unresponsive. Try Soft Reload or Hard Reload.');
+  }, timeoutMs + 40);
 
-  preview.once('ready', runOnce);
-  setTimeout(() => {
-    if (!preview.isReady()) {
-      console.warn('⚠️ Preview readiness timeout; running anyway.');
-      runOnce();
+  preview.once('ready', () => {
+    if (hasRun) {
+      return;
     }
-  }, 500);
+    hasRun = true;
+    clearTimeout(timer);
+    runFn();
+  });
+
+  preview.startHandshake('runWhenPreviewReady');
 }
 
-function waitForIframeReady(frame, timeoutMs = 800) {
+function waitForIframeReady(frame, timeoutMs = PREVIEW_HANDSHAKE_TIMEOUT_MS) {
   return new Promise((resolve) => {
     if (!frame) {
       resolve(false);
       return;
     }
 
-    try {
-      if (frame.contentDocument?.readyState === 'complete') {
-        resolve(true);
-        return;
-      }
-    } catch (_) {
-      // sandboxed iframe may throw; ignore and fall back to load event
+    if (preview.isReady()) {
+      resolve(true);
+      return;
     }
 
-    let done = false;
-    const finish = (ok) => {
-      if (done) {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) {
         return;
       }
-      done = true;
-      frame.removeEventListener('load', onLoad);
-      clearTimeout(timer);
-      if (!ok && pendingPreviewPerf) {
-        pendingPreviewPerf.end({ ready: false, timeoutMs });
-        pendingPreviewPerf = null;
+      settled = true;
+      setPreviewErrorBanner('Preview is unresponsive. Try Soft Reload or Hard Reload.');
+      resolve(false);
+    }, timeoutMs + 100);
+
+    preview.once('ready', () => {
+      if (settled) {
+        return;
       }
-      resolve(ok);
-    };
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
 
-    const onLoad = () => finish(true);
-    frame.addEventListener('load', onLoad, { once: true });
-
-    const timer = setTimeout(() => finish(false), timeoutMs);
+    preview.startHandshake('waitForIframeReady');
   });
 }
 
@@ -9591,6 +9755,39 @@ function resetSandbox() {
   handleUserRun(lastRunCode, lastRunSource ?? 'reset', 'Resetting animation…');
 }
 
+async function softReloadPreview() {
+  if (!lastRunCode || !sandboxFrame) {
+    return;
+  }
+  setPreviewStatus('Soft reloading preview…');
+  preview.startHandshake('soft-reload');
+  const ready = await waitForIframeReady(sandboxFrame, PREVIEW_HANDSHAKE_TIMEOUT_MS + 300);
+  if (!ready) {
+    return;
+  }
+  sandbox.stop('soft-reload');
+  sandbox.run(injectSessionBridge(lastRunCode));
+  syncSessionToSandbox();
+}
+
+function hardReloadPreview() {
+  if (!lastRunCode) {
+    return;
+  }
+  setPreviewStatus('Hard reloading preview…');
+  handleLLMOutput(lastRunCode, 'hard-reload');
+}
+
+function setFollowEditorEnabled(isEnabled) {
+  followEditorEnabled = Boolean(isEnabled);
+  if (previewFollowToggle) {
+    previewFollowToggle.setAttribute('aria-pressed', followEditorEnabled ? 'true' : 'false');
+    previewFollowToggle.classList.toggle('is-active', followEditorEnabled);
+    previewFollowToggle.textContent = followEditorEnabled ? 'Follow editor: ON' : 'Follow editor: OFF';
+  }
+  safeStorageSet(FOLLOW_EDITOR_STORAGE_KEY, followEditorEnabled ? 'true' : 'false');
+}
+
 function stopSandboxFromUser() {
   sandbox.stop('user');
   setSandboxAnimationState('stopped');
@@ -9634,7 +9831,12 @@ async function handleLLMOutput(code, source = 'generated') {
   setSandboxAnimationState('running');
   setRuntimeState('running');
   scheduleRuntimeStateSync();
-  await waitForIframeReady(activeFrame, 900);
+  const isFrameReady = await waitForIframeReady(activeFrame, PREVIEW_HANDSHAKE_TIMEOUT_MS);
+  if (!isFrameReady) {
+    appendOutput('Preview iframe is unresponsive. Use Soft Reload or Hard Reload.', 'error');
+    setRuntimeState('idle');
+    return;
+  }
   if (sandboxFrame !== activeFrame) {
     console.warn('Iframe swapped during compile; aborting run.');
     setRuntimeState('idle');
@@ -11557,6 +11759,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   if (sandboxStopButton) {
     sandboxStopButton.addEventListener('click', stopSandboxFromUser);
+  }
+  if (previewSoftReloadButton) {
+    previewSoftReloadButton.addEventListener('click', () => {
+      softReloadPreview();
+    });
+  }
+  if (previewHardReloadButton) {
+    previewHardReloadButton.addEventListener('click', hardReloadPreview);
+  }
+  setFollowEditorEnabled(followEditorEnabled);
+  if (previewFollowToggle) {
+    previewFollowToggle.addEventListener('click', () => {
+      setFollowEditorEnabled(!followEditorEnabled);
+    });
   }
 
 });
