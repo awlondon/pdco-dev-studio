@@ -595,11 +595,6 @@ function getPromptInputElement() {
 }
 
 function ensurePlayableButtonPresence() {
-  let playableButton = document.getElementById('playable-controller-btn');
-  if (playableButton) {
-    return playableButton;
-  }
-
   const chatControls = document.querySelector('.chat-controls');
   if (!chatControls) {
     return null;
@@ -610,29 +605,54 @@ function ensurePlayableButtonPresence() {
     return null;
   }
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'playable-wrapper-container';
+  let wrapper = chatControls.querySelector('.playable-wrapper-container');
+  if (!wrapper) {
+    wrapper = document.createElement('div');
+    wrapper.className = 'playable-wrapper-container';
+    chatControls.insertBefore(wrapper, chatInputRow);
+  } else if (wrapper.nextElementSibling !== chatInputRow) {
+    chatControls.insertBefore(wrapper, chatInputRow);
+  }
 
-  playableButton = document.createElement('button');
-  playableButton.id = 'playable-controller-btn';
+  let playableButton = document.getElementById('playable-controller-btn');
+  if (!playableButton) {
+    playableButton = document.createElement('button');
+    playableButton.id = 'playable-controller-btn';
+    playableButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">🎮</span><span class="playable-btn-label">Game mode</span>';
+  }
+
   playableButton.className = 'playable-btn';
   playableButton.type = 'button';
   playableButton.disabled = true;
   playableButton.title = 'Make it a game';
   playableButton.setAttribute('aria-label', 'Make it a game');
-  playableButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">🎮</span><span class="playable-btn-label">Game mode</span>';
+  playableButton.hidden = false;
+  playableButton.style.display = 'inline-flex';
+  playableButton.style.visibility = 'visible';
 
-  const stopButton = document.createElement('button');
-  stopButton.id = 'stop-agent-btn';
+  let stopButton = document.getElementById('stop-agent-btn');
+  if (!stopButton) {
+    stopButton = document.createElement('button');
+    stopButton.id = 'stop-agent-btn';
+    stopButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">⏹</span><span class="playable-btn-label">Stop</span>';
+  }
+
   stopButton.className = 'playable-btn playable-btn-stop';
   stopButton.type = 'button';
   stopButton.disabled = true;
   stopButton.title = 'Stop current agent task';
   stopButton.setAttribute('aria-label', 'Stop current agent task');
-  stopButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">⏹</span><span class="playable-btn-label">Stop</span>';
+  stopButton.hidden = false;
+  stopButton.style.display = 'inline-flex';
+  stopButton.style.visibility = 'visible';
 
-  wrapper.append(playableButton, stopButton);
-  chatControls.insertBefore(wrapper, chatInputRow);
+  if (playableButton.parentElement !== wrapper) {
+    wrapper.appendChild(playableButton);
+  }
+  if (stopButton.parentElement !== wrapper) {
+    wrapper.appendChild(stopButton);
+  }
+
   return playableButton;
 }
 
