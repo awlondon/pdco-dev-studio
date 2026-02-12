@@ -3,7 +3,7 @@
 import { createSandboxController } from './sandboxController.js';
 import { formatNumber } from './utils/formatNumber.js';
 import { editorManager } from './editorManager.js';
-import { AppStateMachine, APP_STATES, EVENTS } from './core/appStateMachine.js';
+import { AppStateMachine, APP_STATES, AGENT_STATES, EVENTS } from './core/appStateMachine.js';
 
 if (!window.GOOGLE_CLIENT_ID) {
   console.warn('Missing GOOGLE_CLIENT_ID. Google auth disabled.');
@@ -606,7 +606,16 @@ function ensurePlayableButtonPresence() {
   playableButton.setAttribute('aria-label', 'Make it a game');
   playableButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">🎮</span><span class="playable-btn-label">Game mode</span>';
 
-  wrapper.appendChild(playableButton);
+  const stopButton = document.createElement('button');
+  stopButton.id = 'stop-agent-btn';
+  stopButton.className = 'playable-btn playable-btn-stop';
+  stopButton.type = 'button';
+  stopButton.disabled = true;
+  stopButton.title = 'Stop current agent task';
+  stopButton.setAttribute('aria-label', 'Stop current agent task');
+  stopButton.innerHTML = '<span class="playable-btn-icon" aria-hidden="true">⏹</span><span class="playable-btn-label">Stop</span>';
+
+  wrapper.append(playableButton, stopButton);
   chatControls.insertBefore(wrapper, chatInputRow);
   return playableButton;
 }
@@ -622,15 +631,41 @@ function getPromptInput() {
 function initComposerControls() {
   const promptInput = getPromptInputElement();
   const playableBtn = getPlayableButtonElement();
+  const stopBtn = document.getElementById('stop-agent-btn');
 
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
-    playableBtn.addEventListener('click', () => {
-      sendChat({
-        playableMode: true,
-        userPrompt: getPromptInput(),
-        code: getEditorCode()
-      });
+    playableBtn.addEventListener('click', async () => {
+      if (appMachine.getAppState() !== APP_STATES.READY) {
+        console.warn('Cannot start agent while app not ready.');
+        return;
+      }
+
+      if (appMachine.getAgentState() !== AGENT_STATES.IDLE) {
+        appMachine.dispatch(EVENTS.AGENT_RESET);
+      }
+      appMachine.dispatch(EVENTS.AGENT_START);
+
+      try {
+        await prepareAgent();
+        appMachine.dispatch(EVENTS.AGENT_READY);
+
+        const stream = await startAgentTask();
+        appMachine.dispatch(EVENTS.AGENT_STREAM);
+
+        await stream;
+        appMachine.dispatch(EVENTS.AGENT_COMPLETE);
+      } catch (error) {
+        appMachine.dispatch(EVENTS.AGENT_FAIL);
+      }
+    });
+  }
+
+  if (stopBtn && stopBtn.dataset.composerBound !== 'true') {
+    stopBtn.dataset.composerBound = 'true';
+    stopBtn.addEventListener('click', () => {
+      cancelAgent();
+      appMachine.dispatch(EVENTS.AGENT_CANCEL);
     });
   }
 
@@ -644,6 +679,22 @@ function initComposerControls() {
   }
 
   updatePlayableButtonState();
+}
+
+async function prepareAgent() {
+  return Promise.resolve();
+}
+
+async function startAgentTask() {
+  return sendChat({
+    playableMode: true,
+    userPrompt: getPromptInput(),
+    code: getEditorCode()
+  });
+}
+
+function cancelAgent() {
+  abortActiveChat({ silent: true });
 }
 
 function setEditorValue(value = '') {
@@ -3121,8 +3172,8 @@ function showFatalErrorScreen() {
   console.error('Application entered a fatal state.');
 }
 
-appMachine.subscribe((state) => {
-  switch (state) {
+function handleAppState(appState) {
+  switch (appState) {
     case APP_STATES.READY:
       enableFullFeatures();
       break;
@@ -3143,13 +3194,51 @@ appMachine.subscribe((state) => {
     default:
       break;
   }
+}
+
+function handleAgentState(agentState) {
+  const runBtn = document.getElementById('playable-controller-btn');
+  const stopBtn = document.getElementById('stop-agent-btn');
+
+  if (!runBtn || !stopBtn) {
+    return;
+  }
+
+  switch (agentState) {
+    case AGENT_STATES.IDLE:
+      runBtn.disabled = false;
+      stopBtn.disabled = true;
+      break;
+
+    case AGENT_STATES.PREPARING:
+    case AGENT_STATES.RUNNING:
+    case AGENT_STATES.STREAMING:
+      runBtn.disabled = true;
+      stopBtn.disabled = false;
+      break;
+
+    case AGENT_STATES.COMPLETED:
+    case AGENT_STATES.FAILED:
+    case AGENT_STATES.CANCELLED:
+      runBtn.disabled = false;
+      stopBtn.disabled = true;
+      break;
+
+    default:
+      break;
+  }
+}
+
+appMachine.subscribe((state) => {
+  handleAppState(state.app);
+  handleAgentState(state.agent);
 
   updatePlayableButtonState();
 });
 
 if (location.hostname === 'localhost') {
   appMachine.subscribe((state) => {
-    console.log('App state:', state);
+    console.log('App state:', state.app, 'Agent state:', state.agent);
   });
 }
 
@@ -9223,8 +9312,9 @@ function updateRetryButton() {
 
 
 function updatePlayableButtonState() {
-  const btn = document.getElementById('playable-controller-btn');
-  if (!btn) {
+  const runBtn = document.getElementById('playable-controller-btn');
+  const stopBtn = document.getElementById('stop-agent-btn');
+  if (!runBtn) {
     return;
   }
 
@@ -9234,14 +9324,15 @@ function updatePlayableButtonState() {
     : featureState.creditsRemaining;
   featureState.creditsRemaining = Number.isFinite(remainingCredits) ? remainingCredits : 0;
 
-  const state = appMachine.getState();
+  const appState = appMachine.getAppState();
+  const agentState = appMachine.getAgentState();
+  const appReady = appState === APP_STATES.READY;
+  const agentBusy = [AGENT_STATES.PREPARING, AGENT_STATES.RUNNING, AGENT_STATES.STREAMING].includes(agentState);
 
-  if (state === APP_STATES.READY) {
-    btn.disabled = featureState.creditsRemaining <= 0;
-  } else if (state === APP_STATES.DEGRADED) {
-    btn.disabled = true;
-  } else {
-    btn.disabled = true;
+  runBtn.disabled = !appReady || featureState.creditsRemaining <= 0 || agentBusy;
+
+  if (stopBtn) {
+    stopBtn.disabled = !agentBusy;
   }
 }
 
