@@ -1,0 +1,14 @@
+{
+  "task_id": "tech_2001",
+  "priority": "medium",
+  "goal": "Scaffold a technical starter and document architecture/protocol contracts.",
+  "constraints": {
+    "framework": "none",
+    "static_docs_only": true
+  },
+  "success_criteria": [
+    "src scaffold created",
+    "Architecture docs updated",
+    "Schema contracts validated"
+  ]
+}

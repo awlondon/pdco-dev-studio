@@ -1,0 +1,10 @@
+{
+  "task_id": "biz_1001",
+  "status": "completed",
+  "summary": "Created landing page and value proposition docs for product idea.",
+  "ts": "2026-02-13T00:15:00Z",
+  "artifacts": [
+    "site/index.html",
+    "docs/value-proposition.md"
+  ]
+}

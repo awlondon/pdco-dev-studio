@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.dev/schemas/project.state.schema.json",
+  "title": "ProjectState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project_id", "goal", "constraints", "status", "updated_at"],
+  "properties": {
+    "project_id": { "type": "string", "minLength": 1 },
+    "goal": { "type": "string", "minLength": 1 },
+    "constraints": { "type": "object", "additionalProperties": true },
+    "status": { "type": "string", "enum": ["idle", "planning", "executing", "blocked", "completed"] },
+    "active_task_id": { "type": "string" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ts", "note"],
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

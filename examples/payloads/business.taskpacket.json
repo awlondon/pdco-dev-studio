@@ -1,0 +1,14 @@
+{
+  "task_id": "biz_1001",
+  "priority": "high",
+  "goal": "Create a product landing page and supporting docs from business idea conversation.",
+  "constraints": {
+    "no_public_deploy": true,
+    "no_secrets": true
+  },
+  "success_criteria": [
+    "Landing page added at site/index.html",
+    "Product brief added in docs/value-proposition.md",
+    "Changes committed with clear summary"
+  ]
+}

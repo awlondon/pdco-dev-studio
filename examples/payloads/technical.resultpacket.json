@@ -1,0 +1,12 @@
+{
+  "task_id": "tech_2001",
+  "status": "completed",
+  "summary": "Added starter scaffold and updated architecture/protocol docs.",
+  "ts": "2026-02-13T00:16:00Z",
+  "artifacts": [
+    "src/",
+    "docs/architecture.md",
+    "docs/protocols.md",
+    "schemas/openclaw.task.schema.json"
+  ]
+}

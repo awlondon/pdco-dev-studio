@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.dev/schemas/conversation.event.schema.json",
+  "title": "ConversationEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "ts", "role", "content"],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 },
+    "conversation_id": { "type": "string", "minLength": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "role": { "type": "string", "enum": ["user", "assistant", "system", "tool"] },
+    "content": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.dev/schemas/openclaw.result.schema.json",
+  "title": "ResultPacket",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "status", "summary", "ts"],
+  "properties": {
+    "task_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["completed", "failed", "partial"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "ts": { "type": "string", "format": "date-time" },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}
