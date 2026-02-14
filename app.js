@@ -46,7 +46,9 @@ function resolveApiBase() {
     return 'http://localhost:8080';
   }
 
-  return window.location.origin;
+  throw new Error(
+    'Missing API base URL in production. Set window.API_BASE/window.__MAYA_API_BASE to a real origin (no placeholders).'
+  );
 }
 
 const API_BASE = resolveApiBase();
