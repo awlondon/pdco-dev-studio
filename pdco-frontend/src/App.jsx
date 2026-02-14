@@ -9,8 +9,7 @@ import {
   saveArtifact
 } from './artifactsStore';
 import AgentsPanel from './agents/AgentsPanel';
-
-const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+import { API_BASE, requireApiBase } from './config/runtime';
 const isDev = import.meta.env.DEV;
 const layoutStorageKey = 'pdco.devstudio.layout.v1';
 
@@ -125,7 +124,7 @@ const EditorPanel = memo(function EditorPanel({ value, onChange, panelLayout, on
 });
 
 const PreviewPanel = memo(function PreviewPanel({ panelLayout, onToggleVisible, onToggleDock }) {
-  const previewText = useMemo(() => `API base URL: ${apiUrl}`, []);
+  const previewText = useMemo(() => `API base URL: ${API_BASE || 'not-configured'}`, []);
   return (
     <PanelFrame
       id="preview"
@@ -344,6 +343,7 @@ const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, o
 function App() {
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [layout, setLayout] = useState(() => readStoredLayout());
+  const [backendStatus, setBackendStatus] = useState('CHECKING');
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
   const shellRef = useRef(null);
   const dragRef = useRef({ active: false, side: null, value: 0 });
@@ -462,6 +462,30 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function pingBackend() {
+      try {
+        const response = await fetch(`${requireApiBase()}/healthz`);
+        const payload = await response.json();
+        if (!cancelled) {
+          setBackendStatus(response.ok && payload?.ok ? 'OK' : 'DISCONNECTED');
+        }
+      } catch {
+        if (!cancelled) {
+          setBackendStatus('DISCONNECTED');
+        }
+      }
+    }
+
+    pingBackend();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const floatingPanels = Object.keys(layout.panels).filter(
     (id) => id !== 'editor' && id !== 'agents' && layout.panels[id].visible && !layout.panels[id].docked
   );
@@ -474,6 +498,7 @@ function App() {
       <div className="frontend-origin-badge" role="status" aria-live="polite">
         <strong>{runtimeLabel}</strong>
         <span>{frontendOrigin}</span>
+        <span>Backend: {backendStatus}</span>
       </div>
       <div className="workspace-toolbar">
         <strong>Workspace Layout</strong>

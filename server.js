@@ -1,9 +1,11 @@
 import express from 'express';
 import cors from 'cors';
+import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
 import { resolveUserStoreDriver, isCsvUserStoreDriver } from './db/index.js';
 import { recordUsageEvent } from './db/usage.js';
 import {
@@ -716,6 +718,11 @@ assistant.text. If the user asks to modify or generate UI, include ui.html/css/j
 /**
  * 🔴 CORS MUST BE FIRST
  */
+const allowedCorsOrigins = String(process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
   origin: resolveCorsOrigins(),
   credentials: true
@@ -740,7 +747,6 @@ app.use(enforceRequestValidation);
  */
 app.use((req, res, next) => {
   res.setHeader('X-MAYA-BACKEND', 'alive');
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
   next();
 });
 
@@ -749,6 +755,10 @@ app.use((req, res, next) => {
  */
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/healthz', (_req, res) => {
+  return res.status(200).json({ ok: true });
 });
 
 
@@ -2872,6 +2882,10 @@ app.get('/api/usage/token-efficiency', async (req, res) => {
 /**
  * GOOGLE AUTH STUB
  */
+app.get('/api/auth/google', (_req, res) => {
+  return res.status(401).json({ ok: false, error: 'Google auth interactive flow is not enabled' });
+});
+
 app.post('/api/auth/google', async (req, res) => {
   try {
     const ip = getRequestIp(req);
@@ -3296,8 +3310,24 @@ app.use((err, req, res, _next) => {
   return res.status(status).json({ ok: false, error: message, error_code: code });
 });
 
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+export function broadcast(payload) {
+  const message = JSON.stringify(payload);
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  });
+}
+
+wss.on('connection', (socket) => {
+  socket.send(JSON.stringify({ type: 'hello', ts: Date.now() }));
+});
+
 const port = process.env.PORT || 8080;
-app.listen(port, () => {
+server.listen(port, () => {
   console.log('Maya API listening on', port);
   logStructured('info', 'user_store_driver_selected', { user_store_driver: USER_STORE_DRIVER });
   startCreditResetScheduler();
