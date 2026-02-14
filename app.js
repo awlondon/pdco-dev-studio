@@ -12298,6 +12298,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 const WORKSPACE_PANELS = ['pipeline', 'chat', 'code', 'console', 'agents'];
+const agentTaskLogs = {};
 
 function getCurrentPrompt() {
   return getPromptInput() || getEditorValue() || '';
@@ -12324,6 +12325,71 @@ function appendAgentLogColored(msg, color) {
   line.style.color = color;
   log.appendChild(line);
   log.scrollTop = log.scrollHeight;
+}
+
+function clearAgentTaskLogs() {
+  const log = document.getElementById('agent-log');
+  if (log) {
+    log.innerHTML = '';
+  }
+  Object.keys(agentTaskLogs).forEach((taskId) => {
+    delete agentTaskLogs[taskId];
+  });
+}
+
+function getOrCreateTaskLog(taskId) {
+  if (agentTaskLogs[taskId]) {
+    return agentTaskLogs[taskId];
+  }
+
+  const logRoot = document.getElementById('agent-log');
+  if (!logRoot) {
+    return null;
+  }
+
+  const container = document.createElement('div');
+  container.style.borderBottom = '1px solid #222';
+  container.style.padding = '6px 0';
+
+  const header = document.createElement('div');
+  header.style.cursor = 'pointer';
+  header.style.display = 'flex';
+  header.style.justifyContent = 'space-between';
+  header.style.alignItems = 'center';
+
+  const title = document.createElement('div');
+  title.innerText = `▶ ${taskId}`;
+  title.style.fontWeight = 'bold';
+
+  const status = document.createElement('div');
+  status.innerText = 'pending';
+  status.style.fontSize = '11px';
+  status.style.opacity = '0.9';
+  status.style.padding = '2px 6px';
+  status.style.border = '1px solid #444';
+  status.style.borderRadius = '999px';
+
+  header.appendChild(title);
+  header.appendChild(status);
+
+  const body = document.createElement('div');
+  body.style.display = 'none';
+  body.style.fontSize = '12px';
+  body.style.marginTop = '6px';
+  body.style.paddingLeft = '10px';
+
+  header.onclick = () => {
+    const open = body.style.display === 'block';
+    body.style.display = open ? 'none' : 'block';
+    title.innerText = `${open ? '▶' : '▼'} ${taskId}`;
+  };
+
+  container.appendChild(header);
+  container.appendChild(body);
+  logRoot.appendChild(container);
+
+  agentTaskLogs[taskId] = { container, header, title, body, status };
+  return agentTaskLogs[taskId];
 }
 
 function appendConsole(msg) {
@@ -12375,8 +12441,8 @@ function wireAgentPanelEvents() {
       runBtn.innerText = 'Running...';
       if (log) {
         log.style.display = 'block';
-        log.innerHTML = '';
       }
+      clearAgentTaskLogs();
 
       appendAgentLog('Initializing execution...');
 
@@ -12667,6 +12733,7 @@ async function runMultiAgent() {
   if (budgetPanel) {
     budgetPanel.innerHTML = '';
   }
+  clearAgentTaskLogs();
 
   try {
     const response = await fetch('http://localhost:3000/multi-agent-run', {
@@ -12716,37 +12783,83 @@ function updateCIStatus(data) {
 }
 
 function handleAgentStreamEvent(data) {
+  const resolvedTaskId = data.task_id || prTaskMap[data.pr_number];
+  if (!resolvedTaskId) {
+    return;
+  }
+
+  const taskLog = getOrCreateTaskLog(resolvedTaskId);
+  if (!taskLog) {
+    return;
+  }
+
+  const line = document.createElement('div');
+  line.style.marginBottom = '4px';
+
   if (data.type === 'ci' || data.type === 'ci_update') {
     updateCIStatus(data);
 
     if (data.status === 'in_progress') {
-      appendAgentLogColored(`CI started for ${data.task_id || data.pr_number || 'unknown task'}`, '#ffaa00');
+      line.innerText = 'CI started';
+      line.style.color = '#ffaa00';
+      taskLog.status.innerText = 'running';
+      taskLog.status.style.color = '#ffaa00';
     }
 
     if (data.conclusion === 'success') {
-      appendAgentLogColored(`CI passed for ${data.task_id || data.pr_number || 'unknown task'}`, '#00ff88');
+      line.innerText = 'CI passed';
+      line.style.color = '#00ff88';
+      taskLog.status.innerText = 'ci passed';
+      taskLog.status.style.color = '#00ff88';
     }
 
     if (data.conclusion === 'failure') {
-      appendAgentLogColored(`CI failed for ${data.task_id || data.pr_number || 'unknown task'}`, '#ff4d6d');
+      line.innerText = 'CI failed';
+      line.style.color = '#ff4d6d';
+      taskLog.status.innerText = 'failed';
+      taskLog.status.style.color = '#ff4d6d';
     }
   }
 
   if (data.type === 'pr' || data.type === 'pr_update') {
     updatePRStatus(data);
-    appendAgentLogColored(`PR #${data.pr_number} ${data.merged ? 'merged' : 'updated'}`, '#00f2ff');
+    line.innerText = `PR #${data.pr_number} ${data.merged ? 'merged' : 'updated'}`;
+    line.style.color = '#00f2ff';
+
+    if (data.merged) {
+      taskLog.status.innerText = 'merged';
+      taskLog.status.style.color = '#00f2ff';
+    }
   }
 
   if (data.type === 'policy') {
-    appendAgentLogColored(
-      `Policy risk: ${data.risk_level}`,
-      data.risk_level === 'high' ? '#ff4d6d' : '#ffaa00'
-    );
-
-    if (Array.isArray(data.reasons)) {
-      data.reasons.forEach((reason) => appendAgentLog(` - ${reason}`));
-    }
+    line.innerText = `Policy risk: ${data.risk_level}`;
+    line.style.color = data.risk_level === 'high'
+      ? '#ff4d6d'
+      : data.risk_level === 'medium'
+        ? '#ffaa00'
+        : '#00ff88';
+    taskLog.status.innerText = `risk: ${data.risk_level}`;
+    taskLog.status.style.color = line.style.color;
   }
+
+  if (!line.innerText) {
+    return;
+  }
+
+  taskLog.body.appendChild(line);
+
+  if (data.type === 'policy' && Array.isArray(data.reasons)) {
+    data.reasons.forEach((reason) => {
+      const reasonLine = document.createElement('div');
+      reasonLine.innerText = ` - ${reason}`;
+      reasonLine.style.marginBottom = '4px';
+      taskLog.body.appendChild(reasonLine);
+    });
+  }
+
+  taskLog.body.style.display = 'block';
+  taskLog.title.innerText = `▼ ${resolvedTaskId}`;
 }
 
 let agentStatusSocket = null;
