@@ -170,6 +170,63 @@ async function tryAutoMerge(repo, prNumber) {
   });
 }
 
+async function protectMainBranch(repo) {
+  await githubRequest('PUT', `/repos/${OWNER}/${repo}/branches/main/protection`, {
+    required_status_checks: {
+      strict: true,
+      contexts: ['build'],
+    },
+    enforce_admins: false,
+    required_pull_request_reviews: null,
+    restrictions: null,
+    required_linear_history: false,
+    allow_force_pushes: false,
+    allow_deletions: false,
+    block_creations: false,
+    required_conversation_resolution: false,
+    lock_branch: false,
+    allow_fork_syncing: false,
+  });
+}
+
+async function waitForGreen(repo, prNumber, maxAttempts = 20) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    const pr = await githubRequest('GET', `/repos/${OWNER}/${repo}/pulls/${prNumber}`);
+    if (pr.mergeable_state !== 'clean') {
+      continue;
+    }
+
+    const checkRunsResponse = await githubRequest(
+      'GET',
+      `/repos/${OWNER}/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`,
+    );
+    const checkRuns = Array.isArray(checkRunsResponse.check_runs) ? checkRunsResponse.check_runs : [];
+
+    if (checkRuns.length === 0) {
+      continue;
+    }
+
+    const allGreen = checkRuns.every((check) => check.conclusion === 'success');
+    if (allGreen) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function mergeIfGreen(repo, prNumber) {
+  const canMerge = await waitForGreen(repo, prNumber);
+  if (!canMerge) {
+    return { merged: false, reason: 'CI not green' };
+  }
+
+  await tryAutoMerge(repo, prNumber);
+  return { merged: true };
+}
+
 app.post('/generate-repo-with-prs', async (req, res) => {
   try {
     const { objective, tasks = [], execution = { auto_merge: false, enable_pages: true } } = req.body;
@@ -211,6 +268,59 @@ app.post('/generate-repo-with-prs', async (req, res) => {
 
     await upsertFileOnBranch(repo, 'main', 'index.html', indexHtml, 'Add landing page');
 
+    const ciWorkflow = `name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Basic validation
+        run: |
+          echo "Running static checks..."
+          if [ ! -f index.html ]; then
+            echo "Missing index.html"
+            exit 1
+          fi
+
+      - name: Lint HTML
+        run: |
+          if grep -q "<html" index.html; then
+            echo "HTML structure present"
+          else
+            echo "Invalid HTML"
+            exit 1
+          fi
+`;
+
+    await upsertFileOnBranch(repo, 'main', '.github/workflows/ci.yml', ciWorkflow, 'Add CI workflow');
+
+    if (execution.enable_pages) {
+      const deployWorkflow = `name: Deploy Pages
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Trigger Pages
+        run: echo "Deploy triggered"
+`;
+
+      await upsertFileOnBranch(repo, 'main', '.github/workflows/deploy.yml', deployWorkflow, 'Add deploy workflow');
+    }
+
+    await protectMainBranch(repo);
+
     const prResults = [];
 
     for (const task of tasks) {
@@ -239,8 +349,14 @@ app.post('/generate-repo-with-prs', async (req, res) => {
 
       if (execution.auto_merge) {
         try {
-          await tryAutoMerge(repo, pr.number);
-          prResults.push({ task_id: task.id, branch, pr_number: pr.number, merged: true });
+          const mergeResult = await mergeIfGreen(repo, pr.number);
+          prResults.push({
+            task_id: task.id,
+            branch,
+            pr_number: pr.number,
+            merged: mergeResult.merged,
+            reason: mergeResult.reason || null,
+          });
         } catch (error) {
           prResults.push({
             task_id: task.id,
