@@ -12299,6 +12299,15 @@ document.addEventListener('keydown', (event) => {
 
 const WORKSPACE_PANELS = ['pipeline', 'chat', 'code', 'console', 'agents'];
 const agentTaskLogs = {};
+const TASK_STAGES = {
+  planning: 0,
+  pr_opened: 1,
+  ci_running: 2,
+  ci_passed: 3,
+  policy_checked: 4,
+  merged: 5,
+  failed: -1
+};
 
 function getCurrentPrompt() {
   return getPromptInput() || getEditorValue() || '';
@@ -12372,6 +12381,32 @@ function getOrCreateTaskLog(taskId) {
   header.appendChild(title);
   header.appendChild(status);
 
+  const progressWrap = document.createElement('div');
+  progressWrap.style.marginTop = '6px';
+
+  const progressBar = document.createElement('div');
+  progressBar.style.height = '6px';
+  progressBar.style.background = '#222';
+  progressBar.style.borderRadius = '3px';
+  progressBar.style.overflow = 'hidden';
+
+  const progressFill = document.createElement('div');
+  progressFill.style.height = '100%';
+  progressFill.style.width = '0%';
+  progressFill.style.background = '#00f2ff';
+  progressFill.style.transition = 'width 0.4s ease';
+
+  progressBar.appendChild(progressFill);
+
+  const stageLabel = document.createElement('div');
+  stageLabel.style.fontSize = '11px';
+  stageLabel.style.marginTop = '4px';
+  stageLabel.style.opacity = '0.8';
+  stageLabel.innerText = 'Stage: Planning';
+
+  progressWrap.appendChild(progressBar);
+  progressWrap.appendChild(stageLabel);
+
   const body = document.createElement('div');
   body.style.display = 'none';
   body.style.fontSize = '12px';
@@ -12385,11 +12420,63 @@ function getOrCreateTaskLog(taskId) {
   };
 
   container.appendChild(header);
+  container.appendChild(progressWrap);
   container.appendChild(body);
   logRoot.appendChild(container);
 
-  agentTaskLogs[taskId] = { container, header, title, body, status };
+  agentTaskLogs[taskId] = {
+    container,
+    header,
+    title,
+    body,
+    status,
+    progressFill,
+    stageLabel,
+    currentStage: TASK_STAGES.planning
+  };
+
+  updateTaskStage(taskId, TASK_STAGES.planning);
+
   return agentTaskLogs[taskId];
+}
+
+function updateTaskStage(taskId, newStage) {
+  const taskLog = agentTaskLogs[taskId];
+  if (!taskLog) {
+    return;
+  }
+
+  const isLocked = taskLog.currentStage === TASK_STAGES.merged || taskLog.currentStage === TASK_STAGES.failed;
+  if (isLocked && newStage !== taskLog.currentStage) {
+    return;
+  }
+
+  taskLog.currentStage = newStage;
+
+  let percent = 0;
+
+  if (newStage === TASK_STAGES.failed) {
+    percent = 100;
+    taskLog.progressFill.style.background = '#ff4d6d';
+    taskLog.stageLabel.innerText = 'Stage: Failed';
+  } else {
+    percent = (newStage / 5) * 100;
+    taskLog.progressFill.style.background =
+      newStage === TASK_STAGES.merged ? '#00ff88' : '#00f2ff';
+
+    const stageNames = [
+      'Planning',
+      'PR Opened',
+      'CI Running',
+      'CI Passed',
+      'Policy Checked',
+      'Merge Complete'
+    ];
+
+    taskLog.stageLabel.innerText = `Stage: ${stageNames[newStage]}`;
+  }
+
+  taskLog.progressFill.style.width = `${percent}%`;
 }
 
 function appendConsole(msg) {
@@ -12800,6 +12887,7 @@ function handleAgentStreamEvent(data) {
     updateCIStatus(data);
 
     if (data.status === 'in_progress') {
+      updateTaskStage(resolvedTaskId, TASK_STAGES.ci_running);
       line.innerText = 'CI started';
       line.style.color = '#ffaa00';
       taskLog.status.innerText = 'running';
@@ -12807,6 +12895,7 @@ function handleAgentStreamEvent(data) {
     }
 
     if (data.conclusion === 'success') {
+      updateTaskStage(resolvedTaskId, TASK_STAGES.ci_passed);
       line.innerText = 'CI passed';
       line.style.color = '#00ff88';
       taskLog.status.innerText = 'ci passed';
@@ -12814,6 +12903,7 @@ function handleAgentStreamEvent(data) {
     }
 
     if (data.conclusion === 'failure') {
+      updateTaskStage(resolvedTaskId, TASK_STAGES.failed);
       line.innerText = 'CI failed';
       line.style.color = '#ff4d6d';
       taskLog.status.innerText = 'failed';
@@ -12822,23 +12912,31 @@ function handleAgentStreamEvent(data) {
   }
 
   if (data.type === 'pr' || data.type === 'pr_update') {
+    updateTaskStage(resolvedTaskId, TASK_STAGES.pr_opened);
     updatePRStatus(data);
     line.innerText = `PR #${data.pr_number} ${data.merged ? 'merged' : 'updated'}`;
     line.style.color = '#00f2ff';
 
     if (data.merged) {
+      updateTaskStage(resolvedTaskId, TASK_STAGES.merged);
       taskLog.status.innerText = 'merged';
       taskLog.status.style.color = '#00f2ff';
     }
   }
 
   if (data.type === 'policy') {
+    updateTaskStage(resolvedTaskId, TASK_STAGES.policy_checked);
     line.innerText = `Policy risk: ${data.risk_level}`;
     line.style.color = data.risk_level === 'high'
       ? '#ff4d6d'
       : data.risk_level === 'medium'
         ? '#ffaa00'
         : '#00ff88';
+
+    if (data.risk_level === 'high') {
+      updateTaskStage(resolvedTaskId, TASK_STAGES.failed);
+    }
+
     taskLog.status.innerText = `risk: ${data.risk_level}`;
     taskLog.status.style.color = line.style.color;
   }
