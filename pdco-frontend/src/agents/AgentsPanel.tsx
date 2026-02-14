@@ -4,6 +4,7 @@ import PRMonitor from './PRMonitor';
 import PolicyPanel from './PolicyPanel';
 import BudgetPanel from './BudgetPanel';
 import DiffInspectionPanel from './DiffInspectionPanel';
+import DualDiffPanel from './DualDiffPanel';
 import { useAgentSocket } from './useAgentSocket';
 import type { AgentEvent, AgentRunResponse, PRTaskResult, TaskGraph } from './types';
 
@@ -14,6 +15,9 @@ export default function AgentsPanel() {
   const [eventLog, setEventLog] = useState<AgentEvent[]>([]);
   const [timelineIndex, setTimelineIndex] = useState<number>(0);
   const [selectedEventIndex, setSelectedEventIndex] = useState<number | null>(null);
+  const [compareIndexA, setCompareIndexA] = useState<number | null>(null);
+  const [compareIndexB, setCompareIndexB] = useState<number | null>(null);
+  const [compareMode, setCompareMode] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [mergedTaskEvent, setMergedTaskEvent] = useState<{ taskId: string; nonce: number } | null>(null);
   const previousDerivedStateRef = useRef<Record<string, string>>({});
@@ -51,6 +55,54 @@ export default function AgentsPanel() {
 
   const derivedTaskStates = useMemo(() => reconstructState(timelineIndex), [reconstructState, timelineIndex]);
 
+  const orderedCompareIndexes = useMemo(() => {
+    if (compareIndexA === null || compareIndexB === null) return null;
+    return {
+      a: Math.min(compareIndexA, compareIndexB),
+      b: Math.max(compareIndexA, compareIndexB)
+    };
+  }, [compareIndexA, compareIndexB]);
+
+  const reconstructRepoState = useCallback(
+    (index: number) => {
+      const repo: Record<string, string> = {};
+
+      for (let i = 0; i <= index && i < eventLog.length; i += 1) {
+        const event = eventLog[i];
+
+        if (event.diff?.files) {
+          event.diff.files.forEach((file) => {
+            repo[file.path] = file.after ?? '';
+          });
+        }
+      }
+
+      return repo;
+    },
+    [eventLog]
+  );
+
+  const computeSnapshotDiff = useCallback(
+    (a: number, b: number) => {
+      const stateA = reconstructRepoState(a);
+      const stateB = reconstructRepoState(b);
+
+      const allPaths = new Set([...Object.keys(stateA), ...Object.keys(stateB)]);
+
+      return Array.from(allPaths).reduce<Array<{ path: string; before: string; after: string }>>((diffs, path) => {
+        const before = stateA[path] || '';
+        const after = stateB[path] || '';
+
+        if (before !== after) {
+          diffs.push({ path, before, after });
+        }
+
+        return diffs;
+      }, []);
+    },
+    [reconstructRepoState]
+  );
+
   const runAgents = useCallback(async () => {
     const response = await fetch('http://localhost:3000/multi-agent-run', {
       method: 'POST',
@@ -68,6 +120,9 @@ export default function AgentsPanel() {
     setEventLog([]);
     setTimelineIndex(0);
     setSelectedEventIndex(null);
+    setCompareIndexA(null);
+    setCompareIndexB(null);
+    setCompareMode(false);
     setIsPlaying(false);
     setMergedTaskEvent(null);
     previousDerivedStateRef.current = {};
@@ -137,6 +192,8 @@ export default function AgentsPanel() {
     if (!eventLog.length) {
       setTimelineIndex(0);
       setSelectedEventIndex(null);
+      setCompareIndexA(null);
+      setCompareIndexB(null);
       return;
     }
 
@@ -228,7 +285,17 @@ export default function AgentsPanel() {
                   const idx = Number(e.target.value);
                   setIsPlaying(false);
                   setTimelineIndex(idx);
-                  setSelectedEventIndex(idx);
+
+                  if (compareMode) {
+                    if (compareIndexA === null) {
+                      setCompareIndexA(idx);
+                      setCompareIndexB(null);
+                    } else {
+                      setCompareIndexB(idx);
+                    }
+                  } else {
+                    setSelectedEventIndex(idx);
+                  }
                 }}
                 style={{ width: '400px', marginLeft: 20 }}
               />
@@ -236,6 +303,27 @@ export default function AgentsPanel() {
               <span style={{ marginLeft: 12 }}>
                 {timelineIndex} / {Math.max(eventLog.length - 1, 0)}
               </span>
+
+              <div style={{ marginTop: 10 }}>
+                <button
+                  onClick={() => {
+                    setCompareMode((enabled) => {
+                      const next = !enabled;
+
+                      if (next) {
+                        setCompareIndexA(null);
+                        setCompareIndexB(null);
+                      } else {
+                        setSelectedEventIndex(timelineIndex);
+                      }
+
+                      return next;
+                    });
+                  }}
+                >
+                  {compareMode ? 'Exit Compare Mode' : 'Enter Compare Mode'}
+                </button>
+              </div>
 
               <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
                 {eventLog.map((event, index) => (
@@ -264,7 +352,15 @@ export default function AgentsPanel() {
                 ))}
               </div>
 
-              {selectedEventIndex !== null && <DiffInspectionPanel event={eventLog[selectedEventIndex]} />}
+              {compareMode && orderedCompareIndexes !== null && (
+                <DualDiffPanel
+                  indexA={orderedCompareIndexes.a}
+                  indexB={orderedCompareIndexes.b}
+                  diffs={computeSnapshotDiff(orderedCompareIndexes.a, orderedCompareIndexes.b)}
+                />
+              )}
+
+              {!compareMode && selectedEventIndex !== null && <DiffInspectionPanel event={eventLog[selectedEventIndex]} />}
             </div>
           </div>
           <div className="agents-sidebar">
