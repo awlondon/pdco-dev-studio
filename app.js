@@ -4118,6 +4118,7 @@ async function bootApp() {
   await syncAllRuns();
   await resumeAllAgents();
   await initAgentSimulationHarness();
+  ensureAgentsWorkspaceMounted();
 
   appMachine.dispatch(EVENTS.START);
 
