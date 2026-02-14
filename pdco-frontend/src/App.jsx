@@ -342,6 +342,7 @@ const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, o
 });
 
 function App() {
+  const [mode, setMode] = useState('studio');
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
   const shellRef = useRef(null);
@@ -467,53 +468,61 @@ function App() {
     <>
       <div className="workspace-toolbar">
         <strong>Workspace Layout</strong>
+        <button onClick={() => setMode('studio')} disabled={mode === 'studio'}>Dev Studio</button>
+        <button onClick={() => setMode('agents')} disabled={mode === 'agents'}>Agents</button>
         <button onClick={resetLayout}>Reset layout</button>
         <button onClick={exportLayout}>Export layout JSON</button>
       </div>
 
-      <main className="workspace-shell" ref={shellRef} style={shellStyle}>
-        <div className="left-column">
-          <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
-        </div>
-        <div className="divider" onMouseDown={onDividerStart('left')} />
+      {mode === 'studio' && (
+        <>
+          <main className="workspace-shell" ref={shellRef} style={shellStyle}>
+            <div className="left-column">
+              <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
+            </div>
+            <div className="divider" onMouseDown={onDividerStart('left')} />
 
-        <section className="center-column">
-          <EditorPanel value={editorValue} onChange={onEditorChange} panelLayout={layout.panels.editor} onToggleVisible={togglePanelVisible} />
-          <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-        </section>
+            <section className="center-column">
+              <EditorPanel value={editorValue} onChange={onEditorChange} panelLayout={layout.panels.editor} onToggleVisible={togglePanelVisible} />
+              <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+            </section>
 
-        <div className="divider" onMouseDown={onDividerStart('right')} />
+            <div className="divider" onMouseDown={onDividerStart('right')} />
 
-        <section className="right-column">
-          <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-        </section>
-      </main>
+            <section className="right-column">
+              <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+            </section>
+          </main>
 
-      {!!floatingPanels.length && (
-        <aside className="floating-area">
-          {floatingPanels.includes('preview') && (
-            <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+          {!!floatingPanels.length && (
+            <aside className="floating-area">
+              {floatingPanels.includes('preview') && (
+                <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              )}
+              {floatingPanels.includes('console') && (
+                <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              )}
+              {floatingPanels.includes('files') && (
+                <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
+              )}
+              {floatingPanels.includes('tasks') && (
+                <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              )}
+              {floatingPanels.includes('agents') && (
+                <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              )}
+              {floatingPanels.includes('settings') && (
+                <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+              )}
+            </aside>
           )}
-          {floatingPanels.includes('console') && (
-            <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          )}
-          {floatingPanels.includes('files') && (
-            <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
-          )}
-          {floatingPanels.includes('tasks') && (
-            <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          )}
-          {floatingPanels.includes('agents') && (
-            <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          )}
-          {floatingPanels.includes('settings') && (
-            <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          )}
-        </aside>
+        </>
       )}
+
+      {mode === 'agents' && <AgentsPanel />}
     </>
   );
 }
