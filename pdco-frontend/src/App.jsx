@@ -342,14 +342,14 @@ const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, o
 });
 
 function App() {
-  const [mode, setMode] = useState('studio');
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
   const shellRef = useRef(null);
   const dragRef = useRef({ active: false, side: null, value: 0 });
 
   const hasLeftPanel = layout.panels.files.visible && layout.panels.files.docked;
-  const hasRightPanel = ['preview', 'tasks', 'agents', 'settings'].some((id) => layout.panels[id].visible && layout.panels[id].docked);
+  const hasRightPanel = ['preview', 'tasks', 'settings'].some((id) => layout.panels[id].visible && layout.panels[id].docked);
   const dockIsVisible = layout.panels.console.visible && layout.panels.console.docked;
 
   const shellStyle = useMemo(
@@ -462,20 +462,21 @@ function App() {
     };
   }, []);
 
-  const floatingPanels = Object.keys(layout.panels).filter((id) => id !== 'editor' && layout.panels[id].visible && !layout.panels[id].docked);
+  const floatingPanels = Object.keys(layout.panels).filter(
+    (id) => id !== 'editor' && id !== 'agents' && layout.panels[id].visible && !layout.panels[id].docked
+  );
 
   return (
-    <>
+    <div className="workspace-root">
       <div className="workspace-toolbar">
         <strong>Workspace Layout</strong>
-        <button onClick={() => setMode('studio')} disabled={mode === 'studio'}>Dev Studio</button>
-        <button onClick={() => setMode('agents')} disabled={mode === 'agents'}>Agents</button>
+        <button onClick={() => setAgentsOpen((open) => !open)}>{agentsOpen ? 'Close Agents' : 'Open Agents'}</button>
         <button onClick={resetLayout}>Reset layout</button>
         <button onClick={exportLayout}>Export layout JSON</button>
       </div>
 
-      {mode === 'studio' && (
-        <>
+      <div className="workspace-main">
+        <div className="workspace-studio">
           <main className="workspace-shell" ref={shellRef} style={shellStyle}>
             <div className="left-column">
               <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
@@ -492,7 +493,6 @@ function App() {
             <section className="right-column">
               <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
               <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
               <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
             </section>
           </main>
@@ -511,19 +511,20 @@ function App() {
               {floatingPanels.includes('tasks') && (
                 <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
               )}
-              {floatingPanels.includes('agents') && (
-                <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              )}
               {floatingPanels.includes('settings') && (
                 <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
               )}
             </aside>
           )}
-        </>
-      )}
+        </div>
 
-      {mode === 'agents' && <AgentsPanel />}
-    </>
+        {agentsOpen && (
+          <aside className="agents-dock">
+            <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+          </aside>
+        )}
+      </div>
+    </div>
   );
 }
 

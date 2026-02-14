@@ -8,6 +8,12 @@ body {
   color: #e9edf7;
 }
 
+.workspace-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
 .workspace-toolbar {
   height: 44px;
   display: flex;
@@ -18,6 +24,18 @@ body {
   background: #0f1322;
 }
 
+.workspace-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-studio {
+  flex: 1;
+  min-width: 0;
+}
+
 .workspace-shell {
   --left-width: 280px;
   --right-width: 360px;
@@ -25,7 +43,16 @@ body {
   display: grid;
   grid-template-columns: var(--left-width) 8px 1fr 8px var(--right-width);
   gap: 0;
-  height: calc(100vh - 44px);
+  height: 100%;
+}
+
+.agents-dock {
+  width: min(45vw, 640px);
+  min-width: 360px;
+  border-left: 1px solid #242b46;
+  background: #0d0d15;
+  overflow: auto;
+  padding: 8px;
 }
 
 .left-column,
