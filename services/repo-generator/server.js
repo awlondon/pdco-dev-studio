@@ -301,14 +301,17 @@ app.get('/', (_req, res) => {
   <title>OpenClaw Orchestrator Cockpit</title>
   <style>
     body { font-family: Inter, system-ui, sans-serif; margin: 0; padding: 24px; background: #0b1020; color: #d6e0ff; }
-    h1 { margin-top: 0; }
+    h1, h3 { margin-top: 0; }
     #status { margin-bottom: 12px; color: #7ee7ff; }
-    #pr-list { display: grid; gap: 8px; }
-    .pr-card { border: 1px solid #304070; border-radius: 10px; padding: 12px; background: #111935; }
+    .layout { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 14px; }
+    .panel { border: 1px solid #2d3d70; border-radius: 12px; padding: 12px; background: #111935; }
+    .stack { display: grid; gap: 8px; }
+    textarea, input[type='text'] { width: 100%; background: #080d1d; border: 1px solid #2d3d70; color: #d6e0ff; border-radius: 8px; padding: 8px; }
+    button { background: #2d6cff; color: white; border: 0; border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+    .task { border: 1px solid #304070; border-radius: 10px; padding: 10px; background: #0d1631; margin-bottom: 8px; }
     .running { border-color: #00bcd4; box-shadow: 0 0 0 1px #00bcd4 inset; }
     .done { border-color: #17c964; box-shadow: 0 0 0 1px #17c964 inset; }
     .error { border-color: #f31260; box-shadow: 0 0 0 1px #f31260 inset; }
-    .merged { color: #c084fc; }
     #log-panel { margin-top: 16px; border: 1px solid #2d3d70; border-radius: 10px; padding: 10px; max-height: 260px; overflow-y: auto; background: #080d1d; }
     #log-panel div { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; margin: 4px 0; }
   </style>
@@ -316,27 +319,144 @@ app.get('/', (_req, res) => {
 <body>
   <h1>OpenClaw Execution Cockpit</h1>
   <div id="status">Connecting...</div>
-  <div id="pr-list"></div>
+  <div class="layout">
+    <div class="panel stack">
+      <h3>Objective</h3>
+      <input id="intentInput" type="text" value="Build a task-based static docs site" />
+      <label>
+        <input type="checkbox" id="multiAgentToggle" checked />
+        Multi-Agent Mode
+      </label>
+      <button id="runButton" type="button">Run</button>
+    </div>
+
+    <div class="panel stack">
+      <h3>JSON Input (basic mode)</h3>
+      <textarea id="jsonInput" rows="16">{
+  "objective": "Build a task-based static docs site",
+  "tasks": [
+    { "id": "task-1", "description": "Add homepage", "dependencies": [] }
+  ],
+  "execution": { "auto_merge": false, "enable_pages": true }
+}</textarea>
+    </div>
+
+    <div class="panel stack">
+      <h3>Tasks</h3>
+      <div id="taskList"></div>
+
+      <h3>PR Monitor</h3>
+      <div id="prList"></div>
+
+      <h3>Policy</h3>
+      <div id="policyPanel"></div>
+
+      <h3>Budget</h3>
+      <div id="budgetPanel"></div>
+    </div>
+  </div>
   <div id="log-panel"></div>
 
   <script>
-    const prList = document.getElementById('pr-list');
     const statusEl = document.getElementById('status');
     const logPanel = document.getElementById('log-panel');
+    const runButton = document.getElementById('runButton');
 
-    function ensurePRCard(data) {
-      const prId = 'pr-' + data.pr_number;
-      let div = document.getElementById(prId);
-      if (!div) {
-        div = document.createElement('div');
-        div.id = prId;
-        div.className = 'pr-card';
-        div.dataset.sha = data.sha || '';
-        div.innerText = 'PR #' + data.pr_number + ' - Open';
-        prList.prepend(div);
-      }
-      return div;
+    function renderTasks(tasks) {
+      const container = document.getElementById('taskList');
+      container.innerHTML = '';
+
+      tasks.forEach((task) => {
+        const div = document.createElement('div');
+        div.className = 'task';
+        div.innerText = task.task_id + ' - ' + task.status;
+        container.appendChild(div);
+      });
     }
+
+    function renderPRs(tasks) {
+      const container = document.getElementById('prList');
+      container.innerHTML = '';
+
+      tasks.forEach((task) => {
+        if (!task.pr_number) return;
+
+        const div = document.createElement('div');
+        div.id = 'pr-' + task.pr_number;
+        div.className = 'task';
+        div.dataset.sha = task.sha || task.pr_head_sha || '';
+        div.innerText = 'PR #' + task.pr_number + ' - Pending';
+
+        container.appendChild(div);
+      });
+    }
+
+    function renderPolicyBlock(policy) {
+      const panel = document.getElementById('policyPanel');
+      const div = document.createElement('div');
+      div.className = 'task error';
+
+      const reasons = (policy.reasons || []).map((reason) => '<li>' + reason + '</li>').join('');
+      div.innerHTML = '<strong>Blocked (' + policy.risk_level + ')</strong><ul>' + reasons + '</ul>';
+      panel.appendChild(div);
+    }
+
+    function updateBudget(budget) {
+      const panel = document.getElementById('budgetPanel');
+      panel.innerHTML = 'Tokens: ' + budget.tokens_used + '<br/>API Calls: ' + budget.api_calls;
+    }
+
+    async function runTasks() {
+      const objective = document.getElementById('intentInput').value;
+      const multi = document.getElementById('multiAgentToggle').checked;
+
+      const endpoint = multi ? '/multi-agent-run' : '/generate-repo-with-prs';
+      const payload = multi
+        ? {
+            objective,
+            constraints: {
+              risk: 'medium',
+              budget: { max_tokens: 120000, max_api_calls: 80 },
+            },
+            execution: { enable_pages: true },
+          }
+        : JSON.parse(document.getElementById('jsonInput').value);
+
+      const response = await fetch('http://localhost:3000' + endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      renderTasks(data.tasks || []);
+      renderPRs(data.tasks || []);
+
+      document.getElementById('policyPanel').innerHTML = '';
+      (data.tasks || []).forEach((task) => {
+        if (task.status === 'blocked_by_policy' && task.policy) {
+          renderPolicyBlock(task.policy);
+        }
+      });
+
+      if (data.budget) {
+        updateBudget(data.budget);
+      } else {
+        const taskBudgets = (data.tasks || []).map((task) => task.policy && task.policy.budget).filter(Boolean);
+        if (taskBudgets.length) {
+          const total = taskBudgets.reduce(
+            (acc, budget) => ({
+              tokens_used: acc.tokens_used + (budget.tokens_used || 0),
+              api_calls: acc.api_calls + (budget.api_calls || 0),
+            }),
+            { tokens_used: 0, api_calls: 0 },
+          );
+          updateBudget(total);
+        }
+      }
+    }
+
+    runButton.addEventListener('click', runTasks);
 
     function appendLog(message) {
       const line = document.createElement('div');
@@ -356,9 +476,16 @@ app.get('/', (_req, res) => {
     }
 
     function updatePRStatus(data) {
-      const prEl = ensurePRCard(data);
-      prEl.classList.toggle('merged', Boolean(data.merged));
-      prEl.innerText = 'PR #' + data.pr_number + ' - ' + (data.merged ? 'Merged' : data.state);
+      const prEl = document.getElementById('pr-' + data.pr_number);
+      if (!prEl) return;
+
+      if (data.merged) {
+        prEl.classList.remove('running');
+        prEl.classList.add('done');
+        prEl.innerText = 'PR #' + data.pr_number + ' - Merged';
+      } else {
+        prEl.innerText = 'PR #' + data.pr_number + ' - ' + (data.state || 'Open');
+      }
     }
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
