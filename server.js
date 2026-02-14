@@ -85,8 +85,37 @@ import { buildRetryPrompt } from './server/utils/retryWrapper.js';
 import { createHttpError, logStructured } from './utils/logger.js';
 
 const app = express();
+app.set('trust proxy', 1);
 const revokedSessionStore = new Map();
 const authRateLimitStore = new Map();
+
+function parseEnvOriginList(value) {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function resolveCorsOrigins() {
+  const configuredOrigins = parseEnvOriginList(process.env.CORS_ALLOWED_ORIGINS);
+  if (configuredOrigins.length > 0) {
+    return configuredOrigins;
+  }
+  return [
+    'https://maya-dev-ui.pages.dev',
+    'https://dev.primarydesignco.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    ...parseEnvOriginList(process.env.FRONTEND_URL)
+  ];
+}
+
+function resolveCookieSameSite() {
+  const rawValue = String(process.env.COOKIE_SAMESITE || 'Lax').trim().toLowerCase();
+  if (rawValue === 'none') return 'None';
+  if (rawValue === 'strict') return 'Strict';
+  return 'Lax';
+}
 
 function splitEmailList(value) {
   return String(value || '')
@@ -695,13 +724,7 @@ const allowedCorsOrigins = String(process.env.CORS_ORIGINS || '')
   .filter(Boolean);
 
 app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (allowedCorsOrigins.length === 0) return cb(null, true);
-    return allowedCorsOrigins.includes(origin)
-      ? cb(null, true)
-      : cb(new Error('CORS blocked'), false);
-  },
+  origin: resolveCorsOrigins(),
   credentials: true
 }));
 
@@ -3402,7 +3425,7 @@ async function issueSessionCookie(res, req, user, options = {}) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=Lax',
+    `SameSite=${resolveCookieSameSite()}`,
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`
   ];
 
@@ -3433,7 +3456,7 @@ function clearSessionCookie(res) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=Lax',
+    `SameSite=${resolveCookieSameSite()}`,
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT'
   ];
 

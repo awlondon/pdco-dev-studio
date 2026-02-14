@@ -58,7 +58,7 @@ let agentSyncIntervalId = null;
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
-    const res = await fetch(`${API_BASE}${url}`, options);
+    const res = await fetch(`${API_BASE}${url}`, { mode: 'cors', ...options });
     if (!res.ok) {
       console.warn(`API error ${res.status} for ${url}`);
       return fallback;
@@ -138,7 +138,7 @@ async function fetchOptionalApi(path, options = {}) {
 
   const requestPromise = (async () => {
     try {
-      const response = await fetch(`${API_BASE}${path}`, fetchOptions);
+      const response = await fetch(`${API_BASE}${path}`, { mode: 'cors', ...fetchOptions });
       if (response.status === 404 || response.status === 405 || response.status === 501) {
         unsupportedApiEndpoints.add(endpointKey);
         console.info(`API endpoint not available: ${endpointKey}`);
