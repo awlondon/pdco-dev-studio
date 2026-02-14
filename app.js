@@ -12301,6 +12301,7 @@ const WORKSPACE_PANELS = ['pipeline', 'chat', 'code', 'console', 'agents'];
 const agentTaskLogs = {};
 const executionState = {};
 let dependencyMap = {};
+let criticalPath = [];
 const TASK_STAGES = {
   planning: 0,
   pr_opened: 1,
@@ -12404,6 +12405,95 @@ function updateDependencyGlow() {
       node.setAttribute('opacity', '1');
     }
   });
+}
+
+function computeCriticalPath() {
+  const memo = {};
+
+  function dfs(taskId) {
+    if (memo[taskId]) {
+      return memo[taskId];
+    }
+
+    const deps = dependencyMap[taskId] || [];
+    if (deps.length === 0) {
+      memo[taskId] = [taskId];
+      return memo[taskId];
+    }
+
+    let longest = [];
+
+    deps.forEach((dep) => {
+      const path = dfs(dep);
+      if (path.length > longest.length) {
+        longest = path;
+      }
+    });
+
+    memo[taskId] = [...longest, taskId];
+    return memo[taskId];
+  }
+
+  let globalLongest = [];
+
+  Object.keys(dependencyMap).forEach((taskId) => {
+    const path = dfs(taskId);
+    if (path.length > globalLongest.length) {
+      globalLongest = path;
+    }
+  });
+
+  criticalPath = globalLongest;
+}
+
+function highlightCriticalPath() {
+  Object.keys(dependencyMap).forEach((taskId) => {
+    const node = document.getElementById(`node-${taskId}`);
+    if (!node) {
+      return;
+    }
+
+    node.setAttribute('stroke-width', '2');
+    node.style.filter = '';
+  });
+
+  criticalPath.forEach((taskId) => {
+    const node = document.getElementById(`node-${taskId}`);
+    if (!node) {
+      return;
+    }
+
+    node.setAttribute('stroke', '#ffcc00');
+    node.setAttribute('stroke-width', '4');
+    node.style.filter = 'drop-shadow(0 0 8px #ffcc00)';
+  });
+}
+
+function highlightCriticalEdges() {
+  Object.entries(dependencyMap).forEach(([taskId, deps]) => {
+    (deps || []).forEach((dep) => {
+      const edge = document.getElementById(`edge-${dep}-${taskId}`);
+      if (!edge) {
+        return;
+      }
+
+      edge.setAttribute('stroke', '#666');
+      edge.setAttribute('stroke-width', '1.5');
+    });
+  });
+
+  for (let i = 0; i < criticalPath.length - 1; i += 1) {
+    const from = criticalPath[i];
+    const to = criticalPath[i + 1];
+
+    const edge = document.getElementById(`edge-${from}-${to}`);
+    if (!edge) {
+      continue;
+    }
+
+    edge.setAttribute('stroke', '#ffcc00');
+    edge.setAttribute('stroke-width', '3');
+  }
 }
 
 function getOrCreateTaskLog(taskId) {
@@ -12542,6 +12632,9 @@ function updateTaskStage(taskId, newStage) {
   taskLog.progressFill.style.width = `${percent}%`;
   updateExecutionNodeVisual(taskId, newStage);
   updateDependencyGlow();
+  computeCriticalPath();
+  highlightCriticalPath();
+  highlightCriticalEdges();
 }
 
 function updateExecutionNodeVisual(taskId, stage) {
@@ -12597,6 +12690,34 @@ function renderExecutionMap(graph) {
     dependencyMap[task.id] = task.dependencies || [];
   });
 
+  const nodePositions = {};
+  graph.tasks.forEach((task, i) => {
+    nodePositions[task.id] = {
+      x: 100 + i * 80,
+      y: 100
+    };
+  });
+
+  graph.tasks.forEach((task) => {
+    const to = nodePositions[task.id];
+    (task.dependencies || []).forEach((dep) => {
+      const from = nodePositions[dep];
+      if (!from || !to) {
+        return;
+      }
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', String(from.x));
+      line.setAttribute('y1', String(from.y));
+      line.setAttribute('x2', String(to.x));
+      line.setAttribute('y2', String(to.y));
+      line.setAttribute('stroke', '#666');
+      line.setAttribute('stroke-width', '1.5');
+      line.setAttribute('id', `edge-${dep}-${task.id}`);
+      svg.appendChild(line);
+    });
+  });
+
   graph.tasks.forEach((task, i) => {
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     circle.setAttribute('cx', String(100 + i * 80));
@@ -12623,6 +12744,9 @@ function renderExecutionMap(graph) {
   });
 
   updateDependencyGlow();
+  computeCriticalPath();
+  highlightCriticalPath();
+  highlightCriticalEdges();
 }
 
 function wireAgentPanelEvents() {
