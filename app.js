@@ -541,6 +541,8 @@ let prList = document.getElementById('prList');
 let policyPanel = document.getElementById('policyPanel');
 let budgetPanel = document.getElementById('budgetPanel');
 let executionGraph = document.getElementById('executionGraph');
+let agentSidePanel = null;
+let agentPanelOpen = false;
 const fullscreenToggle = document.getElementById('fullscreenToggle');
 const interfaceStatus = document.getElementById('interfaceStatus');
 const viewDiffBtn = document.getElementById('viewDiffBtn');
@@ -4119,6 +4121,8 @@ async function bootApp() {
   await resumeAllAgents();
   await initAgentSimulationHarness();
   ensureAgentsWorkspaceMounted();
+  mountAgentSidePanel();
+  mountAgentToggleButton();
 
   appMachine.dispatch(EVENTS.START);
 
@@ -12295,6 +12299,190 @@ document.addEventListener('keydown', (event) => {
 
 const WORKSPACE_PANELS = ['pipeline', 'chat', 'code', 'console', 'agents'];
 
+function getCurrentPrompt() {
+  return getPromptInput() || getEditorValue() || '';
+}
+
+function appendAgentLog(msg) {
+  const log = document.getElementById('agent-log');
+  if (!log) {
+    return;
+  }
+  const line = document.createElement('div');
+  line.innerText = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function appendConsole(msg) {
+  const out = document.getElementById('agent-console-output');
+  if (!out) {
+    return;
+  }
+  const line = document.createElement('div');
+  line.innerText = msg;
+  out.appendChild(line);
+  out.scrollTop = out.scrollHeight;
+}
+
+function renderExecutionMap(graph) {
+  const svg = document.getElementById('hlsf-skg-map') || executionGraph;
+  if (!svg || !graph?.tasks?.length) {
+    return;
+  }
+
+  svg.innerHTML = '';
+
+  graph.tasks.forEach((task, i) => {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', String(100 + i * 80));
+    circle.setAttribute('cy', '100');
+    circle.setAttribute('r', '20');
+    circle.setAttribute('fill', '#00f2ff');
+    circle.dataset.taskId = task.id;
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', String(100 + i * 80));
+    text.setAttribute('y', '105');
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('fill', '#000');
+    text.textContent = task.id;
+
+    svg.appendChild(circle);
+    svg.appendChild(text);
+  });
+}
+
+function wireAgentPanelEvents() {
+  const runBtn = document.getElementById('run-e2e-btn');
+  const log = document.getElementById('agent-log');
+
+  if (runBtn) {
+    runBtn.onclick = async () => {
+      runBtn.disabled = true;
+      runBtn.innerText = 'Running...';
+      if (log) {
+        log.style.display = 'block';
+        log.innerHTML = '';
+      }
+
+      appendAgentLog('Initializing execution...');
+
+      try {
+        const res = await fetch('http://localhost:3000/multi-agent-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ objective: getCurrentPrompt() })
+        });
+
+        const data = await res.json();
+        appendAgentLog('Execution started.');
+        renderExecutionMap(data.task_graph);
+      } catch (err) {
+        appendAgentLog(`Error: ${err.message}`);
+      }
+
+      runBtn.innerText = 'Output Log';
+    };
+  }
+
+  const diffBtn = document.getElementById('agent-diff-btn');
+  if (diffBtn) {
+    diffBtn.onclick = () => {
+      appendConsole('Generating diff...');
+    };
+  }
+
+  const pushBtn = document.getElementById('agent-push-btn');
+  if (pushBtn) {
+    pushBtn.onclick = () => {
+      appendConsole('Pushing branch...');
+    };
+  }
+
+  const mergeBtn = document.getElementById('agent-merge-btn');
+  if (mergeBtn) {
+    mergeBtn.onclick = () => {
+      appendConsole('Merging PR...');
+    };
+  }
+}
+
+function mountAgentSidePanel() {
+  if (agentSidePanel) {
+    return;
+  }
+
+  agentSidePanel = document.createElement('div');
+  agentSidePanel.id = 'agent-side-panel';
+  agentSidePanel.style.cssText = `
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 420px;
+    height: 100%;
+    background: #0d0d15;
+    border-left: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    z-index: 1000;
+  `;
+
+  agentSidePanel.innerHTML = `
+    <div id="agent-top" style="padding:12px;border-bottom:1px solid #333;">
+      <button id="run-e2e-btn" style="width:100%;padding:8px;">
+        Run End-to-End
+      </button>
+      <div id="agent-log" style="display:none;margin-top:8px;height:120px;overflow:auto;font-size:12px;"></div>
+    </div>
+
+    <div id="agent-map" style="flex:1;border-bottom:1px solid #333;">
+      <svg id="hlsf-skg-map" width="100%" height="100%"></svg>
+    </div>
+
+    <div id="agent-console" style="padding:10px;">
+      <button id="agent-diff-btn">Diff</button>
+      <button id="agent-push-btn">Push</button>
+      <button id="agent-merge-btn">Merge</button>
+      <div id="agent-console-output" style="margin-top:8px;font-size:12px;height:80px;overflow:auto;"></div>
+    </div>
+  `;
+
+  document.body.appendChild(agentSidePanel);
+  wireAgentPanelEvents();
+
+  const persistedState = safeStorageGet('maya_agent_side_panel_open');
+  agentPanelOpen = persistedState === 'true';
+  agentSidePanel.style.transform = agentPanelOpen ? 'translateX(0)' : 'translateX(100%)';
+}
+
+function mountAgentToggleButton() {
+  const header = document.querySelector('#top-bar') || document.body;
+  if (!header || document.getElementById('agent-panel-toggle-btn')) {
+    return;
+  }
+
+  const btn = document.createElement('button');
+  btn.id = 'agent-panel-toggle-btn';
+  btn.innerText = 'Agent';
+  btn.style.marginLeft = '12px';
+
+  btn.onclick = () => {
+    if (!agentSidePanel) {
+      return;
+    }
+    agentPanelOpen = !agentPanelOpen;
+    safeStorageSet('maya_agent_side_panel_open', String(agentPanelOpen));
+    agentSidePanel.style.transform = agentPanelOpen
+      ? 'translateX(0)'
+      : 'translateX(100%)';
+  };
+
+  header.appendChild(btn);
+}
+
 function ensureAgentsWorkspaceMounted() {
   const workspaceTabBar = document.getElementById('workspace-tab-bar');
   const hasAgentsTab = workspaceTabButtons.some((button) => button.dataset.workspacePanel === 'agents');
@@ -12399,39 +12587,6 @@ function updateNodeState(taskId, state) {
   node.setAttribute('fill', colorMap[state] || '#2a2a38');
 }
 
-function buildExecutionGraph(taskGraph) {
-  if (!executionGraph || !taskGraph?.tasks?.length) {
-    return;
-  }
-  executionGraph.innerHTML = '';
-  const tasks = taskGraph.tasks;
-  const spacingY = 80;
-
-  tasks.forEach((task, index) => {
-    const x = 40;
-    const y = 20 + index * spacingY;
-
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', String(x));
-    rect.setAttribute('y', String(y));
-    rect.setAttribute('rx', '6');
-    rect.setAttribute('width', '220');
-    rect.setAttribute('height', '44');
-    rect.setAttribute('fill', '#2a2a38');
-    rect.setAttribute('stroke', '#4c4c68');
-    rect.dataset.taskId = task.id;
-
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', String(x + 12));
-    label.setAttribute('y', String(y + 26));
-    label.setAttribute('fill', '#fff');
-    label.setAttribute('font-size', '12');
-    label.textContent = `${task.id}: ${task.title || 'Untitled task'}`;
-
-    executionGraph.append(rect, label);
-  });
-}
-
 function handleAgentRunResponse(data) {
   if (prList) {
     prList.innerHTML = '';
@@ -12470,7 +12625,7 @@ function handleAgentRunResponse(data) {
   }
 
   if (data?.task_graph) {
-    buildExecutionGraph(data.task_graph);
+    renderExecutionMap(data.task_graph);
   }
 }
 
