@@ -8,6 +8,7 @@ import {
   readArtifacts,
   saveArtifact
 } from './artifactsStore';
+import AgentsPanel from './agents/AgentsPanel';
 
 const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 const isDev = import.meta.env.DEV;
@@ -19,6 +20,7 @@ const panelDefinitions = {
   console: { title: 'Console / Logs', zone: 'bottom', allowUndock: true },
   files: { title: 'Files', zone: 'left', allowUndock: true },
   tasks: { title: 'Tasks', zone: 'right', allowUndock: true },
+  agents: { title: 'Agents', zone: 'right', allowUndock: true },
   settings: { title: 'Settings', zone: 'right', allowUndock: true }
 };
 
@@ -31,6 +33,7 @@ const defaultLayout = {
     console: { visible: true, docked: true },
     files: { visible: true, docked: true },
     tasks: { visible: true, docked: true },
+    agents: { visible: true, docked: true },
     settings: { visible: false, docked: true }
   }
 };
@@ -324,6 +327,20 @@ const SettingsPanel = memo(function SettingsPanel({ panelLayout, onToggleVisible
   );
 });
 
+const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, onToggleVisible, onToggleDock }) {
+  return (
+    <PanelFrame
+      id="agents"
+      title={panelDefinitions.agents.title}
+      layout={panelLayout}
+      onToggleVisible={onToggleVisible}
+      onToggleDock={onToggleDock}
+    >
+      <AgentsPanel />
+    </PanelFrame>
+  );
+});
+
 function App() {
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
@@ -331,7 +348,7 @@ function App() {
   const dragRef = useRef({ active: false, side: null, value: 0 });
 
   const hasLeftPanel = layout.panels.files.visible && layout.panels.files.docked;
-  const hasRightPanel = ['preview', 'tasks', 'settings'].some((id) => layout.panels[id].visible && layout.panels[id].docked);
+  const hasRightPanel = ['preview', 'tasks', 'agents', 'settings'].some((id) => layout.panels[id].visible && layout.panels[id].docked);
   const dockIsVisible = layout.panels.console.visible && layout.panels.console.docked;
 
   const shellStyle = useMemo(
@@ -470,6 +487,7 @@ function App() {
         <section className="right-column">
           <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
           <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+          <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
           <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
         </section>
       </main>
@@ -487,6 +505,9 @@ function App() {
           )}
           {floatingPanels.includes('tasks') && (
             <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+          )}
+          {floatingPanels.includes('agents') && (
+            <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
           )}
           {floatingPanels.includes('settings') && (
             <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />

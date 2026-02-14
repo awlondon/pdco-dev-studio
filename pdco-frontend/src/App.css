@@ -179,3 +179,48 @@ button {
   gap: 4px;
   margin-bottom: 10px;
 }
+
+.agents-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.agents-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 12px;
+}
+
+.agents-graph-wrap {
+  border: 1px solid #2d375a;
+  border-radius: 8px;
+  background: #111526;
+  overflow: auto;
+}
+
+.agents-graph {
+  width: 100%;
+  min-height: 420px;
+}
+
+.agents-sidebar {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.agents-widget {
+  border: 1px solid #2d375a;
+  border-radius: 8px;
+  background: #111526;
+  padding: 10px;
+}
+
+.agents-widget h4 {
+  margin: 0 0 8px;
+  color: #ecf2ff;
+}
+
+.agents-row {
+  margin-bottom: 6px;
+}
