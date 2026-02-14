@@ -3,6 +3,7 @@ import path from 'node:path';
 import http from 'node:http';
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { plannerAgent, coderAgent, verifierAgent } from './agents.js';
 
 function loadDotEnv() {
   const envPath = path.resolve(process.cwd(), '.env');
@@ -249,6 +250,46 @@ async function mergeIfGreen(repo, prNumber) {
   return { merged: true };
 }
 
+
+function topoSortTasks(tasks) {
+  const taskList = Array.isArray(tasks) ? tasks : [];
+  const byId = new Map(taskList.map((task) => [task.id, task]));
+  const inDegree = new Map(taskList.map((task) => [task.id, 0]));
+  const adjacency = new Map(taskList.map((task) => [task.id, []]));
+
+  for (const task of taskList) {
+    for (const dep of task.dependencies || []) {
+      if (!byId.has(dep)) continue;
+      inDegree.set(task.id, (inDegree.get(task.id) || 0) + 1);
+      adjacency.get(dep).push(task.id);
+    }
+  }
+
+  const queue = [];
+  for (const [id, degree] of inDegree.entries()) {
+    if (degree === 0) queue.push(id);
+  }
+
+  const ordered = [];
+  while (queue.length) {
+    const id = queue.shift();
+    const task = byId.get(id);
+    if (task) ordered.push(task);
+
+    for (const nextId of adjacency.get(id) || []) {
+      const nextDegree = (inDegree.get(nextId) || 0) - 1;
+      inDegree.set(nextId, nextDegree);
+      if (nextDegree === 0) queue.push(nextId);
+    }
+  }
+
+  if (ordered.length !== taskList.length) {
+    throw new Error('Task graph has a dependency cycle.');
+  }
+
+  return ordered;
+}
+
 app.get('/', (_req, res) => {
   res.type('html').send(`<!doctype html>
 <html>
@@ -366,6 +407,101 @@ app.post('/webhook', async (req, res) => {
   }
 
   res.sendStatus(200);
+});
+
+
+
+app.post('/multi-agent-run', async (req, res) => {
+  try {
+    const { objective, constraints = {}, execution = {} } = req.body;
+    if (!objective) {
+      return res.status(400).json({ error: 'objective required' });
+    }
+
+    const plan = plannerAgent({ objective, constraints });
+    const tasks = topoSortTasks(plan?.task_graph?.tasks || []);
+    const repo = slugifyRepoName(objective);
+
+    await githubRequest('POST', '/user/repos', {
+      name: repo,
+      private: false,
+      auto_init: true,
+      description: objective.slice(0, 140),
+    });
+
+    await protectMainBranch(repo);
+
+    const results = [];
+
+    for (const task of tasks) {
+      const patch = coderAgent({ objective, task });
+      const verdict = verifierAgent({ task, patch });
+
+      if (verdict.status !== 'pass') {
+        results.push({
+          task_id: task.id,
+          status: 'blocked',
+          verdict,
+        });
+        continue;
+      }
+
+      await ensureBranchFrom(repo, 'main', patch.branch);
+
+      for (const commit of patch.commits || []) {
+        for (const file of commit.files || []) {
+          await upsertFileOnBranch(repo, patch.branch, file.path, file.content, commit.message);
+        }
+      }
+
+      for (const testFile of verdict.test_files || []) {
+        await upsertFileOnBranch(
+          repo,
+          patch.branch,
+          testFile.path,
+          testFile.content,
+          `Add verifier test artifact for ${task.id}`,
+        );
+      }
+
+      const pr = await openPullRequest(repo, patch.branch, 'main', patch.pr.title, patch.pr.body);
+
+      let merge = { merged: false, reason: 'auto_merge disabled' };
+      if (execution.auto_merge) {
+        merge = await mergeIfGreen(repo, pr.number);
+      }
+
+      results.push({
+        task_id: task.id,
+        status: 'pr_opened',
+        branch: patch.branch,
+        pr_number: pr.number,
+        verifier: verdict.status,
+        merge,
+      });
+    }
+
+    if (execution.enable_pages) {
+      try {
+        await githubRequest('POST', `/repos/${OWNER}/${repo}/pages`, {
+          source: { branch: 'main', path: '/' },
+        });
+      } catch (_error) {
+        // Pages may already be enabled or pending.
+      }
+    }
+
+    return res.json({
+      status: 'ok',
+      repo,
+      live_url: `https://${OWNER}.github.io/${repo}/`,
+      tasks: results,
+      plan,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 app.post('/generate-repo-with-prs', async (req, res) => {
