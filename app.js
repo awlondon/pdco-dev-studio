@@ -523,7 +523,7 @@ const consolePane = document.getElementById('consoleOutput');
 const root = document.getElementById('root');
 const workspace = document.getElementById('workspace');
 const leftPane = document.getElementById('left-pane');
-const workspaceTabButtons = Array.from(document.querySelectorAll('[data-workspace-panel]'));
+let workspaceTabButtons = Array.from(document.querySelectorAll('[data-workspace-panel]'));
 let sandboxFrame = document.getElementById('sandbox');
 const previewFrameHost = document.getElementById('previewFrameContainer');
 const statusLabel = document.getElementById('status-label');
@@ -535,12 +535,12 @@ const rightPane = document.getElementById('right-pane');
 const codePanel = document.getElementById('code-panel');
 const outputPanel = document.getElementById('output-panel');
 const chatPanel = document.getElementById('chat-panel');
-const agentsPanel = document.getElementById('agents-panel');
-const runAgentsButton = document.getElementById('runAgentsBtn');
-const prList = document.getElementById('prList');
-const policyPanel = document.getElementById('policyPanel');
-const budgetPanel = document.getElementById('budgetPanel');
-const executionGraph = document.getElementById('executionGraph');
+let agentsPanel = document.getElementById('agents-panel');
+let runAgentsButton = document.getElementById('runAgentsBtn');
+let prList = document.getElementById('prList');
+let policyPanel = document.getElementById('policyPanel');
+let budgetPanel = document.getElementById('budgetPanel');
+let executionGraph = document.getElementById('executionGraph');
 const fullscreenToggle = document.getElementById('fullscreenToggle');
 const interfaceStatus = document.getElementById('interfaceStatus');
 const viewDiffBtn = document.getElementById('viewDiffBtn');
@@ -12294,6 +12294,60 @@ document.addEventListener('keydown', (event) => {
 
 const WORKSPACE_PANELS = ['chat', 'code', 'console', 'agents'];
 
+function ensureAgentsWorkspaceMounted() {
+  const workspaceTabBar = document.getElementById('workspace-tab-bar');
+  const hasAgentsTab = workspaceTabButtons.some((button) => button.dataset.workspacePanel === 'agents');
+
+  if (!hasAgentsTab && workspaceTabBar) {
+    const tabButton = document.createElement('button');
+    tabButton.className = 'workspace-tab-button';
+    tabButton.type = 'button';
+    tabButton.dataset.workspacePanel = 'agents';
+    tabButton.textContent = 'Agents';
+    workspaceTabBar.appendChild(tabButton);
+  }
+
+  if (!agentsPanel && rightPane) {
+    const section = document.createElement('section');
+    section.id = 'agents-panel';
+    section.className = 'panel agents-panel hidden';
+    section.setAttribute('aria-label', 'Agents panel');
+    section.innerHTML = `
+      <div class="panel-header">
+        <span>Agents</span>
+      </div>
+      <div class="panel-body agents-panel-body">
+        <div class="agents-layout">
+          <div class="agents-graph-column">
+            <h3>Execution Graph</h3>
+            <svg id="executionGraph" width="100%" height="500"></svg>
+          </div>
+          <div class="agents-side-column">
+            <h3>PR Monitor</h3>
+            <div id="prList" class="agents-box"></div>
+
+            <h3>Policy Status</h3>
+            <div id="policyPanel" class="agents-box"></div>
+
+            <h3>Budget</h3>
+            <div id="budgetPanel" class="agents-box"></div>
+          </div>
+        </div>
+        <button id="runAgentsBtn" class="agents-run-button" type="button">Run via Agents</button>
+      </div>
+    `;
+    rightPane.appendChild(section);
+  }
+
+  workspaceTabButtons = Array.from(document.querySelectorAll('[data-workspace-panel]'));
+  agentsPanel = document.getElementById('agents-panel');
+  runAgentsButton = document.getElementById('runAgentsBtn');
+  prList = document.getElementById('prList');
+  policyPanel = document.getElementById('policyPanel');
+  budgetPanel = document.getElementById('budgetPanel');
+  executionGraph = document.getElementById('executionGraph');
+}
+
 function setWorkspacePanel(panel) {
   const target = WORKSPACE_PANELS.includes(panel) ? panel : 'chat';
 
@@ -12505,6 +12559,8 @@ function connectAgentStatusSocket() {
     console.warn('Unable to connect agent status socket.', error);
   }
 }
+
+ensureAgentsWorkspaceMounted();
 
 workspaceTabButtons.forEach((button) => {
   button.addEventListener('click', () => {
