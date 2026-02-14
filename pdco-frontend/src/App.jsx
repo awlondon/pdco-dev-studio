@@ -466,8 +466,15 @@ function App() {
     (id) => id !== 'editor' && id !== 'agents' && layout.panels[id].visible && !layout.panels[id].docked
   );
 
+  const frontendOrigin = typeof window === 'undefined' ? 'unknown' : window.location.origin;
+  const runtimeLabel = isDev ? 'local-dev' : 'production-build';
+
   return (
     <div className="workspace-root">
+      <div className="frontend-origin-badge" role="status" aria-live="polite">
+        <strong>{runtimeLabel}</strong>
+        <span>{frontendOrigin}</span>
+      </div>
       <div className="workspace-toolbar">
         <strong>Workspace Layout</strong>
         <button onClick={() => setAgentsOpen((open) => !open)}>{agentsOpen ? 'Close Agents' : 'Open Agents'}</button>

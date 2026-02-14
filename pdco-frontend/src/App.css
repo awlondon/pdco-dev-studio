@@ -14,6 +14,32 @@ body {
   height: 100vh;
 }
 
+.frontend-origin-badge {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 300;
+  background: #9f1d2e;
+  color: #fff3f5;
+  border: 1px solid #f56f82;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 35%);
+}
+
+.frontend-origin-badge strong {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.frontend-origin-badge span {
+  font-family: 'JetBrains Mono', monospace;
+}
+
 .workspace-toolbar {
   height: 44px;
   display: flex;
