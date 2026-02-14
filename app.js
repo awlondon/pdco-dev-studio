@@ -12302,6 +12302,7 @@ const agentTaskLogs = {};
 const executionState = {};
 let dependencyMap = {};
 let criticalPath = [];
+let bottleneckScores = {};
 const TASK_STAGES = {
   planning: 0,
   pr_opened: 1,
@@ -12361,6 +12362,7 @@ function clearAgentTaskLogs() {
     delete executionState[taskId];
   });
   dependencyMap = {};
+  bottleneckScores = {};
 }
 
 function checkTaskEligibility(taskId) {
@@ -12494,6 +12496,89 @@ function highlightCriticalEdges() {
     edge.setAttribute('stroke', '#ffcc00');
     edge.setAttribute('stroke-width', '3');
   }
+}
+
+function buildReverseDependencyMap() {
+  const reverse = {};
+
+  Object.keys(dependencyMap).forEach((taskId) => {
+    reverse[taskId] = [];
+  });
+
+  Object.entries(dependencyMap).forEach(([taskId, deps]) => {
+    (deps || []).forEach((dep) => {
+      if (!reverse[dep]) {
+        reverse[dep] = [];
+      }
+      reverse[dep].push(taskId);
+    });
+  });
+
+  return reverse;
+}
+
+function computeBottleneckScores() {
+  const reverseMap = buildReverseDependencyMap();
+  bottleneckScores = {};
+
+  function dfs(taskId, visited) {
+    if (visited.has(taskId)) {
+      return 0;
+    }
+
+    visited.add(taskId);
+    let count = 0;
+    const children = reverseMap[taskId] || [];
+
+    children.forEach((child) => {
+      count += 1;
+      count += dfs(child, visited);
+    });
+
+    return count;
+  }
+
+  Object.keys(dependencyMap).forEach((taskId) => {
+    bottleneckScores[taskId] = dfs(taskId, new Set());
+  });
+}
+
+function getNormalizedBottleneckScore(taskId) {
+  const scores = Object.values(bottleneckScores);
+  if (!scores.length) {
+    return 0;
+  }
+
+  const max = Math.max(...scores);
+  if (max === 0) {
+    return 0;
+  }
+
+  return (bottleneckScores[taskId] || 0) / max;
+}
+
+function highlightBottlenecks() {
+  Object.keys(dependencyMap).forEach((taskId) => {
+    const node = document.getElementById(`node-${taskId}`);
+    if (!node) {
+      return;
+    }
+
+    const stage = executionState[taskId]?.stage;
+    if (stage === TASK_STAGES.failed || stage === TASK_STAGES.merged) {
+      return;
+    }
+
+    const score = getNormalizedBottleneckScore(taskId);
+    if (score > 0.7) {
+      node.setAttribute('stroke', '#ff00ff');
+      node.setAttribute('stroke-width', '4');
+      node.style.filter = 'drop-shadow(0 0 10px #ff00ff)';
+    } else if (score > 0.4) {
+      node.setAttribute('stroke', '#ff66cc');
+      node.setAttribute('stroke-width', '3');
+    }
+  });
 }
 
 function getOrCreateTaskLog(taskId) {
@@ -12635,6 +12720,8 @@ function updateTaskStage(taskId, newStage) {
   computeCriticalPath();
   highlightCriticalPath();
   highlightCriticalEdges();
+  computeBottleneckScores();
+  highlightBottlenecks();
 }
 
 function updateExecutionNodeVisual(taskId, stage) {
@@ -12747,6 +12834,8 @@ function renderExecutionMap(graph) {
   computeCriticalPath();
   highlightCriticalPath();
   highlightCriticalEdges();
+  computeBottleneckScores();
+  highlightBottlenecks();
 }
 
 function wireAgentPanelEvents() {
