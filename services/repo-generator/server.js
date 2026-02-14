@@ -341,7 +341,7 @@ app.get('/', (_req, res) => {
 }</textarea>
 
       <h3>Execution Graph</h3>
-      <svg id="executionGraph" width="100%" height="400"></svg>
+      <svg id="executionGraph" width="100%" height="520"></svg>
     </div>
 
     <div class="panel stack">
@@ -398,25 +398,139 @@ app.get('/', (_req, res) => {
       }, 50);
     }
 
-    function drawEdges() {
-      const svg = document.getElementById('executionGraph');
+    function topoSort(tasks) {
+      const idToTask = Object.fromEntries(tasks.map((task) => [task.id, task]));
+      const indeg = new Map(tasks.map((task) => [task.id, 0]));
+      const adj = new Map(tasks.map((task) => [task.id, []]));
 
-      graphState.edges.forEach((edge) => {
-        const fromNode = graphState.nodeMap[edge.from];
-        const toNode = graphState.nodeMap[edge.to];
+      for (const task of tasks) {
+        for (const dep of task.dependencies || []) {
+          if (!idToTask[dep]) continue;
+          adj.get(dep).push(task.id);
+          indeg.set(task.id, (indeg.get(task.id) || 0) + 1);
+        }
+      }
 
-        if (!fromNode || !toNode) return;
+      const queue = [];
+      for (const [id, degree] of indeg.entries()) {
+        if (degree === 0) queue.push(id);
+      }
 
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', fromNode.x);
-        line.setAttribute('y1', fromNode.y);
-        line.setAttribute('x2', toNode.x);
-        line.setAttribute('y2', toNode.y);
-        line.setAttribute('stroke', '#555');
-        line.setAttribute('stroke-width', '2');
+      const out = [];
+      while (queue.length) {
+        const id = queue.shift();
+        out.push(id);
+        for (const next of adj.get(id) || []) {
+          indeg.set(next, indeg.get(next) - 1);
+          if (indeg.get(next) === 0) queue.push(next);
+        }
+      }
 
-        svg.insertBefore(line, svg.firstChild);
-      });
+      return out.length === tasks.length ? out : tasks.map((task) => task.id);
+    }
+
+    function computeLayers(tasks) {
+      const idToTask = Object.fromEntries(tasks.map((task) => [task.id, task]));
+      const order = topoSort(tasks);
+      const layer = {};
+
+      for (const id of order) {
+        const deps = (idToTask[id].dependencies || []).filter((dep) => idToTask[dep]);
+        if (!deps.length) {
+          layer[id] = 0;
+        } else {
+          layer[id] = 1 + Math.max(...deps.map((dep) => layer[dep] ?? 0));
+        }
+      }
+
+      const layers = [];
+      for (const task of tasks) {
+        const currentLayer = layer[task.id] ?? 0;
+        layers[currentLayer] ||= [];
+        layers[currentLayer].push(task.id);
+      }
+
+      return { layerOf: layer, layers };
+    }
+
+    function buildNeighborMaps(tasks) {
+      const idToTask = Object.fromEntries(tasks.map((task) => [task.id, task]));
+      const parents = new Map(tasks.map((task) => [task.id, []]));
+      const children = new Map(tasks.map((task) => [task.id, []]));
+
+      for (const task of tasks) {
+        for (const dep of task.dependencies || []) {
+          if (!idToTask[dep]) continue;
+          parents.get(task.id).push(dep);
+          children.get(dep).push(task.id);
+        }
+      }
+
+      return { parents, children };
+    }
+
+    function orderLayersBarycentric(layers, parents, children, sweeps = 4) {
+      const posInLayer = new Map();
+
+      function setPositions() {
+        layers.forEach((layer) => layer.forEach((id, index) => posInLayer.set(id, index)));
+      }
+
+      function barycenter(ids, neighborMap) {
+        return ids
+          .map((id) => {
+            const neighbors = neighborMap.get(id) || [];
+            if (!neighbors.length) return { id, key: posInLayer.get(id) ?? 0 };
+            const avg = neighbors.reduce((sum, neighbor) => sum + (posInLayer.get(neighbor) ?? 0), 0) / neighbors.length;
+            return { id, key: avg };
+          })
+          .sort((a, b) => a.key - b.key)
+          .map((entry) => entry.id);
+      }
+
+      setPositions();
+
+      for (let sweep = 0; sweep < sweeps; sweep += 1) {
+        for (let i = 1; i < layers.length; i += 1) {
+          layers[i] = barycenter(layers[i], parents);
+          setPositions();
+        }
+
+        for (let i = layers.length - 2; i >= 0; i -= 1) {
+          layers[i] = barycenter(layers[i], children);
+          setPositions();
+        }
+      }
+
+      return layers;
+    }
+
+    function computePositions(layers, svgWidth, svgHeight, opts = {}) {
+      const padX = opts.padX ?? 60;
+      const padY = opts.padY ?? 50;
+      const layerGap = opts.layerGap ?? 180;
+      const minRowGap = opts.minRowGap ?? 90;
+      const positions = {};
+      const maxLayer = layers.length - 1;
+
+      const usableW = Math.max(1, svgWidth - padX * 2);
+      const xStep = maxLayer > 0 ? Math.min(layerGap, usableW / maxLayer) : 0;
+
+      for (let level = 0; level < layers.length; level += 1) {
+        const ids = layers[level];
+        const x = padX + level * xStep;
+        const usableH = Math.max(1, svgHeight - padY * 2);
+        const count = ids.length;
+        const stepY = count > 1 ? Math.max(minRowGap, usableH / (count - 1)) : 0;
+        const totalH = count > 1 ? stepY * (count - 1) : 0;
+        const startY = padY + Math.max(0, (usableH - totalH) / 2);
+
+        ids.forEach((id, index) => {
+          positions[id] = { x, y: startY + index * stepY };
+        });
+      }
+
+      return positions;
     }
 
     function buildExecutionGraph(taskGraph) {
@@ -426,57 +540,107 @@ app.get('/', (_req, res) => {
       Object.keys(graphState.pulseIntervals).forEach((taskId) => stopPulse(taskId));
 
       const tasks = (taskGraph && taskGraph.tasks) || [];
+      if (!tasks.length) return;
+
+      const width = svg.clientWidth || svg.getBoundingClientRect().width || 900;
+      const height = svg.clientHeight || svg.getBoundingClientRect().height || 520;
+
+      const { parents, children } = buildNeighborMaps(tasks);
+      const { layers: rawLayers } = computeLayers(tasks);
+      const layers = orderLayersBarycentric(rawLayers, parents, children, 4);
+      const positions = computePositions(layers, width, height, {
+        padX: 70,
+        padY: 50,
+        layerGap: 220,
+        minRowGap: 90,
+      });
+
       graphState.tasks = tasks;
       graphState.edges = [];
       graphState.nodeMap = {};
 
-      const width = svg.clientWidth || svg.getBoundingClientRect().width || 800;
-      const height = svg.clientHeight || svg.getBoundingClientRect().height || 400;
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      marker.setAttribute('id', 'arrow');
+      marker.setAttribute('markerWidth', '10');
+      marker.setAttribute('markerHeight', '10');
+      marker.setAttribute('refX', '9');
+      marker.setAttribute('refY', '3');
+      marker.setAttribute('orient', 'auto');
 
-      const radius = 30;
-      const spacingX = width / (tasks.length + 1 || 1);
-      const centerY = height / 2;
+      const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      arrowPath.setAttribute('d', 'M0,0 L9,3 L0,6 Z');
+      arrowPath.setAttribute('fill', '#555');
+      marker.appendChild(arrowPath);
+      defs.appendChild(marker);
+      svg.appendChild(defs);
 
-      tasks.forEach((task, i) => {
+      const idSet = new Set(tasks.map((task) => task.id));
+      for (const task of tasks) {
+        for (const dep of task.dependencies || []) {
+          if (!idSet.has(dep)) continue;
+          graphState.edges.push({ from: dep, to: task.id });
+        }
+      }
+
+      for (const edge of graphState.edges) {
+        const start = positions[edge.from];
+        const end = positions[edge.to];
+        if (!start || !end) continue;
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', start.x);
+        line.setAttribute('y1', start.y);
+        line.setAttribute('x2', end.x);
+        line.setAttribute('y2', end.y);
+        line.setAttribute('stroke', '#555');
+        line.setAttribute('stroke-width', '2');
+        line.setAttribute('marker-end', 'url(#arrow)');
+        svg.appendChild(line);
+      }
+
+      const radius = 28;
+
+      tasks.forEach((task) => {
         const taskId = task.id || task.task_id;
         if (!taskId) return;
-
-        const x = spacingX * (i + 1);
-        const y = centerY;
+        const position = positions[taskId];
+        if (!position) return;
 
         const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         g.setAttribute('data-task', taskId);
 
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('cx', x);
-        circle.setAttribute('cy', y);
+        circle.setAttribute('cx', position.x);
+        circle.setAttribute('cy', position.y);
         circle.setAttribute('r', radius);
         circle.setAttribute('fill', '#444');
         circle.setAttribute('stroke', '#00f2ff');
         circle.setAttribute('stroke-width', '2');
 
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y + 5);
+        text.setAttribute('x', position.x);
+        text.setAttribute('y', position.y + 4);
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('fill', '#fff');
         text.setAttribute('font-size', '12');
         text.textContent = taskId;
 
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', position.x);
+        label.setAttribute('y', position.y + 42);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('fill', '#9aa');
+        label.setAttribute('font-size', '10');
+        label.textContent = (task.title || '').slice(0, 18);
+
         g.appendChild(circle);
         g.appendChild(text);
+        g.appendChild(label);
         svg.appendChild(g);
 
-        graphState.nodeMap[taskId] = { x, y, circle };
-
-        if (task.dependencies) {
-          task.dependencies.forEach((dep) => {
-            graphState.edges.push({ from: dep, to: taskId });
-          });
-        }
+        graphState.nodeMap[taskId] = { x: position.x, y: position.y, circle };
       });
-
-      drawEdges();
     }
 
     function updateNodeState(taskId, state) {
@@ -560,16 +724,23 @@ app.get('/', (_req, res) => {
       const multi = document.getElementById('multiAgentToggle').checked;
 
       const endpoint = multi ? '/multi-agent-run' : '/generate-repo-with-prs';
-      const payload = multi
-        ? {
+      let payload;
+      if (multi) {
+        payload = {
             objective,
             constraints: {
               risk: 'medium',
               budget: { max_tokens: 120000, max_api_calls: 80 },
             },
             execution: { enable_pages: true },
-          }
-        : JSON.parse(document.getElementById('jsonInput').value);
+          };
+      } else {
+        payload = JSON.parse(document.getElementById('jsonInput').value);
+        if (Array.isArray(payload.tasks)) {
+          buildExecutionGraph({ tasks: payload.tasks });
+          payload.tasks.forEach((task) => updateNodeState(task.id || task.task_id, 'planned'));
+        }
+      }
 
       const response = await fetch('http://localhost:3000' + endpoint, {
         method: 'POST',
@@ -580,8 +751,9 @@ app.get('/', (_req, res) => {
       const data = await response.json();
       Object.keys(prTaskMap).forEach((key) => delete prTaskMap[key]);
       Object.keys(shaTaskMap).forEach((key) => delete shaTaskMap[key]);
-      buildExecutionGraph({ tasks: data.tasks || [] });
-      (data.tasks || []).forEach((task) => updateNodeState(task.task_id || task.id, 'planned'));
+      const graphTasks = (data.task_graph && data.task_graph.tasks) || payload.tasks || data.tasks || [];
+      buildExecutionGraph({ tasks: graphTasks });
+      graphTasks.forEach((task) => updateNodeState(task.task_id || task.id, 'planned'));
       renderTasks(data.tasks || []);
       renderPRs(data.tasks || []);
 
@@ -805,6 +977,7 @@ app.post('/multi-agent-run', async (req, res) => {
       status: 'ok',
       repo,
       live_url: `https://${OWNER}.github.io/${repo}/`,
+      task_graph: plan?.task_graph || { tasks: [] },
       tasks: results,
       plan,
     });
@@ -972,6 +1145,8 @@ jobs:
       status: 'success',
       repo,
       live_url: `https://${OWNER}.github.io/${repo}/`,
+      task_graph: { tasks },
+      tasks: prResults,
       prs: prResults,
     });
   } catch (error) {
