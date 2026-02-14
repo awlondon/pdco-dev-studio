@@ -11,6 +11,7 @@ export default function AgentsPanel() {
   const [results, setResults] = useState<PRTaskResult[]>([]);
   const [budget, setBudget] = useState<AgentRunResponse['budget']>();
   const [taskStates, setTaskStates] = useState<Record<string, string>>({});
+  const [mergedTaskEvent, setMergedTaskEvent] = useState<{ taskId: string; nonce: number } | null>(null);
 
   const runAgents = useCallback(async () => {
     const response = await fetch('http://localhost:3000/multi-agent-run', {
@@ -46,10 +47,16 @@ export default function AgentsPanel() {
 
   const handlePRUpdate = useCallback((pr: any) => {
     if (!pr.task_id) return;
-    setTaskStates((prev) => ({
-      ...prev,
-      [pr.task_id]: pr.merged ? 'merged' : prev[pr.task_id]
-    }));
+
+    if (pr.merged) {
+      setTaskStates((prev) => ({
+        ...prev,
+        [pr.task_id]: 'merged'
+      }));
+      setMergedTaskEvent({ taskId: pr.task_id, nonce: Date.now() + Math.random() });
+      return;
+    }
+
   }, []);
 
   useAgentSocket(handleCIUpdate, handlePRUpdate);
@@ -61,7 +68,7 @@ export default function AgentsPanel() {
       {graph && (
         <div className="agents-layout">
           <div className="agents-graph-wrap">
-            <ExecutionGraph tasks={graph.tasks} taskStates={taskStates} />
+            <ExecutionGraph tasks={graph.tasks} taskStates={taskStates} mergedTaskEvent={mergedTaskEvent} />
           </div>
           <div className="agents-sidebar">
             <PRMonitor results={results} />

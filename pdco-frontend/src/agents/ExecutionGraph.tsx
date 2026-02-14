@@ -4,6 +4,7 @@ import type { Task } from './types';
 type Props = {
   tasks: Task[];
   taskStates: Record<string, string>;
+  mergedTaskEvent?: { taskId: string; nonce: number } | null;
 };
 
 type Node = {
@@ -35,13 +36,15 @@ type CurveCacheEntry = {
   c2y: number;
 };
 
-export default function ExecutionGraph({ tasks, taskStates }: Props) {
+export default function ExecutionGraph({ tasks, taskStates, mergedTaskEvent }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const nodesRef = useRef<Node[]>([]);
   const animationRef = useRef<number>();
   const pulsesRef = useRef<Pulse[]>([]);
   const frameRef = useRef<number>(0);
   const taskStatesRef = useRef(taskStates);
+  const shimmerRef = useRef<{ key: string; frame: number }[]>([]);
+  const eligibleRef = useRef<Set<string>>(new Set());
 
   const height = 600;
 
@@ -66,6 +69,42 @@ export default function ExecutionGraph({ tasks, taskStates }: Props) {
   }, [taskStates]);
 
   const edgeKey = (e: Edge) => `${e.from}->${e.to}`;
+
+  const triggerShimmer = (taskId: string) => {
+    edges.forEach((e) => {
+      if (e.from === taskId) {
+        shimmerRef.current.push({
+          key: edgeKey(e),
+          frame: 0
+        });
+      }
+    });
+  };
+
+  const computeEligibility = () => {
+    const mergedSet = new Set(
+      Object.entries(taskStatesRef.current)
+        .filter(([, state]) => state === 'merged')
+        .map(([id]) => id)
+    );
+
+    const nextEligible = new Set<string>();
+
+    tasks.forEach((t) => {
+      if (!t.dependencies?.length) return;
+      if (taskStatesRef.current[t.id]) return;
+
+      const ready = t.dependencies.every((dep) => mergedSet.has(dep));
+      if (ready) nextEligible.add(t.id);
+    });
+
+    eligibleRef.current = nextEligible;
+  };
+
+  useEffect(() => {
+    if (!mergedTaskEvent?.taskId) return;
+    triggerShimmer(mergedTaskEvent.taskId);
+  }, [mergedTaskEvent]);
 
   const edgeMode = (e: Edge) => {
     const s = taskStatesRef.current[e.to];
@@ -186,17 +225,20 @@ export default function ExecutionGraph({ tasks, taskStates }: Props) {
       const nodeById = new Map(nodesRef.current.map((n) => [n.id, n]));
       const curveCache = new Map<string, CurveCacheEntry>();
 
-      edges.forEach((e) => {
+      for (const e of edges) {
         const a = nodeById.get(e.from);
         const b = nodeById.get(e.to);
-        if (!a || !b) return;
+        if (!a || !b) continue;
 
         const mode = edgeMode(e);
         const stroke = edgeStroke(mode);
         const width = edgeWidth(mode);
 
         const c = curvePath(a.x, a.y, b.x, b.y);
-        curveCache.set(edgeKey(e), { a, b, c1x: c.c1x, c1y: c.c1y, c2x: c.c2x, c2y: c.c2y });
+        const key = edgeKey(e);
+        curveCache.set(key, { a, b, c1x: c.c1x, c1y: c.c1y, c2x: c.c2x, c2y: c.c2y });
+
+        const shimmer = shimmerRef.current.find((entry) => entry.key === key);
 
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('d', c.d);
@@ -205,8 +247,18 @@ export default function ExecutionGraph({ tasks, taskStates }: Props) {
         path.setAttribute('opacity', mode === 'default' ? '0.85' : '1');
         path.setAttribute('fill', 'none');
         path.setAttribute('marker-end', 'url(#arrow)');
+
+        if (shimmer) {
+          path.setAttribute('stroke-dasharray', '6 8');
+          path.setAttribute('stroke-dashoffset', String(shimmer.frame * -2));
+          shimmer.frame += 1;
+          if (shimmer.frame > 30) {
+            shimmerRef.current = shimmerRef.current.filter((entry) => entry !== shimmer);
+          }
+        }
+
         svg.appendChild(path);
-      });
+      }
 
       pulsesRef.current.forEach((p) => {
         const c = curveCache.get(p.edgeKey);
@@ -225,6 +277,23 @@ export default function ExecutionGraph({ tasks, taskStates }: Props) {
 
       nodesRef.current.forEach((n) => {
         const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const isEligible = eligibleRef.current.has(n.id);
+
+        if (isEligible) {
+          const halo = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          halo.setAttribute('cx', String(n.x));
+          halo.setAttribute('cy', String(n.y));
+          halo.setAttribute('r', '38');
+          halo.setAttribute('fill', 'none');
+          halo.setAttribute('stroke', '#00f2ff');
+          halo.setAttribute('stroke-width', '2');
+          halo.setAttribute('opacity', '0.6');
+
+          const pulse = 1 + 0.05 * Math.sin(frameRef.current * 0.1);
+          halo.setAttribute('transform', `scale(${pulse})`);
+          halo.setAttribute('transform-origin', `${n.x} ${n.y}`);
+          g.appendChild(halo);
+        }
 
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', String(n.x));
@@ -306,6 +375,7 @@ export default function ExecutionGraph({ tasks, taskStates }: Props) {
       });
 
       stepPulses();
+      computeEligibility();
       render();
 
       animationRef.current = requestAnimationFrame(animate);
