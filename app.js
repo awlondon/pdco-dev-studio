@@ -12293,7 +12293,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-const WORKSPACE_PANELS = ['chat', 'code', 'console', 'agents'];
+const WORKSPACE_PANELS = ['pipeline', 'chat', 'code', 'console', 'agents'];
 
 function ensureAgentsWorkspaceMounted() {
   const workspaceTabBar = document.getElementById('workspace-tab-bar');
@@ -12351,6 +12351,7 @@ function ensureAgentsWorkspaceMounted() {
 
 function setWorkspacePanel(panel) {
   const target = WORKSPACE_PANELS.includes(panel) ? panel : 'chat';
+  const isPipeline = target === 'pipeline';
 
   workspaceTabButtons.forEach((button) => {
     const isActive = button.dataset.workspacePanel === target;
@@ -12358,23 +12359,25 @@ function setWorkspacePanel(panel) {
     button.setAttribute('aria-pressed', String(isActive));
   });
 
+  workspace?.classList.toggle('workspace-pipeline-mode', isPipeline);
+
   if (leftPane) {
-    leftPane.classList.toggle('hidden', target !== 'chat');
+    leftPane.classList.toggle('hidden', !isPipeline && target !== 'chat');
   }
   if (rightPane) {
-    rightPane.classList.toggle('hidden', target === 'chat');
+    rightPane.classList.toggle('hidden', !isPipeline && target === 'chat');
   }
 
-  chatPanel?.classList.toggle('hidden', target !== 'chat');
-  codePanel?.classList.toggle('hidden', target !== 'code');
-  outputPanel?.classList.toggle('hidden', target !== 'console');
-  agentsPanel?.classList.toggle('hidden', target !== 'agents');
+  chatPanel?.classList.toggle('hidden', !isPipeline && target !== 'chat');
+  codePanel?.classList.toggle('hidden', !isPipeline && target !== 'code');
+  outputPanel?.classList.toggle('hidden', !isPipeline && target !== 'console');
+  agentsPanel?.classList.toggle('hidden', !isPipeline && target !== 'agents');
 
   if (splitter) {
-    splitter.classList.toggle('hidden', target !== 'code' && target !== 'console');
+    splitter.classList.toggle('hidden', isPipeline || (target !== 'code' && target !== 'console'));
   }
 
-  if (target === 'code') {
+  if (target === 'code' || isPipeline) {
     requestAnimationFrame(() => editorApi?.layout?.());
   }
 }
@@ -12573,7 +12576,7 @@ if (runAgentsButton) {
   runAgentsButton.addEventListener('click', runMultiAgent);
 }
 
-setWorkspacePanel('chat');
+setWorkspacePanel('pipeline');
 connectAgentStatusSocket();
 
 setStatusOnline(false);

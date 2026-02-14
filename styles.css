@@ -1957,6 +1957,29 @@ button:disabled {
   position: relative;
 }
 
+
+#workspace.workspace-pipeline-mode #right-pane {
+  overflow: auto;
+}
+
+#workspace.workspace-pipeline-mode #code-panel,
+#workspace.workspace-pipeline-mode #output-panel,
+#workspace.workspace-pipeline-mode #agents-panel {
+  flex: 0 0 auto;
+}
+
+#workspace.workspace-pipeline-mode #code-panel {
+  min-height: 380px;
+}
+
+#workspace.workspace-pipeline-mode #output-panel {
+  min-height: 360px;
+}
+
+#workspace.workspace-pipeline-mode #agents-panel {
+  min-height: 420px;
+}
+
 #right-pane .splitter {
   height: 6px;
   cursor: row-resize;
