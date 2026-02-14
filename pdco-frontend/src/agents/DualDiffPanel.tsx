@@ -1,9 +1,11 @@
 import React from 'react';
+import type { SemanticChange } from './semanticDiff';
 
 type SnapshotDiff = {
   path: string;
   before: string;
   after: string;
+  semantic: SemanticChange[];
 };
 
 export default function DualDiffPanel({
@@ -67,6 +69,26 @@ export default function DualDiffPanel({
               {file.after}
             </pre>
           </div>
+
+          {file.semantic.length > 0 && (
+            <div
+              style={{
+                marginTop: 6,
+                padding: 6,
+                background: '#111a22',
+                border: '1px solid #224'
+              }}
+            >
+              <strong>Semantic Changes:</strong>
+              <ul>
+                {file.semantic.map((change, semanticIndex) => (
+                  <li key={`${change.type}-${change.name ?? semanticIndex}`}>
+                    {change.type} {change.name ? `(${change.name})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       ))}
     </div>

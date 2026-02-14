@@ -5,6 +5,7 @@ import PolicyPanel from './PolicyPanel';
 import BudgetPanel from './BudgetPanel';
 import DiffInspectionPanel from './DiffInspectionPanel';
 import DualDiffPanel from './DualDiffPanel';
+import { analyzeFileSemanticDiff } from './semanticDiff';
 import { useAgentSocket } from './useAgentSocket';
 import type { AgentEvent, AgentRunResponse, PRTaskResult, TaskGraph } from './types';
 
@@ -89,12 +90,14 @@ export default function AgentsPanel() {
 
       const allPaths = new Set([...Object.keys(stateA), ...Object.keys(stateB)]);
 
-      return Array.from(allPaths).reduce<Array<{ path: string; before: string; after: string }>>((diffs, path) => {
+      return Array.from(allPaths).reduce<
+        Array<{ path: string; before: string; after: string; semantic: ReturnType<typeof analyzeFileSemanticDiff> }>
+      >((diffs, path) => {
         const before = stateA[path] || '';
         const after = stateB[path] || '';
 
         if (before !== after) {
-          diffs.push({ path, before, after });
+          diffs.push({ path, before, after, semantic: analyzeFileSemanticDiff(path, before, after) });
         }
 
         return diffs;
