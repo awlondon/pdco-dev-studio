@@ -29,15 +29,11 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 function resolveApiBase() {
-  const configuredBase =
-    window.API_BASE
-    || window.__MAYA_API_BASE
-    || '';
+  const configuredBase = window.API_BASE || '';
 
   if (typeof configuredBase === 'string') {
     const trimmed = configuredBase.trim();
-    const isPlaceholder = trimmed.includes('xxxxx');
-    if (trimmed && !isPlaceholder) {
+    if (trimmed) {
       return trimmed.replace(/\/$/, '');
     }
   }
@@ -47,7 +43,7 @@ function resolveApiBase() {
   }
 
   throw new Error(
-    'Missing API base URL in production. Set window.API_BASE/window.__MAYA_API_BASE to a real origin (no placeholders).'
+    'Missing API base URL in production. Set window.API_BASE to a real origin.'
   );
 }
 
