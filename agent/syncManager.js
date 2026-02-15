@@ -7,6 +7,11 @@ function mapServerRoot(status) {
 export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch }) {
   let endpointUnavailable = false;
 
+  function isJsonResponse(res) {
+    const contentType = res.headers.get('content-type') || '';
+    return /application\/json|text\/json/i.test(contentType);
+  }
+
   async function fetchJson(path) {
     if (endpointUnavailable) {
       return null;
@@ -20,7 +25,17 @@ export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch 
     if (!res.ok) {
       throw new Error(`Request failed: ${res.status}`);
     }
-    return res.json();
+    if (!isJsonResponse(res)) {
+      endpointUnavailable = true;
+      return null;
+    }
+
+    try {
+      return await res.json();
+    } catch {
+      endpointUnavailable = true;
+      return null;
+    }
   }
 
   function findOrCreateAgentForRun(serverRunId) {
