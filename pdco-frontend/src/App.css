@@ -74,11 +74,22 @@ body {
 
 .agents-dock {
   width: min(45vw, 640px);
-  min-width: 360px;
   border-left: 1px solid #242b46;
   background: #0d0d15;
-  overflow: auto;
+  overflow: hidden;
   padding: 8px;
+  transition: width 200ms ease, padding 200ms ease, border-color 200ms ease;
+}
+
+.agents-dock-open {
+  min-width: 360px;
+}
+
+.agents-dock-collapsed {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border-left-color: transparent;
 }
 
 .left-column,

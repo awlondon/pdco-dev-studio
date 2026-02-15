@@ -738,12 +738,25 @@ function initComposerControls() {
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
     playableBtn.addEventListener('click', async () => {
-      if (appMachine.getAppState() !== APP_STATES.READY) {
+      const appState = appMachine.getAppState();
+      const canRunLocalPlayable = appState === APP_STATES.DEGRADED || appState === APP_STATES.OFFLINE;
+      const canRunAgent = appState === APP_STATES.READY;
+
+      if (!canRunAgent && !canRunLocalPlayable) {
         console.warn('Cannot start agent while app not ready.');
         return;
       }
 
       try {
+        if (canRunLocalPlayable) {
+          await sendChat({
+            playableMode: true,
+            userPrompt: getPromptInput(),
+            code: getEditorCode()
+          });
+          return;
+        }
+
         await startAgentExecution();
       } catch (error) {
         console.warn('Agent execution failed.', error);
@@ -10783,9 +10796,11 @@ function updatePlayableButtonState() {
   const appState = appMachine.getAppState();
   const activeAgent = appMachine.getActiveAgent();
   const appReady = appState === APP_STATES.READY;
+  const localPlayableAllowed = appState === APP_STATES.DEGRADED || appState === APP_STATES.OFFLINE;
   const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
+  const hasCredits = featureState.creditsRemaining > 0;
 
-  runBtn.disabled = !appReady || featureState.creditsRemaining <= 0;
+  runBtn.disabled = !(appReady && hasCredits) && !localPlayableAllowed;
 
   if (stopBtn) {
     stopBtn.disabled = !activeAgentBusy;
@@ -12850,7 +12865,17 @@ function wireAgentPanelEvents() {
           body: JSON.stringify({ objective: getCurrentPrompt() })
         });
 
-        const data = await res.json();
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error('Server returned invalid JSON');
+        }
+
+        if (!res.ok) {
+          throw new Error(data?.error || 'Run failed');
+        }
+
         appendAgentLog('Execution started.');
         renderExecutionMap(data.task_graph);
       } catch (err) {

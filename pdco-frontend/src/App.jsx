@@ -468,7 +468,12 @@ function App() {
     async function pingBackend() {
       try {
         const response = await fetch(`${requireApiBase()}/healthz`);
-        const payload = await response.json();
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
         if (!cancelled) {
           setBackendStatus(response.ok && payload?.ok ? 'OK' : 'DISCONNECTED');
         }
@@ -550,11 +555,9 @@ function App() {
           )}
         </div>
 
-        {agentsOpen && (
-          <aside className="agents-dock">
-            <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          </aside>
-        )}
+        <aside className={`agents-dock ${agentsOpen ? 'agents-dock-open' : 'agents-dock-collapsed'}`}>
+          <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+        </aside>
       </div>
     </div>
   );

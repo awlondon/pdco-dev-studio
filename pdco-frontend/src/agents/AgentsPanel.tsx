@@ -117,7 +117,17 @@ export default function AgentsPanel() {
       })
     });
 
-    const data: AgentRunResponse = await response.json();
+    let data: AgentRunResponse;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Server returned invalid JSON');
+    }
+
+    if (!response.ok) {
+      throw new Error((data as { error?: string })?.error || 'Run failed');
+    }
+
     setGraph(data.task_graph);
     setResults(data.tasks);
     setBudget(data.budget);
