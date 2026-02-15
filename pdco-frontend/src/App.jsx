@@ -340,7 +340,25 @@ const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, o
   );
 });
 
+const LoginRoute = memo(function LoginRoute() {
+  const frontendOrigin = typeof window === 'undefined' ? 'unknown' : window.location.origin;
+
+  return (
+    <main className="login-route" aria-label="Login">
+      <section className="login-card">
+        <h1>PDCo Dev Studio</h1>
+        <p>Sign in to continue.</p>
+        <p className="login-path">Current route: /login</p>
+        <span>{frontendOrigin}</span>
+      </section>
+    </main>
+  );
+});
+
 function App() {
+  const [pathname, setPathname] = useState(() =>
+    typeof window === 'undefined' ? '/' : window.location.pathname
+  );
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [backendStatus, setBackendStatus] = useState('CHECKING');
@@ -497,6 +515,27 @@ function App() {
 
   const frontendOrigin = typeof window === 'undefined' ? 'unknown' : window.location.origin;
   const runtimeLabel = isDev ? 'local-dev' : 'production-build';
+  const isLoginRoute = pathname.startsWith('/login');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPathname = () => {
+      setPathname(window.location.pathname);
+    };
+
+    window.addEventListener('popstate', syncPathname);
+
+    return () => {
+      window.removeEventListener('popstate', syncPathname);
+    };
+  }, []);
+
+  if (isLoginRoute) {
+    return <LoginRoute />;
+  }
 
   return (
     <div className="workspace-root">
