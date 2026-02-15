@@ -12973,9 +12973,10 @@ function mountAgentSidePanel() {
   wireAgentPanelEvents();
   initAgentWebSocket();
 
-  const persistedState = safeStorageGet('maya_agent_side_panel_open');
-  agentPanelOpen = persistedState === 'true';
-  agentSidePanel.style.transform = agentPanelOpen ? 'translateX(0)' : 'translateX(100%)';
+  // Deterministic initial layout: keep agent side panel collapsed on load.
+  // Do not restore open state from persisted storage to avoid startup layout shift.
+  agentPanelOpen = false;
+  agentSidePanel.style.transform = 'translateX(100%)';
 }
 
 function mountAgentToggleButton() {
@@ -12994,7 +12995,6 @@ function mountAgentToggleButton() {
       return;
     }
     agentPanelOpen = !agentPanelOpen;
-    safeStorageSet('maya_agent_side_panel_open', String(agentPanelOpen));
     agentSidePanel.style.transform = agentPanelOpen
       ? 'translateX(0)'
       : 'translateX(100%)';
