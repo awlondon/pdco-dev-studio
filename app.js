@@ -29,11 +29,15 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 function resolveApiBase() {
-  const apiBase =
+  const rawApiBase =
     window.API_BASE ||
     (window.location.hostname === "localhost"
       ? "http://localhost:8080"
-      : "https://maya-api-136741418395.us-central1.run.app");
+      : window.location.origin);
+
+  const apiBase = rawApiBase
+    .replace(/\/$/, '')
+    .replace(/\/api$/i, '');
 
   return apiBase;
 }
