@@ -29,7 +29,7 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 function resolveApiBase() {
-  const configuredBase = window.API_BASE || '';
+  const configuredBase = import.meta.env.VITE_API_BASE || '';
 
   if (typeof configuredBase === 'string') {
     const trimmed = configuredBase.trim();
@@ -43,7 +43,7 @@ function resolveApiBase() {
   }
 
   throw new Error(
-    'Missing API base URL in production. Set window.API_BASE to a real origin.'
+    'Missing API base URL in production.'
   );
 }
 
