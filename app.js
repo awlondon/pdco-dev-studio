@@ -47,9 +47,8 @@ let agentSyncIntervalId = null;
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
-    const res = await fetch(`${API_BASE}${url}`, { mode: 'cors', ...options });
-    if (!res.ok) {
-      console.warn(`API error ${res.status} for ${url}`);
+    const res = await fetchOptionalApi(url, options);
+    if (!res || !res.ok) {
       return fallback;
     }
     return await res.json();
@@ -4156,8 +4155,8 @@ async function bootApp() {
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
-  fetch('/api/session/state').then(() => {
-    backendHealthy = true;
+  fetchOptionalApi('/api/session/state', { cacheTtlMs: 0 }).then((response) => {
+    backendHealthy = Boolean(response?.ok);
   }).catch(() => {
     backendHealthy = false;
     console.warn('Backend unreachable');
@@ -10933,7 +10932,7 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
       code: resolvedCodeInput
     };
 
-    const endpoint = playableMode ? '/api/run' : `${API_BASE}/api/chat`;
+    const endpoint = playableMode ? `${API_BASE}/api/run` : `${API_BASE}/api/chat`;
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
