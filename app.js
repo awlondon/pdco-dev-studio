@@ -29,22 +29,17 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 function resolveApiBase() {
-  const configuredBase = import.meta.env.VITE_API_BASE || '';
+  const apiBase =
+    window.API_BASE ||
+    (window.location.hostname === 'localhost'
+      ? 'http://localhost:8080'
+      : null);
 
-  if (typeof configuredBase === 'string') {
-    const trimmed = configuredBase.trim();
-    if (trimmed) {
-      return trimmed.replace(/\/$/, '');
-    }
+  if (!apiBase && window.location.hostname !== 'localhost') {
+    throw new Error('Missing API base URL in production.');
   }
 
-  if (location.hostname.includes('localhost')) {
-    return 'http://localhost:8080';
-  }
-
-  throw new Error(
-    'Missing API base URL in production.'
-  );
+  return apiBase;
 }
 
 const API_BASE = resolveApiBase();
