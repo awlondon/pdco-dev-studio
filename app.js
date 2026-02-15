@@ -55,6 +55,13 @@ async function safeFetchJSON(url, options = {}, fallback = null) {
     if (!res || !res.ok) {
       return fallback;
     }
+    const contentType = res.headers.get('content-type') || '';
+    if (!/application\/json|text\/json/i.test(contentType)) {
+      if (window.location.hostname === 'localhost') {
+        console.warn(`Skipping non-JSON response for ${url} (${contentType || 'unknown content-type'})`);
+      }
+      return fallback;
+    }
     return await res.json();
   } catch (err) {
     console.warn(`Network error for ${url}`, err);
@@ -135,6 +142,17 @@ async function fetchOptionalApi(path, options = {}) {
         unsupportedApiEndpoints.add(endpointKey);
         if (window.location.hostname === 'localhost') {
           console.warn(`API endpoint not available: ${endpointKey}`);
+        }
+        return null;
+      }
+      if (
+        endpointKey.startsWith('/api/')
+        && response.ok
+        && /text\/html/i.test(response.headers.get('content-type') || '')
+      ) {
+        unsupportedApiEndpoints.add(endpointKey);
+        if (window.location.hostname === 'localhost') {
+          console.warn(`API endpoint returned HTML fallback: ${endpointKey}`);
         }
         return null;
       }
@@ -13300,9 +13318,10 @@ function handleAgentStreamEvent(data) {
 }
 
 let agentStatusSocket = null;
+let agentStatusSocketDisabled = false;
 
 function initAgentWebSocket() {
-  if (agentStatusSocket || !API_BASE) {
+  if (agentStatusSocket || agentStatusSocketDisabled || !API_BASE) {
     return;
   }
 
@@ -13321,6 +13340,7 @@ function initAgentWebSocket() {
     };
 
     socket.onerror = () => {
+      agentStatusSocketDisabled = true;
       console.debug('Agent status WebSocket unavailable.');
     };
 
