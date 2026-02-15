@@ -42,7 +42,18 @@ function resolveApiBase() {
   return apiBase;
 }
 
+function resolveWebSocketBase() {
+  const rawWsBase = window.WS_BASE
+    || (window.location.hostname === 'localhost'
+      ? 'ws://localhost:8080/ws'
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`);
+
+  return rawWsBase.replace(/\/$/, '');
+}
+
 const API_BASE = resolveApiBase();
+const WS_BASE = resolveWebSocketBase();
+const AGENT_STATUS_WS_ENABLED = window.ENABLE_AGENT_STATUS_WS === true;
 const appMachine = new AppStateMachine();
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
@@ -8985,6 +8996,9 @@ const preview = {
   handshakeTimer: null,
   handshakeRetryTimer: null,
   pingTimer: null,
+  shouldBypassHandshake(frame = this.activeFrame) {
+    return typeof frame?.srcdoc === 'string' && frame.srcdoc.includes(SESSION_BRIDGE_MARKER);
+  },
   attach(frame) {
     this.ready = false;
     this.readyMeta = null;
@@ -8997,8 +9011,17 @@ const preview = {
     frame.addEventListener('load', () => {
       this.ready = false;
       this.readyMeta = null;
+      if (this.shouldBypassHandshake(frame)) {
+        this.acknowledgeReady({ reason: 'srcdoc-load', bypass: true });
+        return;
+      }
       this.startHandshake('load');
     });
+
+    if (this.shouldBypassHandshake(frame)) {
+      this.acknowledgeReady({ reason: 'srcdoc-attach', bypass: true });
+      return;
+    }
 
     if (frame.contentDocument?.readyState === 'complete') {
       this.startHandshake('readyState');
@@ -13321,13 +13344,16 @@ let agentStatusSocket = null;
 let agentStatusSocketDisabled = false;
 
 function initAgentWebSocket() {
-  if (agentStatusSocket || agentStatusSocketDisabled || !API_BASE) {
+  if (!AGENT_STATUS_WS_ENABLED) {
+    return;
+  }
+
+  if (agentStatusSocket || agentStatusSocketDisabled || !WS_BASE) {
     return;
   }
 
   try {
-    const socketUrl = new URL('/ws', API_BASE).toString().replace(/^http/i, 'ws');
-    const socket = new WebSocket(socketUrl);
+    const socket = new WebSocket(WS_BASE);
     agentStatusSocket = socket;
 
     socket.onopen = () => {
