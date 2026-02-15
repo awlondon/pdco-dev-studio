@@ -732,6 +732,7 @@ app.options('*', cors());
 
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
   next();
 });
 
@@ -768,6 +769,47 @@ app.get('/healthz', (_req, res) => {
 
 app.get('/api/agent/runs', (_req, res) => {
   res.json({ runs: [] });
+});
+
+// --- Compatibility API stubs (frontend expects these) ---
+app.get('/api/plans', (_req, res) => {
+  return res.json({ plans: [] });
+});
+
+app.get('/api/session/state', async (req, res, next) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.json({
+        authenticated: false,
+        user: null
+      });
+    }
+    return next();
+  } catch {
+    return res.json({
+      authenticated: false,
+      user: null
+    });
+  }
+});
+
+app.get('/api/usage/overview', async (req, res, next) => {
+  try {
+    const session = await getSessionFromRequest(req);
+    if (!session) {
+      return res.json({
+        credits: 0,
+        plan: 'free'
+      });
+    }
+    return next();
+  } catch {
+    return res.json({
+      credits: 0,
+      plan: 'free'
+    });
+  }
 });
 
 app.post('/api/run', async (req, res) => {
