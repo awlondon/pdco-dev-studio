@@ -791,10 +791,25 @@ app.get('/api/usage/overview', (_req, res) => {
 });
 
 app.post('/api/run', async (req, res) => {
-  const result = {
-    code: '<!doctype html><html><body><h1>Hello</h1></body></html>'
-  };
-  res.json(result);
+  const { messages, model } = req.body || {};
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[api/run] request received', {
+      model,
+      messageCount: Array.isArray(messages) ? messages.length : 0
+    });
+  }
+
+  const code = `
+<!doctype html>
+<html>
+  <body>
+    <h1>Game Mode Output</h1>
+  </body>
+</html>
+`.trim();
+
+  res.json({ code });
 });
 
 

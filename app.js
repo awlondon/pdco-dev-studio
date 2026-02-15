@@ -10959,30 +10959,30 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
 
     console.log('LLM REQUEST:', { model: DEFAULT_MODEL, messages });
 
-    if (!API_BASE) {
-      throw new Error('API_BASE is not configured');
-    }
+    const requestPayload = {
+      messages,
+      model: DEFAULT_MODEL,
+      sessionId,
+      session_id: sessionId,
+      intentType: resolvedIntent.type,
+      contextMode: getSelectedContextMode(),
+      historySummary: sessionState?.history_summary?.text || '',
+      user: getUserContext(),
+      playableMode,
+      retryMode,
+      userPrompt: intentAdjustedInput,
+      originalPrompt: lastRetryContext?.originalPrompt || intentAdjustedInput,
+      previousResponse: lastRetryContext?.previousResponse || '',
+      currentCode: resolvedCodeInput,
+      code: resolvedCodeInput
+    };
 
-    const res = await fetch(`${API_BASE}/api/chat`, {
+    const endpoint = playableMode ? '/api/run' : `${API_BASE}/api/chat`;
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: chatAbortController.signal,
-      body: JSON.stringify({
-        messages,
-        sessionId,
-        session_id: sessionId,
-        intentType: resolvedIntent.type,
-        contextMode: getSelectedContextMode(),
-        historySummary: sessionState?.history_summary?.text || '',
-        user: getUserContext(),
-        playableMode,
-        retryMode,
-        userPrompt: intentAdjustedInput,
-        originalPrompt: lastRetryContext?.originalPrompt || intentAdjustedInput,
-        previousResponse: lastRetryContext?.previousResponse || '',
-        currentCode: resolvedCodeInput,
-        code: resolvedCodeInput
-      })
+      body: JSON.stringify(requestPayload)
     });
 
     const responseText = await res.text();
@@ -11000,13 +11000,19 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     }
 
     setStatusOnline(true);
-    const content =
-      data?.choices?.[0]?.message?.content
-      ?? data?.candidates?.[0]?.content
-      ?? data?.output_text
-      ?? null;
+    const content = playableMode
+      ? data?.code
+      : (
+        data?.choices?.[0]?.message?.content
+        ?? data?.candidates?.[0]?.content
+        ?? data?.output_text
+        ?? null
+      );
     if (!content) {
       throw new Error('No model output returned');
+    }
+    if (playableMode) {
+      console.log('Game mode result:', data);
     }
     rawReply = content;
     if (playableMode) {
