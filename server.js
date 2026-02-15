@@ -1178,37 +1178,86 @@ function validateBuilderOutput(output, mode = 'single') {
 }
 
 async function callGameModeLlmJson({ system, user, temperature = 0.2, label = 'LLM' }) {
-  if (!LLM_PROXY_URL) {
-    throw new Error('LLM proxy unavailable');
+  const useDirect = process.env.GAME_MODE_DIRECT_LLM === '1';
+  const maxTokens = label === 'BUILDER' ? 6000 : 1200;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+  try {
+    let raw = '';
+
+    if (useDirect) {
+      if (!OPENAI_API_KEY) {
+        throw new Error('Direct LLM requested but OPENAI_API_KEY is missing');
+      }
+      let directRes;
+      try {
+        directRes = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: OPENAI_MODEL,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user }
+            ],
+            temperature,
+            max_tokens: maxTokens
+          })
+        });
+      } catch (error) {
+        console.log('[LLM_DIRECT_ERROR]', String(error?.message || error));
+        throw error;
+      }
+
+      raw = await directRes.text();
+      if (!directRes.ok) {
+        throw new Error(`Direct LLM request failed (${directRes.status})`);
+      }
+    } else {
+      if (!LLM_PROXY_URL) {
+        throw new Error('LLM proxy unavailable');
+      }
+      const workerRes = await fetch(LLM_PROXY_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user }
+          ],
+          temperature,
+          max_tokens: maxTokens
+        })
+      });
+      raw = await workerRes.text();
+      if (!workerRes.ok) {
+        throw new Error(`LLM request failed (${workerRes.status})`);
+      }
+    }
+
+    if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+      console.log(`[LLM_RAW_${label}]`, String(raw || '').slice(0, 500));
+    }
+    const data = raw ? JSON.parse(raw) : null;
+    const content = data?.choices?.[0]?.message?.content
+      ?? data?.candidates?.[0]?.content
+      ?? data?.output_text
+      ?? '';
+    if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+      console.log(`[LLM_CONTENT_${label}]`, String(content || '').slice(0, 500));
+    }
+    return extractJsonObject(content);
+  } finally {
+    clearTimeout(timeoutId);
   }
-  const workerRes = await fetch(LLM_PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ],
-      temperature
-    })
-  });
-  if (!workerRes.ok) {
-    throw new Error(`LLM request failed (${workerRes.status})`);
-  }
-  const raw = await workerRes.text();
-  if (process.env.GAME_MODE_DEBUG_LLM === '1') {
-    console.log(`[LLM_RAW_${label}]`, String(raw || '').slice(0, 500));
-  }
-  const data = raw ? JSON.parse(raw) : null;
-  const content = data?.choices?.[0]?.message?.content
-    ?? data?.candidates?.[0]?.content
-    ?? data?.output_text
-    ?? '';
-  if (process.env.GAME_MODE_DEBUG_LLM === '1') {
-    console.log(`[LLM_CONTENT_${label}]`, String(content || '').slice(0, 500));
-  }
-  return extractJsonObject(content);
 }
 
 async function generateDesignerSpec({ mode, prompt, seedCode }) {
@@ -1605,12 +1654,14 @@ async function writeBuilderOutputToWorkspace(job, builderOutput) {
 async function runGameModeJob(job) {
   const stage3Enabled = GAME_MODE_LLM_ENABLED;
   const runtimeEnabled = GAME_MODE_RUNTIME_VERIFY_ENABLED;
+  const llmTransport = process.env.GAME_MODE_DIRECT_LLM === '1' ? 'direct' : 'proxy';
   const startedAt = Date.now();
 
   const summary = {
     jobId: job.id,
     mode: job.mode,
     stage3Enabled,
+    llmTransport,
     designerUsed: false,
     designerFallback: false,
     designerFallbackReason: null,
