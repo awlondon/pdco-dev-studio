@@ -730,6 +730,11 @@ app.use(cors({
 
 app.options('*', cors());
 
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  next();
+});
+
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/stripe/webhook')) {
@@ -759,6 +764,17 @@ app.get('/api/health', (req, res) => {
 
 app.get('/healthz', (_req, res) => {
   return res.status(200).json({ ok: true });
+});
+
+app.get('/api/agent/runs', (_req, res) => {
+  res.json({ runs: [] });
+});
+
+app.post('/api/run', async (req, res) => {
+  const result = {
+    code: '<!doctype html><html><body><h1>Hello</h1></body></html>'
+  };
+  res.json(result);
 });
 
 

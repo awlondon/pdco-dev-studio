@@ -1329,6 +1329,7 @@ const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
           href: window.location.href,
           timestamp: Date.now()
         }, '*');
+        window.parent.postMessage({ type: 'sandbox-ready' }, '*');
       } catch (err) {
         console.warn('postMessage blocked by COOP');
       }
@@ -1645,7 +1646,10 @@ function syncSessionToSandbox() {
 }
 
 function handleSandboxReadyMessage(event) {
-  if (event?.data?.type !== 'READY' || event?.data?.channel !== 'maya-preview') {
+  const messageType = event?.data?.type;
+  const isLegacyReady = messageType === 'sandbox-ready';
+  const isPreviewReady = messageType === 'READY' && event?.data?.channel === 'maya-preview';
+  if (!isLegacyReady && !isPreviewReady) {
     return;
   }
   if (event.source !== sandboxFrame?.contentWindow) {
@@ -1868,7 +1872,6 @@ function initAppleAuth() {
     return;
   }
   if (!APPLE_CLIENT_ID || !APPLE_REDIRECT_URI) {
-    console.warn('Apple auth configuration missing.');
     return;
   }
 
@@ -4204,7 +4207,6 @@ async function bootstrapApp() {
   applyAuthToRoot();
   const user = getAuthenticatedUser();
   if (!user) {
-    console.warn('Session unavailable. Continuing in anonymous mode.');
     uiState = UI_STATE.AUTH;
     showAnalytics = false;
     resetAppToUnauthed();
@@ -13335,12 +13337,12 @@ function handleAgentStreamEvent(data) {
 let agentStatusSocket = null;
 
 function initAgentWebSocket() {
-  if (agentStatusSocket) {
+  if (agentStatusSocket || !API_BASE) {
     return;
   }
 
   try {
-    const socketUrl = API_BASE.replace(/^http/i, 'ws');
+    const socketUrl = new URL('/ws', API_BASE).toString().replace(/^http/i, 'ws');
     const socket = new WebSocket(socketUrl);
     agentStatusSocket = socket;
 
@@ -13354,14 +13356,14 @@ function initAgentWebSocket() {
     };
 
     socket.onerror = () => {
-      appendAgentLog('WebSocket error.');
+      console.debug('Agent status WebSocket unavailable.');
     };
 
     socket.onclose = () => {
       agentStatusSocket = null;
     };
   } catch (error) {
-    console.warn('Unable to connect agent status socket.', error);
+    console.debug('Unable to connect agent status socket.', error);
   }
 }
 
