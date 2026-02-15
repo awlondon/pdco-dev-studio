@@ -92,14 +92,15 @@ body {
 .workspace-studio {
   flex: 1;
   min-width: 0;
+  position: relative;
+  --right-panel-width: 360px;
 }
 
 .workspace-shell {
   --left-width: 280px;
-  --right-width: 360px;
   --dock-height: 180px;
   display: grid;
-  grid-template-columns: var(--left-width) 8px 1fr 8px var(--right-width);
+  grid-template-columns: var(--left-width) 8px 1fr;
   gap: 0;
   height: 100%;
 }
@@ -131,6 +132,42 @@ body {
   display: grid;
   gap: 8px;
   padding: 8px;
+}
+
+.right-overlay-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--right-panel-width);
+  height: 100%;
+  background: #0f1322;
+  border-left: 1px solid #242b46;
+  transform: translateX(100%);
+  transition: transform 200ms ease;
+  z-index: 20;
+}
+
+.right-overlay-panel-open {
+  transform: translateX(0);
+}
+
+.right-panel-toggle {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  z-index: 30;
+  border-radius: 6px 0 0 6px;
+  padding: 6px 10px;
+}
+
+.right-overlay-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  background: #222948;
 }
 
 .center-column {

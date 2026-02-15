@@ -12,6 +12,7 @@ import AgentsPanel from './agents/AgentsPanel';
 import { API_BASE, requireApiBase } from './config/runtime';
 const isDev = import.meta.env.DEV;
 const layoutStorageKey = 'pdco.devstudio.layout.v1';
+const rightPanelOpenStorageKey = 'pdco.devstudio.rightPanelOpen.v1';
 
 const panelDefinitions = {
   editor: { title: 'Editor', zone: 'center', allowUndock: false },
@@ -60,6 +61,14 @@ function readStoredLayout() {
   } catch {
     return defaultLayout;
   }
+}
+
+function readStoredRightPanelOpen() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.localStorage.getItem(rightPanelOpenStorageKey) === 'true';
 }
 
 function useRenderCounter(name) {
@@ -363,6 +372,8 @@ function App() {
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [backendStatus, setBackendStatus] = useState('CHECKING');
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
+  const [isRightPanelOpen, setRightPanelOpen] = useState(() => readStoredRightPanelOpen());
+  const studioRef = useRef(null);
   const shellRef = useRef(null);
   const dragRef = useRef({ active: false, side: null, value: 0 });
 
@@ -373,15 +384,18 @@ function App() {
   const shellStyle = useMemo(
     () => ({
       '--left-width': `${hasLeftPanel ? layout.left : 48}px`,
-      '--right-width': `${hasRightPanel ? layout.right : 48}px`,
       '--dock-height': dockIsVisible ? '180px' : '40px'
     }),
-    [dockIsVisible, hasLeftPanel, hasRightPanel, layout.left, layout.right]
+    [dockIsVisible, hasLeftPanel, layout.left]
   );
 
   useEffect(() => {
     window.localStorage.setItem(layoutStorageKey, JSON.stringify(layout));
   }, [layout]);
+
+  useEffect(() => {
+    window.localStorage.setItem(rightPanelOpenStorageKey, String(isRightPanelOpen));
+  }, [isRightPanelOpen]);
 
   const onEditorChange = useCallback((event) => {
     setEditorValue(event.target.value);
@@ -455,10 +469,11 @@ function App() {
       }
 
       if (dragRef.current.side === 'right') {
-        const fromRight = shellRect.right - event.clientX;
+        const rightBounds = studioRef.current?.getBoundingClientRect() || shellRect;
+        const fromRight = rightBounds.right - event.clientX;
         const next = Math.min(maxPanelWidth, Math.max(minPanelWidth, fromRight));
         dragRef.current.value = next;
-        shellRef.current.style.setProperty('--right-width', `${next}px`);
+        studioRef.current?.style.setProperty('--right-panel-width', `${next}px`);
       }
     };
 
@@ -552,7 +567,7 @@ function App() {
       </div>
 
       <div className="workspace-main">
-        <div className="workspace-studio">
+        <div className="workspace-studio" ref={studioRef} style={{ '--right-panel-width': `${layout.right}px` }}>
           <main className="workspace-shell" ref={shellRef} style={shellStyle}>
             <div className="left-column">
               <FilesPanel panelLayout={layout.panels.files} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} editorValue={editorValue} />
@@ -563,15 +578,29 @@ function App() {
               <EditorPanel value={editorValue} onChange={onEditorChange} panelLayout={layout.panels.editor} onToggleVisible={togglePanelVisible} />
               <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
             </section>
-
-            <div className="divider" onMouseDown={onDividerStart('right')} />
-
-            <section className="right-column">
-              <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-            </section>
           </main>
+
+          {hasRightPanel && (
+            <>
+              <button
+                className="right-panel-toggle"
+                onClick={() => setRightPanelOpen((open) => !open)}
+                aria-expanded={isRightPanelOpen}
+                aria-label={isRightPanelOpen ? 'Collapse right panel' : 'Expand right panel'}
+              >
+                {isRightPanelOpen ? '⟩' : '⟨'}
+              </button>
+
+              <aside className={`right-overlay-panel ${isRightPanelOpen ? 'right-overlay-panel-open' : ''}`}>
+                <div className="right-overlay-resize-handle" onMouseDown={onDividerStart('right')} />
+                <section className="right-column">
+                  <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                  <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                  <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                </section>
+              </aside>
+            </>
+          )}
 
           {!!floatingPanels.length && (
             <aside className="floating-area">
