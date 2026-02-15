@@ -5,8 +5,18 @@ function mapServerRoot(status) {
 }
 
 export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch }) {
+  let endpointUnavailable = false;
+
   async function fetchJson(path) {
+    if (endpointUnavailable) {
+      return null;
+    }
+
     const res = await fetchImpl(`${apiBase}${path}`, { credentials: 'include' });
+    if ([404, 405, 501].includes(res.status)) {
+      endpointUnavailable = true;
+      return null;
+    }
     if (!res.ok) {
       throw new Error(`Request failed: ${res.status}`);
     }
@@ -58,9 +68,15 @@ export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch 
 
   async function syncRun(runId) {
     const snapshot = await fetchJson(`/api/agent/runs/${runId}`);
+    if (!snapshot?.run) {
+      return;
+    }
     const agent = applySnapshotToLocal(snapshot.run);
     const after = agent.lastServerEventId || 0;
     const delta = await fetchJson(`/api/agent/runs/${runId}/events?after=${after}&limit=500`);
+    if (!delta) {
+      return;
+    }
     applyEventsToLocal(runId, delta.events || []);
     agent.lastServerEventId = delta.lastEventId || agent.lastServerEventId || 0;
     appMachine.notify();
@@ -68,6 +84,9 @@ export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch 
 
   async function syncAllRuns() {
     const list = await fetchJson('/api/agent/runs');
+    if (!list) {
+      return;
+    }
     const runs = Array.isArray(list.runs) ? list.runs : [];
     await Promise.all(runs.map((run) => syncRun(run.id).catch(() => {
       const agent = findOrCreateAgentForRun(run.id);
@@ -80,6 +99,7 @@ export function createAgentSyncManager({ apiBase, appMachine, fetchImpl = fetch 
     syncRun,
     syncAllRuns,
     applySnapshotToLocal,
-    applyEventsToLocal
+    applyEventsToLocal,
+    isAvailable: () => !endpointUnavailable
   };
 }
