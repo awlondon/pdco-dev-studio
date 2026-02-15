@@ -767,6 +767,8 @@ app.get('/healthz', (_req, res) => {
   return res.status(200).json({ ok: true });
 });
 
+// Cloud Run compatibility routes expected by the frontend boot flow.
+// Keep this block above static SPA serving to avoid catch-all shadowing.
 app.get('/api/agent/runs', (_req, res) => {
   res.json({ runs: [] });
 });
@@ -810,6 +812,14 @@ app.post('/api/run', async (req, res) => {
 `.trim();
 
   res.json({ code });
+});
+
+app.all('/api/run', (req, res, next) => {
+  if (req.method === 'POST') {
+    return next();
+  }
+  res.setHeader('Allow', 'POST');
+  return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
 });
 
 
@@ -3385,6 +3395,7 @@ wss.on('connection', (socket) => {
 const port = process.env.PORT || 8080;
 server.listen(port, () => {
   console.log('Server listening on', port);
+  console.log('Compat routes: /api/agent/runs, /api/plans, /api/session/state, /api/usage/overview, POST /api/run, ws:/ws');
   logStructured('info', 'user_store_driver_selected', { user_store_driver: USER_STORE_DRIVER });
   startCreditResetScheduler();
 });
