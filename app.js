@@ -130,7 +130,9 @@ async function fetchOptionalApi(path, options = {}) {
       const response = await fetch(`${API_BASE}${path}`, { mode: 'cors', ...fetchOptions });
       if (response.status === 404 || response.status === 405 || response.status === 501) {
         unsupportedApiEndpoints.add(endpointKey);
-        console.info(`API endpoint not available: ${endpointKey}`);
+        if (window.location.hostname === 'localhost') {
+          console.warn(`API endpoint not available: ${endpointKey}`);
+        }
         return null;
       }
       if (shouldCache && response.ok) {
@@ -574,6 +576,8 @@ const DEFAULT_FEATURE_STATE = {
   authenticated: false
 };
 let featureState = { ...DEFAULT_FEATURE_STATE };
+let backendHealthy = true;
+let gameModeRunState = 'idle';
 let showAnalytics = false;
 let appInitialized = false;
 let appReady = false;
@@ -740,28 +744,17 @@ function initComposerControls() {
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
     playableBtn.addEventListener('click', async () => {
-      const appState = appMachine.getAppState();
-      const canRunLocalPlayable = appState === APP_STATES.DEGRADED || appState === APP_STATES.OFFLINE;
-      const canRunAgent = appState === APP_STATES.READY;
-
-      if (!canRunAgent && !canRunLocalPlayable) {
-        console.warn('Cannot start agent while app not ready.');
+      if (gameModeRunState === 'running') {
         return;
       }
 
       try {
-        if (canRunLocalPlayable) {
-          await sendChat({
-            playableMode: true,
-            userPrompt: getPromptInput(),
-            code: getEditorCode()
-          });
-          return;
-        }
-
-        await startAgentExecution();
+        await runGameMode({
+          userPrompt: getPromptInput(),
+          code: getEditorCode()
+        });
       } catch (error) {
-        console.warn('Agent execution failed.', error);
+        console.warn('Game mode execution failed.', error);
       }
     });
   }
@@ -3649,27 +3642,8 @@ async function checkEmailVerification() {
   }
 }
 
-function showOfflineBanner() {
-  if (document.querySelector('.degraded-banner')) {
-    return;
-  }
-  const banner = document.createElement('div');
-  banner.textContent = 'Limited mode: backend unavailable.';
-  banner.className = 'degraded-banner';
-  document.body.prepend(banner);
-}
-
 function enableFullFeatures() {
   featureState.playableModeEnabled = true;
-}
-
-function enableLimitedMode() {
-  featureState.playableModeEnabled = false;
-}
-
-function disableNetworkFeatures() {
-  featureState.playableModeEnabled = false;
-  showOfflineBanner();
 }
 
 function showFatalErrorScreen() {
@@ -3683,12 +3657,8 @@ function handleAppState(appState) {
       break;
 
     case APP_STATES.DEGRADED:
-      enableLimitedMode();
-      showOfflineBanner();
-      break;
-
     case APP_STATES.OFFLINE:
-      disableNetworkFeatures();
+      enableFullFeatures();
       break;
 
     case APP_STATES.ERROR:
@@ -4141,34 +4111,24 @@ async function bootApp() {
 
   appMachine.dispatch(EVENTS.START);
 
-  try {
-    const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, null);
-    if (plans) {
-      appMachine.dispatch(EVENTS.NETWORK_OK);
-      if (Array.isArray(plans.plans)) {
-        planCatalog = plans.plans.map((plan) => ({
-          ...plan,
-          tier: plan.tier?.toString().toLowerCase()
-        }));
-      }
-      const resolvedPlans = getAvailablePlans();
-      renderPricingPlans(resolvedPlans);
-      renderPaywallPlans(resolvedPlans);
-      const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
-      updatePaywallPlanSelection(initialSelectedPlan);
-      updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
-    } else {
-      appMachine.dispatch(EVENTS.NETWORK_FAIL);
-      return;
-    }
-  } catch {
-    appMachine.dispatch(EVENTS.NETWORK_FAIL);
-    return;
+  const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, null);
+  appMachine.dispatch(EVENTS.NETWORK_OK);
+  if (plans && Array.isArray(plans.plans)) {
+    planCatalog = plans.plans.map((plan) => ({
+      ...plan,
+      tier: plan.tier?.toString().toLowerCase()
+    }));
   }
+  const resolvedPlans = getAvailablePlans();
+  renderPricingPlans(resolvedPlans);
+  renderPaywallPlans(resolvedPlans);
+  const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
+  updatePaywallPlanSelection(initialSelectedPlan);
+  updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
 
   const session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
+  appMachine.dispatch(EVENTS.SESSION_OK);
   if (session) {
-    appMachine.dispatch(EVENTS.SESSION_OK);
     featureState.authenticated = !!session.authenticated;
     if (session.user) {
       onAuthSuccess({
@@ -4179,9 +4139,6 @@ async function bootApp() {
         deferRender: true
       });
     }
-  } else {
-    appMachine.dispatch(EVENTS.SESSION_FAIL);
-    return;
   }
 
   const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, null);
@@ -4192,10 +4149,8 @@ async function bootApp() {
   }
   if (usage) {
     featureState.creditsRemaining = usage?.creditsRemaining ?? 0;
-    appMachine.dispatch(EVENTS.USAGE_OK);
-  } else {
-    appMachine.dispatch(EVENTS.USAGE_FAIL);
   }
+  appMachine.dispatch(EVENTS.USAGE_OK);
 
   appReady = true;
 }
@@ -4203,6 +4158,12 @@ async function bootApp() {
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
+  fetch('/api/session/state').then(() => {
+    backendHealthy = true;
+  }).catch(() => {
+    backendHealthy = false;
+    console.warn('Backend unreachable');
+  });
   await bootApp();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
@@ -4569,6 +4530,7 @@ function getPerfSnapshotForIssue() {
     frontend: frontendSnapshot,
     backend: perfHudState.backend,
     backend_error: perfHudState.backendError,
+    backend_healthy: backendHealthy,
     backend_updated_at: perfHudState.lastBackendUpdateAt
       ? new Date(perfHudState.lastBackendUpdateAt).toISOString()
       : null
@@ -10805,17 +10767,55 @@ function updatePlayableButtonState() {
     : featureState.creditsRemaining;
   featureState.creditsRemaining = Number.isFinite(remainingCredits) ? remainingCredits : 0;
 
-  const appState = appMachine.getAppState();
   const activeAgent = appMachine.getActiveAgent();
-  const appReady = appState === APP_STATES.READY;
-  const localPlayableAllowed = appState === APP_STATES.DEGRADED || appState === APP_STATES.OFFLINE;
   const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
-  const hasCredits = featureState.creditsRemaining > 0;
 
-  runBtn.disabled = !(appReady && hasCredits) && !localPlayableAllowed;
+  runBtn.disabled = gameModeRunState === 'running';
 
   if (stopBtn) {
     stopBtn.disabled = !activeAgentBusy;
+  }
+}
+
+async function runGameMode(payload = {}) {
+  if (gameModeRunState === 'running') {
+    return;
+  }
+
+  gameModeRunState = 'running';
+  updatePlayableButtonState();
+
+  try {
+    const response = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error('Run failed');
+    }
+
+    const data = await response.json();
+    if (!data?.code) {
+      throw new Error('No code returned');
+    }
+
+    currentCode = data.code;
+    setCodeFromLLM(data.code);
+    runWhenPreviewReady(() => {
+      handleLLMOutput(data.code, 'generated').catch((error) => {
+        console.error('Auto-run failed after generation.', error);
+        addExecutionWarning('Preview auto-run failed. Try Run Code.');
+        setPreviewExecutionStatus('error', 'PREVIEW ERROR');
+      });
+    });
+    gameModeRunState = 'success';
+  } catch (error) {
+    console.error(error);
+    gameModeRunState = 'error';
+  } finally {
+    updatePlayableButtonState();
   }
 }
 
