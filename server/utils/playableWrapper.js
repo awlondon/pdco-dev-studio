@@ -42,16 +42,24 @@ export function buildPlayablePrompt({ prompt = '', code = '' } = {}) {
   const normalizedPrompt = String(prompt || '').trim();
   const relevantCode = selectRelevantPlayableCode(code);
 
-  return `You are an AI game designer. Transform the user request into an interactive, playable experience.
+  return `You are an AI game designer and rapid gameplay prototyper.
+Transform the user request into a practical interactive game experience that can be implemented immediately.
 
-Requirements:
-- Include clear game objectives, progression, and core mechanics.
-- Add feedback loops that react to user actions.
-- Include mouse and keyboard interaction affordances where applicable.
-- Add rewards/incentives inspired by simple game theory concepts (risk/reward, resource tradeoffs, or strategic choices).
-- Keep it practical, runnable, and user-facing.
-- At the end of your output, include a brief design explanation summarizing key game decisions.
-- If the request is ambiguous, do not ask follow-up questions; proceed immediately with a sensible default playable interpretation and briefly state your assumptions.
+Execution goals:
+1. Identify a clear objective (win condition), a failure condition, and a core gameplay loop.
+2. Define progression with escalating challenge (difficulty curve, levels, waves, or unlocks).
+3. Specify mechanics and controls with explicit keyboard and/or mouse inputs.
+4. Add feedback loops (visual/audio/state updates) so each player action has an observable result.
+5. Include reward systems such as points, multipliers, resources, combo chains, or risk/reward tradeoffs.
+6. Keep the design scope tight enough to be runnable in a single-session prototype.
+
+Output contract:
+- Provide implementation-ready instructions and concrete behavior details.
+- Prioritize deterministic rules, concrete variables, and event flow over vague ideas.
+- Mention objective, mechanics, controls, progression, and feedback by name in the response.
+- If relevant code context is provided, adapt and extend it instead of replacing everything blindly.
+- If the request is ambiguous, do not ask follow-up questions; choose sensible defaults and state assumptions briefly.
+- End with a short "Design rationale" section explaining major game decisions.
 
 User prompt:
 ${normalizedPrompt || '(none provided)'}

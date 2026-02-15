@@ -5,16 +5,18 @@ import {
   selectRelevantPlayableCode
 } from '../server/utils/playableWrapper.js';
 
-test('buildPlayablePrompt includes core game design directives and ambiguity fallback', () => {
+test('buildPlayablePrompt includes structured game design directives and ambiguity fallback', () => {
   const wrapped = buildPlayablePrompt({
     prompt: 'build something cool',
     code: 'const x = 1;\nfunction run(){ return x; }'
   });
 
-  assert.match(wrapped, /interactive, playable experience/i);
+  assert.match(wrapped, /objective \(win condition\)/i);
+  assert.match(wrapped, /failure condition/i);
+  assert.match(wrapped, /progression/i);
+  assert.match(wrapped, /keyboard and\/or mouse inputs/i);
   assert.match(wrapped, /feedback loops/i);
-  assert.match(wrapped, /mouse and keyboard interaction/i);
-  assert.match(wrapped, /brief design explanation/i);
+  assert.match(wrapped, /Design rationale/i);
   assert.match(wrapped, /do not ask follow-up questions/i);
   assert.match(wrapped, /build something cool/i);
 });
