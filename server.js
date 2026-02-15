@@ -1177,6 +1177,16 @@ function validateBuilderOutput(output, mode = 'single') {
   return { ok: failures.length === 0, failures };
 }
 
+function trimForSummary(value, max = 320) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function compactFailures(failures = [], max = 3) {
+  return (Array.isArray(failures) ? failures : [])
+    .slice(0, max)
+    .map((f) => ({ code: String(f?.code || 'UNKNOWN'), detail: trimForSummary(f?.detail || '') }));
+}
+
 async function callGameModeLlmJson({ system, user, temperature = 0.2, label = 'LLM' }) {
   const useDirect = process.env.GAME_MODE_DIRECT_LLM === '1';
   const directKeyPresent = Boolean(OPENAI_API_KEY);
@@ -1261,7 +1271,11 @@ async function callGameModeLlmJson({ system, user, temperature = 0.2, label = 'L
     if (process.env.GAME_MODE_DEBUG_LLM === '1') {
       console.log(`[LLM_CONTENT_${label}]`, String(content || '').slice(0, 500));
     }
-    return extractJsonObject(content);
+    return {
+      parsed: extractJsonObject(content),
+      raw,
+      content
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1279,11 +1293,31 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
   }
 
   const seedPreview = String(seedCode || '').slice(0, 2000);
-  const system = 'Return ONLY valid JSON. No markdown. No commentary. Do not include backticks. The first character must be "{" and the last character must be "}". If you cannot comply, return a valid JSON object with an "error" field. You must satisfy: auto-run game, requestAnimationFrame loop, win/lose conditions, no build step.';
-  const user = `Design a shippable static game concept. mode=${mode}. user_prompt=${prompt || 'random concept required'}. seed_code_excerpt=${seedPreview || 'none'}. Output must exactly match schemaVersion 1.0 contract.`;
+  const system = [
+    'You are DESIGNER. Return ONLY one JSON object. No markdown. No backticks.',
+    'Do not include any keys outside this schema:',
+    '{',
+    '  "title": string,',
+    '  "genre": string,',
+    '  "coreLoop": string,',
+    '  "controls": [{ "input": string, "action": string }],',
+    '  "entities": [{ "name": string, "role": string, "notes": string }],',
+    '  "mechanics": [{ "name": string, "description": string, "tuning": string[] }],',
+    '  "progression": { "type": string, "description": string },',
+    '  "winCondition": string,',
+    '  "loseCondition": string,',
+    '  "mustHave": string[],',
+    '  "constraints": { "autoRun": true, "requiresRafLoop": true, "noBuildStep": true, "noPaidApis": true }',
+    '}',
+    'Minimums: controls>=2, mechanics>=2, mustHave>=3.',
+    'At least one controls[i].input must mention WASD, Arrow, Mouse, Touch, or Pointer.',
+    'First output char must be { and last output char must be }.'
+  ].join('\n');
+  const user = `Design a shippable static game concept. mode=${mode}. user_prompt=${prompt || 'random concept required'}. seed_code_excerpt=${seedPreview || 'none'}.`;
 
   try {
-    const spec = await callGameModeLlmJson({ system, user, temperature: 0.2, label: 'DESIGNER' });
+    const llm = await callGameModeLlmJson({ system, user, temperature: 0.2, label: 'DESIGNER' });
+    const spec = llm.parsed;
     if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
       console.log('[LLM_PARSED_DESIGNER_FULL]', JSON.stringify(spec));
     }
@@ -1297,10 +1331,20 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
         usedLlm: true,
         fallback: true,
         fallbackReason: 'DESIGN_SCHEMA_INVALID',
-        failures: validation.failures
+        failures: validation.failures,
+        validationFailures: compactFailures(validation.failures),
+        rawPreview: trimForSummary(llm?.content || llm?.raw || '')
       };
     }
-    return { spec, usedLlm: true, fallback: false, fallbackReason: null, failures: [] };
+    return {
+      spec,
+      usedLlm: true,
+      fallback: false,
+      fallbackReason: null,
+      failures: [],
+      validationFailures: [],
+      rawPreview: trimForSummary(llm?.content || llm?.raw || '')
+    };
   } catch (error) {
     const reason = error?.code === 'JSON_PARSE_FAIL' ? 'DESIGN_JSON_PARSE_FAIL' : 'DESIGN_SCHEMA_INVALID';
     return {
@@ -1308,7 +1352,9 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
       usedLlm: true,
       fallback: true,
       fallbackReason: reason,
-      failures: [createFailure(reason, String(error?.message || error))]
+      failures: [createFailure(reason, String(error?.message || error))],
+      validationFailures: compactFailures([createFailure(reason, String(error?.message || error))]),
+      rawPreview: ''
     };
   }
 }
@@ -1324,11 +1370,27 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
     };
   }
 
-  const system = 'Return ONLY valid JSON in the specified output schema. Do not include markdown. Do not include backticks. The first character must be "{" and the last character must be "}". If you cannot comply, return a valid JSON object with an "error" field. Must produce playable auto-running game with requestAnimationFrame on load. No external build tooling. Use Canvas 2D. Must display Score and show Game Over and Victory states. No console.error.';
+  const system = [
+    'You are BUILDER. Return ONLY one JSON object. No markdown. No backticks.',
+    'Output schema:',
+    '{',
+    '  "mode": "single"|"multi",',
+    '  "entry": string,',
+    '  "files": [{ "path": string, "content": string }]',
+    '}',
+    'Rules:',
+    '- files must be a non-empty array',
+    '- entry must match one files[].path',
+    '- mode=single requires index.html content containing: <!doctype html>, requestAnimationFrame(, Score, Game Over, Victory (or Win)',
+    '- mode=multi requires index.html and README.md; index.html must reference JS; README must mention controls and deploy/GitHub Pages',
+    '- no external build tooling, no console.error in game code',
+    'First output char must be { and last output char must be }.'
+  ].join('\n');
   const user = `mode=${mode}. designer_spec=${JSON.stringify(designerSpec)}. user_prompt=${prompt || ''}. Runtime verifier requires RAF heartbeat without user click.`;
 
   try {
-    const output = await callGameModeLlmJson({ system, user, temperature: 0.15, label: 'BUILDER' });
+    const llm = await callGameModeLlmJson({ system, user, temperature: 0.15, label: 'BUILDER' });
+    const output = llm.parsed;
     if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
       console.log('[LLM_PARSED_BUILDER_FULL]', JSON.stringify(output));
     }
@@ -1342,10 +1404,20 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
         usedLlm: true,
         fallback: true,
         fallbackReason: 'BUILD_SCHEMA_INVALID',
-        failures: validation.failures
+        failures: validation.failures,
+        validationFailures: compactFailures(validation.failures),
+        rawPreview: trimForSummary(llm?.content || llm?.raw || '')
       };
     }
-    return { output, usedLlm: true, fallback: false, fallbackReason: null, failures: [] };
+    return {
+      output,
+      usedLlm: true,
+      fallback: false,
+      fallbackReason: null,
+      failures: [],
+      validationFailures: [],
+      rawPreview: trimForSummary(llm?.content || llm?.raw || '')
+    };
   } catch (error) {
     const reason = error?.code === 'JSON_PARSE_FAIL' ? 'BUILD_JSON_PARSE_FAIL' : 'BUILD_SCHEMA_INVALID';
     return {
@@ -1353,7 +1425,9 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
       usedLlm: true,
       fallback: true,
       fallbackReason: reason,
-      failures: [createFailure(reason, String(error?.message || error))]
+      failures: [createFailure(reason, String(error?.message || error))],
+      validationFailures: compactFailures([createFailure(reason, String(error?.message || error))]),
+      rawPreview: ''
     };
   }
 }
@@ -1688,9 +1762,13 @@ async function runGameModeJob(job) {
     designerUsed: false,
     designerFallback: false,
     designerFallbackReason: null,
+    designerValidationFailuresTop: [],
+    designerRawPreview: '',
     builderUsed: false,
     builderFallback: false,
     builderFallbackReason: null,
+    builderValidationFailuresTop: [],
+    builderRawPreview: '',
     staticPass: false,
     runtimeEnabled,
     runtimePass: runtimeEnabled ? null : null,
@@ -1734,6 +1812,8 @@ async function runGameModeJob(job) {
   summary.designerUsed = designer.usedLlm === true;
   summary.designerFallback = designer.fallback === true;
   summary.designerFallbackReason = designer.fallbackReason || null;
+  summary.designerValidationFailuresTop = compactFailures(designer.validationFailures || designer.failures || []);
+  summary.designerRawPreview = trimForSummary(designer.rawPreview || '');
 
   const designerValidation = validateDesignerSpec(designer.spec);
   const effectiveDesignerSpec = designerValidation.ok
@@ -1749,6 +1829,7 @@ async function runGameModeJob(job) {
   if (!designerValidation.ok) {
     summary.designerFallback = true;
     summary.designerFallbackReason = summary.designerFallbackReason || 'DESIGN_SCHEMA_INVALID';
+    summary.designerValidationFailuresTop = compactFailures(designerValidation.failures);
     pushGameModeEvent(job, 'log', { text: `Designer invalid: ${designerValidation.failures.map((f) => f.detail).join('; ')} fallback=deterministic` });
   } else {
     pushGameModeEvent(job, 'log', { text: `Designer ok: title="${effectiveDesignerSpec.title}" genre="${effectiveDesignerSpec.genre || 'unknown'}"` });
@@ -1765,11 +1846,14 @@ async function runGameModeJob(job) {
   summary.builderUsed = builder.usedLlm === true;
   summary.builderFallback = builder.fallback === true;
   summary.builderFallbackReason = builder.fallbackReason || null;
+  summary.builderValidationFailuresTop = compactFailures(builder.validationFailures || builder.failures || []);
+  summary.builderRawPreview = trimForSummary(builder.rawPreview || '');
 
   const builderValidation = validateBuilderOutput(builder.output, job.mode);
   if (!builderValidation.ok) {
     summary.builderFallback = true;
     summary.builderFallbackReason = summary.builderFallbackReason || 'BUILD_SCHEMA_INVALID';
+    summary.builderValidationFailuresTop = compactFailures(builderValidation.failures);
     pushGameModeEvent(job, 'log', { text: `Builder invalid: ${builderValidation.failures.map((f) => f.detail).join('; ')} fallback=deterministic` });
   } else {
     pushGameModeEvent(job, 'log', { text: `Builder ok: files=${builder.output.files.map((f) => f.path).join(', ')}` });
