@@ -577,7 +577,6 @@ const DEFAULT_FEATURE_STATE = {
 };
 let featureState = { ...DEFAULT_FEATURE_STATE };
 let backendHealthy = true;
-let gameModeRunState = 'idle';
 let showAnalytics = false;
 let appInitialized = false;
 let appReady = false;
@@ -744,15 +743,14 @@ function initComposerControls() {
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
     playableBtn.addEventListener('click', async () => {
-      if (gameModeRunState === 'running') {
+      const activeAgent = appMachine.getActiveAgent();
+      const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
+      if (activeAgentBusy || isGenerating || chatState.locked) {
         return;
       }
 
       try {
-        await runGameMode({
-          userPrompt: getPromptInput(),
-          code: getEditorCode()
-        });
+        await startAgentExecution();
       } catch (error) {
         console.warn('Game mode execution failed.', error);
       }
@@ -10770,52 +10768,10 @@ function updatePlayableButtonState() {
   const activeAgent = appMachine.getActiveAgent();
   const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
 
-  runBtn.disabled = gameModeRunState === 'running';
+  runBtn.disabled = activeAgentBusy || isGenerating || chatState.locked;
 
   if (stopBtn) {
     stopBtn.disabled = !activeAgentBusy;
-  }
-}
-
-async function runGameMode(payload = {}) {
-  if (gameModeRunState === 'running') {
-    return;
-  }
-
-  gameModeRunState = 'running';
-  updatePlayableButtonState();
-
-  try {
-    const response = await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      throw new Error('Run failed');
-    }
-
-    const data = await response.json();
-    if (!data?.code) {
-      throw new Error('No code returned');
-    }
-
-    currentCode = data.code;
-    setCodeFromLLM(data.code);
-    runWhenPreviewReady(() => {
-      handleLLMOutput(data.code, 'generated').catch((error) => {
-        console.error('Auto-run failed after generation.', error);
-        addExecutionWarning('Preview auto-run failed. Try Run Code.');
-        setPreviewExecutionStatus('error', 'PREVIEW ERROR');
-      });
-    });
-    gameModeRunState = 'success';
-  } catch (error) {
-    console.error(error);
-    gameModeRunState = 'error';
-  } finally {
-    updatePlayableButtonState();
   }
 }
 
