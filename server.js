@@ -1701,6 +1701,10 @@ async function runGameModeJob(job) {
     pushGameModeEvent(job, 'log', { text: `Builder ok: files=${builder.output.files.map((f) => f.path).join(', ')}` });
   }
 
+  if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+    console.log(`[STAGE3_PATH] designerUsed=${summary.designerUsed} builderUsed=${summary.builderUsed} fallbackDesigner=${summary.designerFallback} fallbackBuilder=${summary.builderFallback}`);
+  }
+
   const effectiveBuilderOutput = builderValidation.ok
     ? builder.output
     : await buildDeterministicGameOutput(job, effectiveDesignerSpec);
