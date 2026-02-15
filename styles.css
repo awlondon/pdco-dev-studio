@@ -1095,13 +1095,34 @@ html, body {
 
 .agents-side-column {
   width: 300px;
+  min-width: 0;
+  transition: width 200ms ease, opacity 200ms ease;
+  overflow: hidden;
+}
+
+.agents-side-column.is-collapsed {
+  width: 0;
+  opacity: 0;
+}
+
+.agents-side-toggle {
+  align-self: flex-start;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
 }
 
 .agents-box {
   padding: 8px;
   background: #111;
   border: 1px solid #333;
-  min-height: 100px;
+  min-height: 90px;
+  max-height: 360px;
+  resize: vertical;
   overflow: auto;
   margin-bottom: 12px;
 }

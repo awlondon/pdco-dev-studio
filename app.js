@@ -530,6 +530,8 @@ let prList = document.getElementById('prList');
 let policyPanel = document.getElementById('policyPanel');
 let budgetPanel = document.getElementById('budgetPanel');
 let executionGraph = document.getElementById('executionGraph');
+let agentsSideColumn = document.getElementById('agents-side-column');
+let agentsSideToggleButton = document.getElementById('agents-side-toggle');
 let agentSidePanel = null;
 let agentPanelOpen = false;
 const fullscreenToggle = document.getElementById('fullscreenToggle');
@@ -685,7 +687,7 @@ function ensurePlayableButtonPresence() {
 
   playableButton.className = 'playable-btn';
   playableButton.type = 'button';
-  playableButton.disabled = true;
+  playableButton.disabled = false;
   playableButton.title = 'Make it a game';
   playableButton.setAttribute('aria-label', 'Make it a game');
   playableButton.hidden = false;
@@ -738,7 +740,7 @@ function initComposerControls() {
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
     playableBtn.addEventListener('click', async () => {
-      if (appMachine.getAppState() !== APP_STATES.READY) {
+      if (![APP_STATES.READY, APP_STATES.DEGRADED].includes(appMachine.getAppState())) {
         console.warn('Cannot start agent while app not ready.');
         return;
       }
@@ -10782,7 +10784,7 @@ function updatePlayableButtonState() {
 
   const appState = appMachine.getAppState();
   const activeAgent = appMachine.getActiveAgent();
-  const appReady = appState === APP_STATES.READY;
+  const appReady = [APP_STATES.READY, APP_STATES.DEGRADED].includes(appState);
   const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
 
   runBtn.disabled = !appReady || featureState.creditsRemaining <= 0;
@@ -12850,7 +12852,13 @@ function wireAgentPanelEvents() {
           body: JSON.stringify({ objective: getCurrentPrompt() })
         });
 
-        const data = await res.json();
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(data?.error || `Run failed (${res.status})`);
+        }
+        if (!data || typeof data !== 'object') {
+          throw new Error('Invalid JSON response from /api/agent/runs');
+        }
         appendAgentLog('Execution started.');
         renderExecutionMap(data.task_graph);
       } catch (err) {
@@ -12858,6 +12866,7 @@ function wireAgentPanelEvents() {
       }
 
       runBtn.innerText = 'Output Log';
+      runBtn.disabled = false;
     };
   }
 
@@ -12987,7 +12996,8 @@ function ensureAgentsWorkspaceMounted() {
             <h3>Execution Graph</h3>
             <svg id="executionGraph" width="100%" height="500"></svg>
           </div>
-          <div class="agents-side-column">
+          <button id="agents-side-toggle" class="agents-side-toggle" type="button" aria-expanded="true">Collapse Sidebar</button>
+          <div id="agents-side-column" class="agents-side-column">
             <h3>PR Monitor</h3>
             <div id="prList" class="agents-box"></div>
 
@@ -13011,6 +13021,25 @@ function ensureAgentsWorkspaceMounted() {
   policyPanel = document.getElementById('policyPanel');
   budgetPanel = document.getElementById('budgetPanel');
   executionGraph = document.getElementById('executionGraph');
+  agentsSideColumn = document.getElementById('agents-side-column');
+  agentsSideToggleButton = document.getElementById('agents-side-toggle');
+
+  if (agentsSideToggleButton && agentsSideColumn && agentsSideToggleButton.dataset.bound !== 'true') {
+    agentsSideToggleButton.dataset.bound = 'true';
+    const storageKey = 'maya_agents_sidebar_collapsed';
+
+    const setCollapsed = (collapsed) => {
+      agentsSideColumn.classList.toggle('is-collapsed', collapsed);
+      agentsSideToggleButton.setAttribute('aria-expanded', String(!collapsed));
+      agentsSideToggleButton.textContent = collapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
+      safeStorageSet(storageKey, String(collapsed));
+    };
+
+    setCollapsed(safeStorageGet(storageKey) === 'true');
+    agentsSideToggleButton.addEventListener('click', () => {
+      setCollapsed(!agentsSideColumn.classList.contains('is-collapsed'));
+    });
+  }
 }
 
 function setWorkspacePanel(panel) {
@@ -13139,7 +13168,13 @@ async function runMultiAgent() {
       body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || `Run failed (${response.status})`);
+    }
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid JSON response from /api/agent/runs');
+    }
     handleAgentRunResponse(data);
   } catch (error) {
     console.error(error);
