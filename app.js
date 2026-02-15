@@ -53,6 +53,7 @@ function resolveWebSocketBase() {
 
 const API_BASE = resolveApiBase();
 const WS_BASE = resolveWebSocketBase();
+const AGENT_STATUS_WS_ENABLED = window.ENABLE_AGENT_STATUS_WS === true;
 const appMachine = new AppStateMachine();
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
@@ -8995,6 +8996,9 @@ const preview = {
   handshakeTimer: null,
   handshakeRetryTimer: null,
   pingTimer: null,
+  shouldBypassHandshake(frame = this.activeFrame) {
+    return typeof frame?.srcdoc === 'string' && frame.srcdoc.includes(SESSION_BRIDGE_MARKER);
+  },
   attach(frame) {
     this.ready = false;
     this.readyMeta = null;
@@ -9007,8 +9011,17 @@ const preview = {
     frame.addEventListener('load', () => {
       this.ready = false;
       this.readyMeta = null;
+      if (this.shouldBypassHandshake(frame)) {
+        this.acknowledgeReady({ reason: 'srcdoc-load', bypass: true });
+        return;
+      }
       this.startHandshake('load');
     });
+
+    if (this.shouldBypassHandshake(frame)) {
+      this.acknowledgeReady({ reason: 'srcdoc-attach', bypass: true });
+      return;
+    }
 
     if (frame.contentDocument?.readyState === 'complete') {
       this.startHandshake('readyState');
@@ -13331,6 +13344,10 @@ let agentStatusSocket = null;
 let agentStatusSocketDisabled = false;
 
 function initAgentWebSocket() {
+  if (!AGENT_STATUS_WS_ENABLED) {
+    return;
+  }
+
   if (agentStatusSocket || agentStatusSocketDisabled || !WS_BASE) {
     return;
   }
