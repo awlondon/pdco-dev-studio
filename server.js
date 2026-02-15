@@ -1246,6 +1246,9 @@ async function callGameModeLlmJson({ system, user, temperature = 0.2, label = 'L
     if (process.env.GAME_MODE_DEBUG_LLM === '1') {
       console.log(`[LLM_RAW_${label}]`, String(raw || '').slice(0, 500));
     }
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log(`[LLM_RAW_${label}_FULL]`, String(raw || ''));
+    }
     const data = raw ? JSON.parse(raw) : null;
     const content = data?.choices?.[0]?.message?.content
       ?? data?.candidates?.[0]?.content
@@ -1277,8 +1280,14 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
 
   try {
     const spec = await callGameModeLlmJson({ system, user, temperature: 0.2, label: 'DESIGNER' });
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log('[LLM_PARSED_DESIGNER_FULL]', JSON.stringify(spec));
+    }
     const validation = validateDesignerSpec(spec);
     if (!validation.ok) {
+      if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+        console.log('[LLM_DESIGNER_VALIDATION_FAILURES]', JSON.stringify(validation.failures));
+      }
       return {
         spec: buildDeterministicDesignerSpec({ prompt }),
         usedLlm: true,
@@ -1316,8 +1325,14 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
 
   try {
     const output = await callGameModeLlmJson({ system, user, temperature: 0.15, label: 'BUILDER' });
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log('[LLM_PARSED_BUILDER_FULL]', JSON.stringify(output));
+    }
     const validation = validateBuilderOutput(output, mode);
     if (!validation.ok) {
+      if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+        console.log('[LLM_BUILDER_VALIDATION_FAILURES]', JSON.stringify(validation.failures));
+      }
       return {
         output: buildDeterministicBuilderOutput(designerSpec, mode),
         usedLlm: true,
