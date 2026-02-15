@@ -8963,6 +8963,7 @@ function resetSandboxFrame() {
   nextFrame.setAttribute('sandbox', 'allow-scripts');
   nextFrame.style.width = '100%';
   nextFrame.style.height = '100%';
+  nextFrame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head><body>${SESSION_BRIDGE_SCRIPT}</body></html>`;
   previewFrameHost.appendChild(nextFrame);
   sandboxFrame = nextFrame;
   sandbox.setIframe(nextFrame);
