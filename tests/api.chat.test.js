@@ -135,8 +135,8 @@ test('chat endpoint wraps latest user prompt when playable mode is enabled', asy
     const body = JSON.parse(init.body);
     const latest = body.messages[body.messages.length - 1];
     assert.equal(latest.role, 'user');
-    assert.match(latest.content, /interactive, playable experience/i);
-    assert.match(latest.content, /keyboard interaction/i);
+    assert.match(latest.content, /objective \(win condition\)/i);
+    assert.match(latest.content, /keyboard and\/or mouse inputs/i);
     assert.match(latest.content, /build something cool/i);
     assert.match(latest.content, /function draw\(\)/i);
     return {

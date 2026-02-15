@@ -2188,7 +2188,12 @@ app.post('/api/chat', async (req, res) => {
       : trimmedContext.messages;
 
     if (retryMode) {
-      trimmedMessages = applyPromptToLastUserMessage(trimmedMessages, finalPrompt);
+      trimmedMessages = playableMode
+        ? applyPlayablePromptToMessages(trimmedMessages, {
+          prompt: finalPrompt,
+          code: playableCodeText
+        })
+        : applyPromptToLastUserMessage(trimmedMessages, finalPrompt);
     }
 
     req.body.messages = trimmedMessages;
