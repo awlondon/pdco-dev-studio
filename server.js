@@ -730,6 +730,12 @@ app.use(cors({
 
 app.options('*', cors());
 
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  next();
+});
+
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/stripe/webhook')) {
@@ -759,6 +765,61 @@ app.get('/api/health', (req, res) => {
 
 app.get('/healthz', (_req, res) => {
   return res.status(200).json({ ok: true });
+});
+
+// Cloud Run compatibility routes expected by the frontend boot flow.
+// Keep this block above static SPA serving to avoid catch-all shadowing.
+app.get('/api/agent/runs', (_req, res) => {
+  res.json({ runs: [] });
+});
+
+// --- Compatibility API stubs (frontend expects these) ---
+app.get('/api/plans', (_req, res) => {
+  return res.json({ plans: [] });
+});
+
+app.get('/api/session/state', (_req, res) => {
+  return res.json({
+    authenticated: false,
+    user: null
+  });
+});
+
+app.get('/api/usage/overview', (_req, res) => {
+  return res.json({
+    credits: 0,
+    plan: 'free'
+  });
+});
+
+app.post('/api/run', async (req, res) => {
+  const { messages, model } = req.body || {};
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[api/run] request received', {
+      model,
+      messageCount: Array.isArray(messages) ? messages.length : 0
+    });
+  }
+
+  const code = `
+<!doctype html>
+<html>
+  <body>
+    <h1>Game Mode Output</h1>
+  </body>
+</html>
+`.trim();
+
+  res.json({ code });
+});
+
+app.all('/api/run', (req, res, next) => {
+  if (req.method === 'POST') {
+    return next();
+  }
+  res.setHeader('Allow', 'POST');
+  return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
 });
 
 
@@ -2172,7 +2233,12 @@ app.post('/api/chat', async (req, res) => {
       : trimmedContext.messages;
 
     if (retryMode) {
-      trimmedMessages = applyPromptToLastUserMessage(trimmedMessages, finalPrompt);
+      trimmedMessages = playableMode
+        ? applyPlayablePromptToMessages(trimmedMessages, {
+          prompt: finalPrompt,
+          code: playableCodeText
+        })
+        : applyPromptToLastUserMessage(trimmedMessages, finalPrompt);
     }
 
     req.body.messages = trimmedMessages;
@@ -3273,6 +3339,17 @@ app.post('/api/stripe/webhook', async (req, res) => {
 });
 
 
+app.use('/api', (req, res) => {
+  return res.status(404).json({
+    ok: false,
+    error: `API route not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
+app.get('/ws', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.status(426).json({ ok: false, error: 'Upgrade Required', hint: 'Use a WebSocket client for /ws' });
+});
 
 const frontendDistDir = path.join(__dirname, 'pdco-frontend', 'dist');
 
@@ -3323,12 +3400,13 @@ export function broadcast(payload) {
 }
 
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'hello', ts: Date.now() }));
+  socket.send(JSON.stringify({ type: 'connected' }));
 });
 
 const port = process.env.PORT || 8080;
 server.listen(port, () => {
-  console.log('Maya API listening on', port);
+  console.log('Server listening on', port);
+  console.log('Compat routes: /api/agent/runs, /api/plans, /api/session/state, /api/usage/overview, POST /api/run, ws:/ws');
   logStructured('info', 'user_store_driver_selected', { user_store_driver: USER_STORE_DRIVER });
   startCreditResetScheduler();
 });

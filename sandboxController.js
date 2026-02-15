@@ -89,7 +89,18 @@ export function createSandboxController({
 
     logStatus(`▶ executing (${mode})`);
 
-    activeFrame.srcdoc = code;
+    const compiledHtml = code;
+    const handshakeScript = `
+<script>
+  window.addEventListener('load', () => {
+    try {
+      window.parent.postMessage({ type: 'sandbox-ready' }, '*');
+    } catch (e) {}
+  });
+</script>
+`;
+
+    activeFrame.srcdoc = compiledHtml + handshakeScript;
 
     if (mode === "finite") {
       timeoutId = setTimeout(() => {

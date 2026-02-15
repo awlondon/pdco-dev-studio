@@ -12,6 +12,8 @@ import AgentsPanel from './agents/AgentsPanel';
 import { API_BASE, requireApiBase } from './config/runtime';
 const isDev = import.meta.env.DEV;
 const layoutStorageKey = 'pdco.devstudio.layout.v1';
+const rightPanelOpenStorageKey = 'pdco.devstudio.rightPanelOpen.v1';
+const rightPanelWidthStorageKey = 'pdco.devstudio.rightPanelWidth.v1';
 
 const panelDefinitions = {
   editor: { title: 'Editor', zone: 'center', allowUndock: false },
@@ -60,6 +62,27 @@ function readStoredLayout() {
   } catch {
     return defaultLayout;
   }
+}
+
+function readStoredRightPanelOpen() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.localStorage.getItem(rightPanelOpenStorageKey) === 'true';
+}
+
+function readStoredRightPanelWidth() {
+  if (typeof window === 'undefined') {
+    return 380;
+  }
+
+  const storedWidth = Number.parseInt(window.localStorage.getItem(rightPanelWidthStorageKey) || '', 10);
+  if (Number.isNaN(storedWidth)) {
+    return 380;
+  }
+
+  return Math.min(800, Math.max(280, storedWidth));
 }
 
 function useRenderCounter(name) {
@@ -340,13 +363,33 @@ const AgentsWorkspacePanel = memo(function AgentsWorkspacePanel({ panelLayout, o
   );
 });
 
+const LoginRoute = memo(function LoginRoute() {
+  const frontendOrigin = typeof window === 'undefined' ? 'unknown' : window.location.origin;
+
+  return (
+    <main className="login-route" aria-label="Login">
+      <section className="login-card">
+        <h1>PDCo Dev Studio</h1>
+        <p>Sign in to continue.</p>
+        <p className="login-path">Current route: /login</p>
+        <span>{frontendOrigin}</span>
+      </section>
+    </main>
+  );
+});
+
 function App() {
+  const [pathname, setPathname] = useState(() =>
+    typeof window === 'undefined' ? '/' : window.location.pathname
+  );
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [layout, setLayout] = useState(() => readStoredLayout());
   const [backendStatus, setBackendStatus] = useState('CHECKING');
   const [editorValue, setEditorValue] = useState('<h1>PDCo Dev Studio</h1>');
+  const [isRightPanelOpen, setRightPanelOpen] = useState(() => readStoredRightPanelOpen());
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => readStoredRightPanelWidth());
   const shellRef = useRef(null);
-  const dragRef = useRef({ active: false, side: null, value: 0 });
+  const dragRef = useRef({ active: false, value: 0 });
 
   const hasLeftPanel = layout.panels.files.visible && layout.panels.files.docked;
   const hasRightPanel = ['preview', 'tasks', 'settings'].some((id) => layout.panels[id].visible && layout.panels[id].docked);
@@ -355,15 +398,22 @@ function App() {
   const shellStyle = useMemo(
     () => ({
       '--left-width': `${hasLeftPanel ? layout.left : 48}px`,
-      '--right-width': `${hasRightPanel ? layout.right : 48}px`,
       '--dock-height': dockIsVisible ? '180px' : '40px'
     }),
-    [dockIsVisible, hasLeftPanel, hasRightPanel, layout.left, layout.right]
+    [dockIsVisible, hasLeftPanel, layout.left]
   );
 
   useEffect(() => {
     window.localStorage.setItem(layoutStorageKey, JSON.stringify(layout));
   }, [layout]);
+
+  useEffect(() => {
+    window.localStorage.setItem(rightPanelOpenStorageKey, String(isRightPanelOpen));
+  }, [isRightPanelOpen]);
+
+  useEffect(() => {
+    window.localStorage.setItem(rightPanelWidthStorageKey, String(rightPanelWidth));
+  }, [rightPanelWidth]);
 
   const onEditorChange = useCallback((event) => {
     setEditorValue(event.target.value);
@@ -412,13 +462,36 @@ function App() {
   }, [layout]);
 
   const onDividerStart = useCallback((side) => (event) => {
+    if (side !== 'left') {
+      return;
+    }
     dragRef.current = {
       active: true,
-      side,
-      value: side === 'left' ? layout.left : layout.right
+      value: layout.left
     };
     event.preventDefault();
-  }, [layout.left, layout.right]);
+  }, [layout.left]);
+
+  const startRightPanelResize = useCallback((event) => {
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startWidth = rightPanelWidth;
+
+    const onMove = (moveEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const nextWidth = Math.min(Math.max(startWidth + delta, 280), 800);
+      setRightPanelWidth(nextWidth);
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [rightPanelWidth]);
 
   useEffect(() => {
     const onMove = (event) => {
@@ -430,27 +503,18 @@ function App() {
       const minPanelWidth = 180;
       const maxPanelWidth = 420;
 
-      if (dragRef.current.side === 'left') {
-        const next = Math.min(maxPanelWidth, Math.max(minPanelWidth, event.clientX - shellRect.left));
-        dragRef.current.value = next;
-        shellRef.current.style.setProperty('--left-width', `${next}px`);
-      }
-
-      if (dragRef.current.side === 'right') {
-        const fromRight = shellRect.right - event.clientX;
-        const next = Math.min(maxPanelWidth, Math.max(minPanelWidth, fromRight));
-        dragRef.current.value = next;
-        shellRef.current.style.setProperty('--right-width', `${next}px`);
-      }
+      const next = Math.min(maxPanelWidth, Math.max(minPanelWidth, event.clientX - shellRect.left));
+      dragRef.current.value = next;
+      shellRef.current.style.setProperty('--left-width', `${next}px`);
     };
 
     const onUp = () => {
       if (!dragRef.current.active) {
         return;
       }
-      const { side, value } = dragRef.current;
-      dragRef.current = { active: false, side: null, value: 0 };
-      setLayout((current) => ({ ...current, ...(side === 'left' ? { left: value } : { right: value }) }));
+      const { value } = dragRef.current;
+      dragRef.current = { active: false, value: 0 };
+      setLayout((current) => ({ ...current, left: value }));
     };
 
     window.addEventListener('mousemove', onMove);
@@ -468,7 +532,12 @@ function App() {
     async function pingBackend() {
       try {
         const response = await fetch(`${requireApiBase()}/healthz`);
-        const payload = await response.json();
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
         if (!cancelled) {
           setBackendStatus(response.ok && payload?.ok ? 'OK' : 'DISCONNECTED');
         }
@@ -492,6 +561,27 @@ function App() {
 
   const frontendOrigin = typeof window === 'undefined' ? 'unknown' : window.location.origin;
   const runtimeLabel = isDev ? 'local-dev' : 'production-build';
+  const isLoginRoute = pathname.startsWith('/login');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const syncPathname = () => {
+      setPathname(window.location.pathname);
+    };
+
+    window.addEventListener('popstate', syncPathname);
+
+    return () => {
+      window.removeEventListener('popstate', syncPathname);
+    };
+  }, []);
+
+  if (isLoginRoute) {
+    return <LoginRoute />;
+  }
 
   return (
     <div className="workspace-root">
@@ -519,15 +609,33 @@ function App() {
               <EditorPanel value={editorValue} onChange={onEditorChange} panelLayout={layout.panels.editor} onToggleVisible={togglePanelVisible} />
               <ConsolePanel panelLayout={layout.panels.console} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
             </section>
-
-            <div className="divider" onMouseDown={onDividerStart('right')} />
-
-            <section className="right-column">
-              <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-              <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-            </section>
           </main>
+
+          {hasRightPanel && (
+            <>
+              <button
+                className="right-panel-toggle"
+                onClick={() => setRightPanelOpen((open) => !open)}
+                aria-expanded={isRightPanelOpen}
+                aria-label={isRightPanelOpen ? 'Collapse right panel' : 'Expand right panel'}
+                style={{ right: isRightPanelOpen ? `${rightPanelWidth + 8}px` : '8px' }}
+              >
+                {isRightPanelOpen ? '→' : '←'}
+              </button>
+
+              <aside
+                className={`right-overlay-panel ${isRightPanelOpen ? 'right-overlay-panel-open' : ''}`}
+                style={{ width: `${rightPanelWidth}px`, transform: isRightPanelOpen ? 'translateX(0)' : `translateX(${rightPanelWidth}px)` }}
+              >
+                <div className="right-overlay-resize-handle" onMouseDown={startRightPanelResize} />
+                <section className="right-column">
+                  <PreviewPanel panelLayout={layout.panels.preview} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                  <TasksPanel panelLayout={layout.panels.tasks} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                  <SettingsPanel panelLayout={layout.panels.settings} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+                </section>
+              </aside>
+            </>
+          )}
 
           {!!floatingPanels.length && (
             <aside className="floating-area">
@@ -550,11 +658,9 @@ function App() {
           )}
         </div>
 
-        {agentsOpen && (
-          <aside className="agents-dock">
-            <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
-          </aside>
-        )}
+        <aside className={`agents-dock ${agentsOpen ? 'agents-dock-open' : 'agents-dock-collapsed'}`}>
+          <AgentsWorkspacePanel panelLayout={layout.panels.agents} onToggleVisible={togglePanelVisible} onToggleDock={togglePanelDock} />
+        </aside>
       </div>
     </div>
   );

@@ -29,25 +29,31 @@ if (!window.GOOGLE_CLIENT_ID) {
 }
 
 function resolveApiBase() {
-  const configuredBase = import.meta.env.VITE_API_BASE || '';
+  const rawApiBase =
+    window.API_BASE ||
+    (window.location.hostname === "localhost"
+      ? "http://localhost:8080"
+      : window.location.origin);
 
-  if (typeof configuredBase === 'string') {
-    const trimmed = configuredBase.trim();
-    if (trimmed) {
-      return trimmed.replace(/\/$/, '');
-    }
-  }
+  const apiBase = rawApiBase
+    .replace(/\/$/, '')
+    .replace(/\/api$/i, '');
 
-  if (location.hostname.includes('localhost')) {
-    return 'http://localhost:8080';
-  }
+  return apiBase;
+}
 
-  throw new Error(
-    'Missing API base URL in production.'
-  );
+function resolveWebSocketBase() {
+  const rawWsBase = window.WS_BASE
+    || (window.location.hostname === 'localhost'
+      ? 'ws://localhost:8080/ws'
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`);
+
+  return rawWsBase.replace(/\/$/, '');
 }
 
 const API_BASE = resolveApiBase();
+const WS_BASE = resolveWebSocketBase();
+const AGENT_STATUS_WS_ENABLED = window.ENABLE_AGENT_STATUS_WS === true;
 const appMachine = new AppStateMachine();
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
@@ -56,9 +62,15 @@ let agentSyncIntervalId = null;
 
 async function safeFetchJSON(url, options = {}, fallback = null) {
   try {
-    const res = await fetch(`${API_BASE}${url}`, { mode: 'cors', ...options });
-    if (!res.ok) {
-      console.warn(`API error ${res.status} for ${url}`);
+    const res = await fetchOptionalApi(url, options);
+    if (!res || !res.ok) {
+      return fallback;
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (!/application\/json|text\/json/i.test(contentType)) {
+      if (window.location.hostname === 'localhost') {
+        console.warn(`Skipping non-JSON response for ${url} (${contentType || 'unknown content-type'})`);
+      }
       return fallback;
     }
     return await res.json();
@@ -139,7 +151,20 @@ async function fetchOptionalApi(path, options = {}) {
       const response = await fetch(`${API_BASE}${path}`, { mode: 'cors', ...fetchOptions });
       if (response.status === 404 || response.status === 405 || response.status === 501) {
         unsupportedApiEndpoints.add(endpointKey);
-        console.info(`API endpoint not available: ${endpointKey}`);
+        if (window.location.hostname === 'localhost') {
+          console.warn(`API endpoint not available: ${endpointKey}`);
+        }
+        return null;
+      }
+      if (
+        endpointKey.startsWith('/api/')
+        && response.ok
+        && /text\/html/i.test(response.headers.get('content-type') || '')
+      ) {
+        unsupportedApiEndpoints.add(endpointKey);
+        if (window.location.hostname === 'localhost') {
+          console.warn(`API endpoint returned HTML fallback: ${endpointKey}`);
+        }
         return null;
       }
       if (shouldCache && response.ok) {
@@ -539,6 +564,8 @@ let prList = document.getElementById('prList');
 let policyPanel = document.getElementById('policyPanel');
 let budgetPanel = document.getElementById('budgetPanel');
 let executionGraph = document.getElementById('executionGraph');
+let agentsSideColumn = document.getElementById('agents-side-column');
+let agentsSideToggleButton = document.getElementById('agents-side-toggle');
 let agentSidePanel = null;
 let agentPanelOpen = false;
 const fullscreenToggle = document.getElementById('fullscreenToggle');
@@ -581,6 +608,7 @@ const DEFAULT_FEATURE_STATE = {
   authenticated: false
 };
 let featureState = { ...DEFAULT_FEATURE_STATE };
+let backendHealthy = true;
 let showAnalytics = false;
 let appInitialized = false;
 let appReady = false;
@@ -694,7 +722,7 @@ function ensurePlayableButtonPresence() {
 
   playableButton.className = 'playable-btn';
   playableButton.type = 'button';
-  playableButton.disabled = true;
+  playableButton.disabled = false;
   playableButton.title = 'Make it a game';
   playableButton.setAttribute('aria-label', 'Make it a game');
   playableButton.hidden = false;
@@ -747,15 +775,16 @@ function initComposerControls() {
   if (playableBtn && playableBtn.dataset.composerBound !== 'true') {
     playableBtn.dataset.composerBound = 'true';
     playableBtn.addEventListener('click', async () => {
-      if (appMachine.getAppState() !== APP_STATES.READY) {
-        console.warn('Cannot start agent while app not ready.');
+      const activeAgent = appMachine.getActiveAgent();
+      const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
+      if (activeAgentBusy || isGenerating || chatState.locked) {
         return;
       }
 
       try {
         await startAgentExecution();
       } catch (error) {
-        console.warn('Agent execution failed.', error);
+        console.warn('Game mode execution failed.', error);
       }
     });
   }
@@ -1307,58 +1336,67 @@ const PREVIEW_BRIDGE_VERSION = '2.2';
 const SESSION_BRIDGE_SCRIPT = `${SESSION_BRIDGE_MARKER}
 <script id="dev-session-bridge">
 
-  window.__SESSION__ = window.__SESSION__ || null;
-  const PREVIEW_BRIDGE_VERSION = '${PREVIEW_BRIDGE_VERSION}';
-  const postPreviewReady = () => {
-    if (!window.parent) {
-      return;
-    }
-    try {
-      window.parent.postMessage({
-        type: 'READY',
-        channel: 'maya-preview',
-        version: PREVIEW_BRIDGE_VERSION,
-        route: window.location.pathname || '/',
-        href: window.location.href,
-        timestamp: Date.now()
-      }, '*');
-    } catch (err) {
-      console.warn('postMessage blocked by COOP');
-    }
-  };
-  window.addEventListener('message', (event) => {
-    if (event.data?.type === 'SESSION') {
-      window.__SESSION__ = event.data;
-    }
-    if (event.data?.type === 'PING' && event.data?.channel === 'maya-preview') {
-      postPreviewReady();
-    }
-  });
-  postPreviewReady();
-  const notifyError = (payload) => {
-    if (window.parent) {
+  (() => {
+    window.__SESSION__ = window.__SESSION__ || null;
+    const bridgeVersion = '${PREVIEW_BRIDGE_VERSION}';
+    const postPreviewReady = () => {
+      if (!window.parent) {
+        return;
+      }
       try {
-        window.parent.postMessage({ type: 'SANDBOX_ERROR', error: payload }, '*');
+        window.parent.postMessage({
+          type: 'READY',
+          channel: 'maya-preview',
+          version: bridgeVersion,
+          route: window.location.pathname || '/',
+          href: window.location.href,
+          timestamp: Date.now()
+        }, '*');
+        window.parent.postMessage({ type: 'sandbox-ready' }, '*');
       } catch (err) {
         console.warn('postMessage blocked by COOP');
       }
-    }
-  };
-  window.addEventListener('error', (event) => {
-    notifyError({
-      message: event.message,
-      line: event.lineno,
-      column: event.colno,
-      stack: event.error?.stack || ''
+    };
+
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'SESSION') {
+        window.__SESSION__ = event.data;
+      }
+      if (event.data?.type === 'PING' && event.data?.channel === 'maya-preview') {
+        postPreviewReady();
+      }
     });
-  });
-  window.addEventListener('unhandledrejection', (event) => {
-    const reason = event.reason;
-    notifyError({
-      message: reason?.message || String(reason || 'Unhandled rejection'),
-      stack: reason?.stack || ''
+
+    window.addEventListener('load', () => postPreviewReady(), { once: true });
+    postPreviewReady();
+
+    const notifyError = (payload) => {
+      if (window.parent) {
+        try {
+          window.parent.postMessage({ type: 'SANDBOX_ERROR', error: payload }, '*');
+        } catch (err) {
+          console.warn('postMessage blocked by COOP');
+        }
+      }
+    };
+
+    window.addEventListener('error', (event) => {
+      notifyError({
+        message: event.message,
+        line: event.lineno,
+        column: event.colno,
+        stack: event.error?.stack || ''
+      });
     });
-  });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason;
+      notifyError({
+        message: reason?.message || String(reason || 'Unhandled rejection'),
+        stack: reason?.stack || ''
+      });
+    });
+  })();
 </script>`;
 
 function injectSessionBridge(code) {
@@ -1631,7 +1669,10 @@ function syncSessionToSandbox() {
 }
 
 function handleSandboxReadyMessage(event) {
-  if (event?.data?.type !== 'READY' || event?.data?.channel !== 'maya-preview') {
+  const messageType = event?.data?.type;
+  const isLegacyReady = messageType === 'sandbox-ready';
+  const isPreviewReady = messageType === 'READY' && event?.data?.channel === 'maya-preview';
+  if (!isLegacyReady && !isPreviewReady) {
     return;
   }
   if (event.source !== sandboxFrame?.contentWindow) {
@@ -1854,7 +1895,6 @@ function initAppleAuth() {
     return;
   }
   if (!APPLE_CLIENT_ID || !APPLE_REDIRECT_URI) {
-    console.warn('Apple auth configuration missing.');
     return;
   }
 
@@ -3632,27 +3672,8 @@ async function checkEmailVerification() {
   }
 }
 
-function showOfflineBanner() {
-  if (document.querySelector('.degraded-banner')) {
-    return;
-  }
-  const banner = document.createElement('div');
-  banner.textContent = 'Limited mode: backend unavailable.';
-  banner.className = 'degraded-banner';
-  document.body.prepend(banner);
-}
-
 function enableFullFeatures() {
   featureState.playableModeEnabled = true;
-}
-
-function enableLimitedMode() {
-  featureState.playableModeEnabled = false;
-}
-
-function disableNetworkFeatures() {
-  featureState.playableModeEnabled = false;
-  showOfflineBanner();
 }
 
 function showFatalErrorScreen() {
@@ -3666,12 +3687,8 @@ function handleAppState(appState) {
       break;
 
     case APP_STATES.DEGRADED:
-      enableLimitedMode();
-      showOfflineBanner();
-      break;
-
     case APP_STATES.OFFLINE:
-      disableNetworkFeatures();
+      enableFullFeatures();
       break;
 
     case APP_STATES.ERROR:
@@ -4124,34 +4141,24 @@ async function bootApp() {
 
   appMachine.dispatch(EVENTS.START);
 
-  try {
-    const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, null);
-    if (plans) {
-      appMachine.dispatch(EVENTS.NETWORK_OK);
-      if (Array.isArray(plans.plans)) {
-        planCatalog = plans.plans.map((plan) => ({
-          ...plan,
-          tier: plan.tier?.toString().toLowerCase()
-        }));
-      }
-      const resolvedPlans = getAvailablePlans();
-      renderPricingPlans(resolvedPlans);
-      renderPaywallPlans(resolvedPlans);
-      const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
-      updatePaywallPlanSelection(initialSelectedPlan);
-      updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
-    } else {
-      appMachine.dispatch(EVENTS.NETWORK_FAIL);
-      return;
-    }
-  } catch {
-    appMachine.dispatch(EVENTS.NETWORK_FAIL);
-    return;
+  const plans = await safeFetchJSON('/api/plans', { credentials: 'include' }, null);
+  appMachine.dispatch(EVENTS.NETWORK_OK);
+  if (plans && Array.isArray(plans.plans)) {
+    planCatalog = plans.plans.map((plan) => ({
+      ...plan,
+      tier: plan.tier?.toString().toLowerCase()
+    }));
   }
+  const resolvedPlans = getAvailablePlans();
+  renderPricingPlans(resolvedPlans);
+  renderPaywallPlans(resolvedPlans);
+  const initialSelectedPlan = getStoredPaywallPlan() || getDefaultPaidPlanTier();
+  updatePaywallPlanSelection(initialSelectedPlan);
+  updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
 
   const session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
+  appMachine.dispatch(EVENTS.SESSION_OK);
   if (session) {
-    appMachine.dispatch(EVENTS.SESSION_OK);
     featureState.authenticated = !!session.authenticated;
     if (session.user) {
       onAuthSuccess({
@@ -4162,9 +4169,6 @@ async function bootApp() {
         deferRender: true
       });
     }
-  } else {
-    appMachine.dispatch(EVENTS.SESSION_FAIL);
-    return;
   }
 
   const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, null);
@@ -4175,10 +4179,8 @@ async function bootApp() {
   }
   if (usage) {
     featureState.creditsRemaining = usage?.creditsRemaining ?? 0;
-    appMachine.dispatch(EVENTS.USAGE_OK);
-  } else {
-    appMachine.dispatch(EVENTS.USAGE_FAIL);
   }
+  appMachine.dispatch(EVENTS.USAGE_OK);
 
   appReady = true;
 }
@@ -4186,11 +4188,16 @@ async function bootApp() {
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
+  fetchOptionalApi('/api/session/state', { cacheTtlMs: 0 }).then((response) => {
+    backendHealthy = Boolean(response?.ok);
+  }).catch(() => {
+    backendHealthy = false;
+    console.warn('Backend unreachable');
+  });
   await bootApp();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
   if (!user) {
-    console.warn('Session unavailable. Continuing in anonymous mode.');
     uiState = UI_STATE.AUTH;
     showAnalytics = false;
     resetAppToUnauthed();
@@ -4553,6 +4560,7 @@ function getPerfSnapshotForIssue() {
     frontend: frontendSnapshot,
     backend: perfHudState.backend,
     backend_error: perfHudState.backendError,
+    backend_healthy: backendHealthy,
     backend_updated_at: perfHudState.lastBackendUpdateAt
       ? new Date(perfHudState.lastBackendUpdateAt).toISOString()
       : null
@@ -8972,6 +8980,7 @@ function resetSandboxFrame() {
   nextFrame.setAttribute('sandbox', 'allow-scripts');
   nextFrame.style.width = '100%';
   nextFrame.style.height = '100%';
+  nextFrame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head><body>${SESSION_BRIDGE_SCRIPT}</body></html>`;
   previewFrameHost.appendChild(nextFrame);
   sandboxFrame = nextFrame;
   sandbox.setIframe(nextFrame);
@@ -8987,6 +8996,9 @@ const preview = {
   handshakeTimer: null,
   handshakeRetryTimer: null,
   pingTimer: null,
+  shouldBypassHandshake(frame = this.activeFrame) {
+    return typeof frame?.srcdoc === 'string' && frame.srcdoc.includes(SESSION_BRIDGE_MARKER);
+  },
   attach(frame) {
     this.ready = false;
     this.readyMeta = null;
@@ -8999,8 +9011,17 @@ const preview = {
     frame.addEventListener('load', () => {
       this.ready = false;
       this.readyMeta = null;
+      if (this.shouldBypassHandshake(frame)) {
+        this.acknowledgeReady({ reason: 'srcdoc-load', bypass: true });
+        return;
+      }
       this.startHandshake('load');
     });
+
+    if (this.shouldBypassHandshake(frame)) {
+      this.acknowledgeReady({ reason: 'srcdoc-attach', bypass: true });
+      return;
+    }
 
     if (frame.contentDocument?.readyState === 'complete') {
       this.startHandshake('readyState');
@@ -10788,12 +10809,10 @@ function updatePlayableButtonState() {
     : featureState.creditsRemaining;
   featureState.creditsRemaining = Number.isFinite(remainingCredits) ? remainingCredits : 0;
 
-  const appState = appMachine.getAppState();
   const activeAgent = appMachine.getActiveAgent();
-  const appReady = appState === APP_STATES.READY;
   const activeAgentBusy = [AGENT_ROOT_STATES.PREPARING, AGENT_ROOT_STATES.ACTIVE].includes(activeAgent?.root);
 
-  runBtn.disabled = !appReady || featureState.creditsRemaining <= 0;
+  runBtn.disabled = activeAgentBusy || isGenerating || chatState.locked;
 
   if (stopBtn) {
     stopBtn.disabled = !activeAgentBusy;
@@ -10940,30 +10959,30 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
 
     console.log('LLM REQUEST:', { model: DEFAULT_MODEL, messages });
 
-    if (!API_BASE) {
-      throw new Error('API_BASE is not configured');
-    }
+    const requestPayload = {
+      messages,
+      model: DEFAULT_MODEL,
+      sessionId,
+      session_id: sessionId,
+      intentType: resolvedIntent.type,
+      contextMode: getSelectedContextMode(),
+      historySummary: sessionState?.history_summary?.text || '',
+      user: getUserContext(),
+      playableMode,
+      retryMode,
+      userPrompt: intentAdjustedInput,
+      originalPrompt: lastRetryContext?.originalPrompt || intentAdjustedInput,
+      previousResponse: lastRetryContext?.previousResponse || '',
+      currentCode: resolvedCodeInput,
+      code: resolvedCodeInput
+    };
 
-    const res = await fetch(`${API_BASE}/api/chat`, {
+    const endpoint = playableMode ? `${API_BASE}/api/run` : `${API_BASE}/api/chat`;
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: chatAbortController.signal,
-      body: JSON.stringify({
-        messages,
-        sessionId,
-        session_id: sessionId,
-        intentType: resolvedIntent.type,
-        contextMode: getSelectedContextMode(),
-        historySummary: sessionState?.history_summary?.text || '',
-        user: getUserContext(),
-        playableMode,
-        retryMode,
-        userPrompt: intentAdjustedInput,
-        originalPrompt: lastRetryContext?.originalPrompt || intentAdjustedInput,
-        previousResponse: lastRetryContext?.previousResponse || '',
-        currentCode: resolvedCodeInput,
-        code: resolvedCodeInput
-      })
+      body: JSON.stringify(requestPayload)
     });
 
     const responseText = await res.text();
@@ -10981,13 +11000,19 @@ async function sendChat({ playableMode = false, retryMode = false, userPrompt = 
     }
 
     setStatusOnline(true);
-    const content =
-      data?.choices?.[0]?.message?.content
-      ?? data?.candidates?.[0]?.content
-      ?? data?.output_text
-      ?? null;
+    const content = playableMode
+      ? data?.code
+      : (
+        data?.choices?.[0]?.message?.content
+        ?? data?.candidates?.[0]?.content
+        ?? data?.output_text
+        ?? null
+      );
     if (!content) {
       throw new Error('No model output returned');
+    }
+    if (playableMode) {
+      console.log('Game mode result:', data);
     }
     rawReply = content;
     if (playableMode) {
@@ -12858,7 +12883,17 @@ function wireAgentPanelEvents() {
           body: JSON.stringify({ objective: getCurrentPrompt() })
         });
 
-        const data = await res.json();
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error('Server returned invalid JSON');
+        }
+
+        if (!res.ok) {
+          throw new Error(data?.error || 'Run failed');
+        }
+
         appendAgentLog('Execution started.');
         renderExecutionMap(data.task_graph);
       } catch (err) {
@@ -12866,6 +12901,7 @@ function wireAgentPanelEvents() {
       }
 
       runBtn.innerText = 'Output Log';
+      runBtn.disabled = false;
     };
   }
 
@@ -12995,7 +13031,8 @@ function ensureAgentsWorkspaceMounted() {
             <h3>Execution Graph</h3>
             <svg id="executionGraph" width="100%" height="500"></svg>
           </div>
-          <div class="agents-side-column">
+          <button id="agents-side-toggle" class="agents-side-toggle" type="button" aria-expanded="true">Collapse Sidebar</button>
+          <div id="agents-side-column" class="agents-side-column">
             <h3>PR Monitor</h3>
             <div id="prList" class="agents-box"></div>
 
@@ -13019,6 +13056,25 @@ function ensureAgentsWorkspaceMounted() {
   policyPanel = document.getElementById('policyPanel');
   budgetPanel = document.getElementById('budgetPanel');
   executionGraph = document.getElementById('executionGraph');
+  agentsSideColumn = document.getElementById('agents-side-column');
+  agentsSideToggleButton = document.getElementById('agents-side-toggle');
+
+  if (agentsSideToggleButton && agentsSideColumn && agentsSideToggleButton.dataset.bound !== 'true') {
+    agentsSideToggleButton.dataset.bound = 'true';
+    const storageKey = 'maya_agents_sidebar_collapsed';
+
+    const setCollapsed = (collapsed) => {
+      agentsSideColumn.classList.toggle('is-collapsed', collapsed);
+      agentsSideToggleButton.setAttribute('aria-expanded', String(!collapsed));
+      agentsSideToggleButton.textContent = collapsed ? 'Expand Sidebar' : 'Collapse Sidebar';
+      safeStorageSet(storageKey, String(collapsed));
+    };
+
+    setCollapsed(safeStorageGet(storageKey) === 'true');
+    agentsSideToggleButton.addEventListener('click', () => {
+      setCollapsed(!agentsSideColumn.classList.contains('is-collapsed'));
+    });
+  }
 }
 
 function setWorkspacePanel(panel) {
@@ -13147,7 +13203,13 @@ async function runMultiAgent() {
       body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || `Run failed (${response.status})`);
+    }
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid JSON response from /api/agent/runs');
+    }
     handleAgentRunResponse(data);
   } catch (error) {
     console.error(error);
@@ -13279,15 +13341,19 @@ function handleAgentStreamEvent(data) {
 }
 
 let agentStatusSocket = null;
+let agentStatusSocketDisabled = false;
 
 function initAgentWebSocket() {
-  if (agentStatusSocket) {
+  if (!AGENT_STATUS_WS_ENABLED) {
+    return;
+  }
+
+  if (agentStatusSocket || agentStatusSocketDisabled || !WS_BASE) {
     return;
   }
 
   try {
-    const socketUrl = API_BASE.replace(/^http/i, 'ws');
-    const socket = new WebSocket(socketUrl);
+    const socket = new WebSocket(WS_BASE);
     agentStatusSocket = socket;
 
     socket.onopen = () => {
@@ -13300,14 +13366,15 @@ function initAgentWebSocket() {
     };
 
     socket.onerror = () => {
-      appendAgentLog('WebSocket error.');
+      agentStatusSocketDisabled = true;
+      console.debug('Agent status WebSocket unavailable.');
     };
 
     socket.onclose = () => {
       agentStatusSocket = null;
     };
   } catch (error) {
-    console.warn('Unable to connect agent status socket.', error);
+    console.debug('Unable to connect agent status socket.', error);
   }
 }
 

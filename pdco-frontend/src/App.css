@@ -8,6 +8,38 @@ body {
   color: #e9edf7;
 }
 
+.login-route {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  border: 1px solid #242b46;
+  border-radius: 12px;
+  background: #131728;
+  padding: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.login-card p {
+  margin: 0;
+  color: #b7bfd8;
+}
+
+.login-path {
+  font-family: 'JetBrains Mono', monospace;
+  color: #8ca3ff;
+}
+
 .workspace-root {
   display: flex;
   flex-direction: column;
@@ -60,25 +92,36 @@ body {
 .workspace-studio {
   flex: 1;
   min-width: 0;
+  position: relative;
 }
 
 .workspace-shell {
   --left-width: 280px;
-  --right-width: 360px;
   --dock-height: 180px;
   display: grid;
-  grid-template-columns: var(--left-width) 8px 1fr 8px var(--right-width);
+  grid-template-columns: var(--left-width) 8px 1fr;
   gap: 0;
   height: 100%;
 }
 
 .agents-dock {
   width: min(45vw, 640px);
-  min-width: 360px;
   border-left: 1px solid #242b46;
   background: #0d0d15;
-  overflow: auto;
+  overflow: hidden;
   padding: 8px;
+  transition: width 200ms ease, padding 200ms ease, border-color 200ms ease;
+}
+
+.agents-dock-open {
+  min-width: 360px;
+}
+
+.agents-dock-collapsed {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border-left-color: transparent;
 }
 
 .left-column,
@@ -88,6 +131,46 @@ body {
   display: grid;
   gap: 8px;
   padding: 8px;
+}
+
+.right-overlay-panel {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  top: 0;
+  right: 0;
+  height: 100%;
+  background: #111;
+  box-shadow: 0 0 20px rgb(0 0 0 / 40%);
+  transition: transform 200ms ease;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.right-overlay-panel-open {
+  pointer-events: auto;
+}
+
+.right-panel-toggle {
+  position: fixed;
+  top: 12px;
+  z-index: 50;
+  border: 1px solid #333;
+  background: #222;
+  color: #fff;
+  cursor: pointer;
+  transition: right 200ms ease;
+  padding: 6px 10px;
+}
+
+.right-overlay-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  background: transparent;
 }
 
 .center-column {
