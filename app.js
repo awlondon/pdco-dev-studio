@@ -172,7 +172,11 @@ async function fetchOptionalApi(path, options = {}) {
 
   const requestPromise = (async () => {
     try {
-      const response = await apiFetch(`${API_BASE}${path}`, { mode: 'cors', ...fetchOptions });
+      const response = await fetch(`${API_BASE}${path}`, {
+        mode: 'cors',
+        ...fetchOptions,
+        credentials: 'include'
+      });
       if (response.status === 404 || response.status === 405 || response.status === 501) {
         unsupportedApiEndpoints.add(endpointKey);
         if (window.location.hostname === 'localhost') {

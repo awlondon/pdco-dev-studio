@@ -110,11 +110,69 @@ function resolveCorsOrigins() {
   ];
 }
 
-function resolveCookieSameSite() {
-  const rawValue = String(process.env.COOKIE_SAMESITE || 'None').trim().toLowerCase();
+function resolveSiteHost(hostname) {
+  const normalized = String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!normalized) return '';
+  const segments = normalized.split('.').filter(Boolean);
+  if (segments.length <= 2) {
+    return normalized;
+  }
+  return segments.slice(-2).join('.');
+}
+
+function isCrossSiteRequest(req) {
+  const origin = String(req?.headers?.origin || '').trim();
+  const requestHost = String(req?.hostname || req?.headers?.host || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!origin || !requestHost) {
+    return false;
+  }
+
+  try {
+    const originUrl = new URL(origin);
+    const requestProtocol = String(req?.protocol || 'https').toLowerCase();
+    if (originUrl.protocol !== `${requestProtocol}:`) {
+      return true;
+    }
+    return resolveSiteHost(originUrl.hostname) !== resolveSiteHost(requestHost);
+  } catch {
+    return false;
+  }
+}
+
+function resolveCookieSameSite(req) {
+  const rawValue = String(process.env.COOKIE_SAMESITE || '').trim().toLowerCase();
   if (rawValue === 'none') return 'None';
   if (rawValue === 'strict') return 'Strict';
+  if (rawValue === 'lax') return 'Lax';
+
+  if (isCrossSiteRequest(req) || String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+    return 'None';
+  }
   return 'Lax';
+}
+
+function shouldApplyCookieDomain(req) {
+  const configuredDomain = String(process.env.COOKIE_DOMAIN || '')
+    .trim()
+    .toLowerCase();
+  if (!configuredDomain) {
+    return false;
+  }
+  const normalizedDomain = configuredDomain.replace(/^\./, '');
+  const requestHost = String(req?.hostname || req?.headers?.host || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!requestHost) {
+    return false;
+  }
+  return requestHost === normalizedDomain || requestHost.endsWith(`.${normalizedDomain}`);
 }
 
 function splitEmailList(value) {
@@ -734,12 +792,6 @@ app.use(cors(corsOptions));
 
 app.options('*', cors(corsOptions));
 
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-  next();
-});
-
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use((req, res, next) => {
   if (req.originalUrl.startsWith('/api/stripe/webhook')) {
@@ -751,6 +803,12 @@ app.use((req, res, next) => {
 app.use('/uploads/artifacts', express.static(ARTIFACT_UPLOADS_DIR));
 app.use('/uploads/profiles', express.static(PROFILE_UPLOADS_DIR));
 app.use(enforceRequestValidation);
+
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  next();
+});
 
 /**
  * 🔍 DIAGNOSTIC HEADERS (prove code is live)
@@ -1922,7 +1980,7 @@ app.post('/api/auth/logout', async (req, res) => {
   if (session?.jti) {
     revokeSessionJti(session.jti);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   res.json({ ok: true });
 });
 
@@ -1934,7 +1992,7 @@ app.post('/api/auth/session/revoke', async (req, res) => {
   if (session.jti) {
     revokeSessionJti(session.jti);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   return res.json({ ok: true, revoked: Boolean(session.jti) });
 });
 
@@ -2011,7 +2069,7 @@ app.delete('/api/account', async (req, res) => {
       deleted_at: deletedAt
     });
 
-    clearSessionCookie(res);
+    clearSessionCookie(res, req);
     return res.json({ ok: true });
   } catch (error) {
     console.error('Failed to delete account.', error);
@@ -4555,11 +4613,11 @@ async function issueSessionCookie(res, req, user, options = {}) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    `SameSite=${resolveCookieSameSite()}`,
+    `SameSite=${resolveCookieSameSite(req)}`,
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`
   ];
 
-  if (process.env.COOKIE_DOMAIN) {
+  if (shouldApplyCookieDomain(req)) {
     cookieParts.push(`Domain=${process.env.COOKIE_DOMAIN}`);
   }
 
@@ -4580,17 +4638,17 @@ async function issueSessionCookie(res, req, user, options = {}) {
   });
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(res, req) {
   const cookieParts = [
     `${SESSION_COOKIE_NAME}=`,
     'Path=/',
     'HttpOnly',
     'Secure',
-    `SameSite=${resolveCookieSameSite()}`,
+    `SameSite=${resolveCookieSameSite(req)}`,
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT'
   ];
 
-  if (process.env.COOKIE_DOMAIN) {
+  if (shouldApplyCookieDomain(req)) {
     cookieParts.push(`Domain=${process.env.COOKIE_DOMAIN}`);
   }
 
