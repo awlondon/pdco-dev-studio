@@ -531,7 +531,7 @@ function App() {
 
     async function pingBackend() {
       try {
-        const response = await fetch(`${requireApiBase()}/healthz`);
+        const response = await fetch(`${requireApiBase()}/healthz`, { credentials: 'include' });
         let payload = null;
         try {
           payload = await response.json();

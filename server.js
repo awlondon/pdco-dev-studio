@@ -110,11 +110,69 @@ function resolveCorsOrigins() {
   ];
 }
 
-function resolveCookieSameSite() {
-  const rawValue = String(process.env.COOKIE_SAMESITE || 'Lax').trim().toLowerCase();
+function resolveSiteHost(hostname) {
+  const normalized = String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!normalized) return '';
+  const segments = normalized.split('.').filter(Boolean);
+  if (segments.length <= 2) {
+    return normalized;
+  }
+  return segments.slice(-2).join('.');
+}
+
+function isCrossSiteRequest(req) {
+  const origin = String(req?.headers?.origin || '').trim();
+  const requestHost = String(req?.hostname || req?.headers?.host || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!origin || !requestHost) {
+    return false;
+  }
+
+  try {
+    const originUrl = new URL(origin);
+    const requestProtocol = String(req?.protocol || 'https').toLowerCase();
+    if (originUrl.protocol !== `${requestProtocol}:`) {
+      return true;
+    }
+    return resolveSiteHost(originUrl.hostname) !== resolveSiteHost(requestHost);
+  } catch {
+    return false;
+  }
+}
+
+function resolveCookieSameSite(req) {
+  const rawValue = String(process.env.COOKIE_SAMESITE || '').trim().toLowerCase();
   if (rawValue === 'none') return 'None';
   if (rawValue === 'strict') return 'Strict';
+  if (rawValue === 'lax') return 'Lax';
+
+  if (isCrossSiteRequest(req) || String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+    return 'None';
+  }
   return 'Lax';
+}
+
+function shouldApplyCookieDomain(req) {
+  const configuredDomain = String(process.env.COOKIE_DOMAIN || '')
+    .trim()
+    .toLowerCase();
+  if (!configuredDomain) {
+    return false;
+  }
+  const normalizedDomain = configuredDomain.replace(/^\./, '');
+  const requestHost = String(req?.hostname || req?.headers?.host || '')
+    .trim()
+    .toLowerCase()
+    .split(':')[0];
+  if (!requestHost) {
+    return false;
+  }
+  return requestHost === normalizedDomain || requestHost.endsWith(`.${normalizedDomain}`);
 }
 
 function splitEmailList(value) {
@@ -723,18 +781,16 @@ const allowedCorsOrigins = String(process.env.CORS_ORIGINS || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: resolveCorsOrigins(),
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
 
-app.options('*', cors());
+app.use(cors(corsOptions));
 
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
-  next();
-});
+app.options('*', cors(corsOptions));
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use((req, res, next) => {
@@ -747,6 +803,12 @@ app.use((req, res, next) => {
 app.use('/uploads/artifacts', express.static(ARTIFACT_UPLOADS_DIR));
 app.use('/uploads/profiles', express.static(PROFILE_UPLOADS_DIR));
 app.use(enforceRequestValidation);
+
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  next();
+});
 
 /**
  * 🔍 DIAGNOSTIC HEADERS (prove code is live)
@@ -776,13 +838,6 @@ app.get('/api/agent/runs', (_req, res) => {
 // --- Compatibility API stubs (frontend expects these) ---
 app.get('/api/plans', (_req, res) => {
   return res.json({ plans: [] });
-});
-
-app.get('/api/session/state', (_req, res) => {
-  return res.json({
-    authenticated: false,
-    user: null
-  });
 });
 
 app.get('/api/usage/overview', (_req, res) => {
@@ -1009,8 +1064,16 @@ function buildDeterministicDesignerSpec({ prompt = '' } = {}) {
   };
 }
 
+function sanitizeJsonCandidate(text = '') {
+  let source = String(text || '').trim();
+  source = source.replace(/^```json\s*/i, '');
+  source = source.replace(/^```\s*/i, '');
+  source = source.replace(/\s*```\s*$/i, '');
+  return source.trim();
+}
+
 function extractJsonObject(text = '') {
-  const source = String(text || '');
+  const source = sanitizeJsonCandidate(text);
   const start = source.indexOf('{');
   const end = source.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) {
@@ -1169,32 +1232,108 @@ function validateBuilderOutput(output, mode = 'single') {
   return { ok: failures.length === 0, failures };
 }
 
-async function callGameModeLlmJson({ system, user, temperature = 0.2 }) {
-  if (!LLM_PROXY_URL) {
-    throw new Error('LLM proxy unavailable');
+function trimForSummary(value, max = 320) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function compactFailures(failures = [], max = 3) {
+  return (Array.isArray(failures) ? failures : [])
+    .slice(0, max)
+    .map((f) => ({ code: String(f?.code || 'UNKNOWN'), detail: trimForSummary(f?.detail || '') }));
+}
+
+async function callGameModeLlmJson({ system, user, temperature = 0.2, label = 'LLM' }) {
+  const useDirect = process.env.GAME_MODE_DIRECT_LLM === '1';
+  const directKeyPresent = Boolean(OPENAI_API_KEY);
+  if (process.env.GAME_MODE_DEBUG_LLM === '1' || process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+    console.log(`[LLM_DIRECT_PREFLIGHT] label=${label} directEnabled=${useDirect ? 1 : 0} keyPresent=${directKeyPresent ? 1 : 0}`);
   }
-  const workerRes = await fetch(LLM_PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ],
-      temperature
-    })
-  });
-  if (!workerRes.ok) {
-    throw new Error(`LLM request failed (${workerRes.status})`);
+  const maxTokens = label === 'BUILDER' ? 6000 : 1200;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+  try {
+    let raw = '';
+
+    if (useDirect) {
+      if (!OPENAI_API_KEY) {
+        throw new Error('Direct LLM requested but OPENAI_API_KEY is missing');
+      }
+      let directRes;
+      try {
+        directRes = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: OPENAI_MODEL,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user }
+            ],
+            temperature,
+            max_tokens: maxTokens
+          })
+        });
+      } catch (error) {
+        console.log('[LLM_DIRECT_ERROR]', String(error?.message || error));
+        throw error;
+      }
+
+      raw = await directRes.text();
+      if (!directRes.ok) {
+        throw new Error(`Direct LLM request failed (${directRes.status})`);
+      }
+    } else {
+      if (!LLM_PROXY_URL) {
+        throw new Error('LLM proxy unavailable');
+      }
+      const workerRes = await fetch(LLM_PROXY_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user }
+          ],
+          temperature,
+          max_tokens: maxTokens
+        })
+      });
+      raw = await workerRes.text();
+      if (!workerRes.ok) {
+        throw new Error(`LLM request failed (${workerRes.status})`);
+      }
+    }
+
+    if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+      console.log(`[LLM_RAW_${label}]`, String(raw || '').slice(0, 500));
+    }
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log(`[LLM_RAW_${label}_FULL]`, String(raw || ''));
+    }
+    const data = raw ? JSON.parse(raw) : null;
+    const content = data?.choices?.[0]?.message?.content
+      ?? data?.candidates?.[0]?.content
+      ?? data?.output_text
+      ?? '';
+    if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+      console.log(`[LLM_CONTENT_${label}]`, String(content || '').slice(0, 500));
+    }
+    return {
+      parsed: extractJsonObject(content),
+      raw,
+      content
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
-  const text = await workerRes.text();
-  const data = text ? JSON.parse(text) : null;
-  const content = data?.choices?.[0]?.message?.content
-    ?? data?.candidates?.[0]?.content
-    ?? data?.output_text
-    ?? '';
-  return extractJsonObject(content);
 }
 
 async function generateDesignerSpec({ mode, prompt, seedCode }) {
@@ -1209,22 +1348,58 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
   }
 
   const seedPreview = String(seedCode || '').slice(0, 2000);
-  const system = 'Return only valid JSON. No markdown. No commentary. You must satisfy: auto-run game, requestAnimationFrame loop, win/lose conditions, no build step.';
-  const user = `Design a shippable static game concept. mode=${mode}. user_prompt=${prompt || 'random concept required'}. seed_code_excerpt=${seedPreview || 'none'}. Output must exactly match schemaVersion 1.0 contract.`;
+  const system = [
+    'You are DESIGNER. Return ONLY one JSON object. No markdown. No backticks.',
+    'Do not include any keys outside this schema:',
+    '{',
+    '  "title": string,',
+    '  "genre": string,',
+    '  "coreLoop": string,',
+    '  "controls": [{ "input": string, "action": string }],',
+    '  "entities": [{ "name": string, "role": string, "notes": string }],',
+    '  "mechanics": [{ "name": string, "description": string, "tuning": string[] }],',
+    '  "progression": { "type": string, "description": string },',
+    '  "winCondition": string,',
+    '  "loseCondition": string,',
+    '  "mustHave": string[],',
+    '  "constraints": { "autoRun": true, "requiresRafLoop": true, "noBuildStep": true, "noPaidApis": true }',
+    '}',
+    'Minimums: controls>=2, mechanics>=2, mustHave>=3.',
+    'At least one controls[i].input must mention WASD, Arrow, Mouse, Touch, or Pointer.',
+    'First output char must be { and last output char must be }.'
+  ].join('\n');
+  const user = `Design a shippable static game concept. mode=${mode}. user_prompt=${prompt || 'random concept required'}. seed_code_excerpt=${seedPreview || 'none'}.`;
 
   try {
-    const spec = await callGameModeLlmJson({ system, user, temperature: 0.2 });
+    const llm = await callGameModeLlmJson({ system, user, temperature: 0.2, label: 'DESIGNER' });
+    const spec = llm.parsed;
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log('[LLM_PARSED_DESIGNER_FULL]', JSON.stringify(spec));
+    }
     const validation = validateDesignerSpec(spec);
     if (!validation.ok) {
+      if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+        console.log('[LLM_DESIGNER_VALIDATION_FAILURES]', JSON.stringify(validation.failures));
+      }
       return {
         spec: buildDeterministicDesignerSpec({ prompt }),
         usedLlm: true,
         fallback: true,
         fallbackReason: 'DESIGN_SCHEMA_INVALID',
-        failures: validation.failures
+        failures: validation.failures,
+        validationFailures: compactFailures(validation.failures),
+        rawPreview: trimForSummary(llm?.content || llm?.raw || '')
       };
     }
-    return { spec, usedLlm: true, fallback: false, fallbackReason: null, failures: [] };
+    return {
+      spec,
+      usedLlm: true,
+      fallback: false,
+      fallbackReason: null,
+      failures: [],
+      validationFailures: [],
+      rawPreview: trimForSummary(llm?.content || llm?.raw || '')
+    };
   } catch (error) {
     const reason = error?.code === 'JSON_PARSE_FAIL' ? 'DESIGN_JSON_PARSE_FAIL' : 'DESIGN_SCHEMA_INVALID';
     return {
@@ -1232,7 +1407,9 @@ async function generateDesignerSpec({ mode, prompt, seedCode }) {
       usedLlm: true,
       fallback: true,
       fallbackReason: reason,
-      failures: [createFailure(reason, String(error?.message || error))]
+      failures: [createFailure(reason, String(error?.message || error))],
+      validationFailures: compactFailures([createFailure(reason, String(error?.message || error))]),
+      rawPreview: ''
     };
   }
 }
@@ -1248,22 +1425,54 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
     };
   }
 
-  const system = 'Return only valid JSON in the specified output schema. Must produce playable auto-running game with requestAnimationFrame on load. No external build tooling. Use Canvas 2D. Must display Score and show Game Over and Victory states. No console.error.';
+  const system = [
+    'You are BUILDER. Return ONLY one JSON object. No markdown. No backticks.',
+    'Output schema:',
+    '{',
+    '  "mode": "single"|"multi",',
+    '  "entry": string,',
+    '  "files": [{ "path": string, "content": string }]',
+    '}',
+    'Rules:',
+    '- files must be a non-empty array',
+    '- entry must match one files[].path',
+    '- mode=single requires index.html content containing: <!doctype html>, requestAnimationFrame(, Score, Game Over, Victory (or Win)',
+    '- mode=multi requires index.html and README.md; index.html must reference JS; README must mention controls and deploy/GitHub Pages',
+    '- no external build tooling, no console.error in game code',
+    'First output char must be { and last output char must be }.'
+  ].join('\n');
   const user = `mode=${mode}. designer_spec=${JSON.stringify(designerSpec)}. user_prompt=${prompt || ''}. Runtime verifier requires RAF heartbeat without user click.`;
 
   try {
-    const output = await callGameModeLlmJson({ system, user, temperature: 0.15 });
+    const llm = await callGameModeLlmJson({ system, user, temperature: 0.15, label: 'BUILDER' });
+    const output = llm.parsed;
+    if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+      console.log('[LLM_PARSED_BUILDER_FULL]', JSON.stringify(output));
+    }
     const validation = validateBuilderOutput(output, mode);
     if (!validation.ok) {
+      if (process.env.GAME_MODE_DEBUG_LLM_FULL === '1') {
+        console.log('[LLM_BUILDER_VALIDATION_FAILURES]', JSON.stringify(validation.failures));
+      }
       return {
         output: buildDeterministicBuilderOutput(designerSpec, mode),
         usedLlm: true,
         fallback: true,
         fallbackReason: 'BUILD_SCHEMA_INVALID',
-        failures: validation.failures
+        failures: validation.failures,
+        validationFailures: compactFailures(validation.failures),
+        rawPreview: trimForSummary(llm?.content || llm?.raw || '')
       };
     }
-    return { output, usedLlm: true, fallback: false, fallbackReason: null, failures: [] };
+    return {
+      output,
+      usedLlm: true,
+      fallback: false,
+      fallbackReason: null,
+      failures: [],
+      validationFailures: [],
+      rawPreview: trimForSummary(llm?.content || llm?.raw || '')
+    };
   } catch (error) {
     const reason = error?.code === 'JSON_PARSE_FAIL' ? 'BUILD_JSON_PARSE_FAIL' : 'BUILD_SCHEMA_INVALID';
     return {
@@ -1271,7 +1480,9 @@ async function generateBuilderOutput({ mode, designerSpec, prompt }) {
       usedLlm: true,
       fallback: true,
       fallbackReason: reason,
-      failures: [createFailure(reason, String(error?.message || error))]
+      failures: [createFailure(reason, String(error?.message || error))],
+      validationFailures: compactFailures([createFailure(reason, String(error?.message || error))]),
+      rawPreview: ''
     };
   }
 }
@@ -1591,18 +1802,28 @@ async function writeBuilderOutputToWorkspace(job, builderOutput) {
 async function runGameModeJob(job) {
   const stage3Enabled = GAME_MODE_LLM_ENABLED;
   const runtimeEnabled = GAME_MODE_RUNTIME_VERIFY_ENABLED;
+  const directEnabled = process.env.GAME_MODE_DIRECT_LLM === '1';
+  const directKeyPresent = Boolean(OPENAI_API_KEY);
+  const llmTransport = directEnabled ? 'direct' : 'proxy';
   const startedAt = Date.now();
 
   const summary = {
     jobId: job.id,
     mode: job.mode,
     stage3Enabled,
+    llmTransport,
+    directEnabled,
+    directKeyPresent,
     designerUsed: false,
     designerFallback: false,
     designerFallbackReason: null,
+    designerValidationFailuresTop: [],
+    designerRawPreview: '',
     builderUsed: false,
     builderFallback: false,
     builderFallbackReason: null,
+    builderValidationFailuresTop: [],
+    builderRawPreview: '',
     staticPass: false,
     runtimeEnabled,
     runtimePass: runtimeEnabled ? null : null,
@@ -1646,6 +1867,8 @@ async function runGameModeJob(job) {
   summary.designerUsed = designer.usedLlm === true;
   summary.designerFallback = designer.fallback === true;
   summary.designerFallbackReason = designer.fallbackReason || null;
+  summary.designerValidationFailuresTop = compactFailures(designer.validationFailures || designer.failures || []);
+  summary.designerRawPreview = trimForSummary(designer.rawPreview || '');
 
   const designerValidation = validateDesignerSpec(designer.spec);
   const effectiveDesignerSpec = designerValidation.ok
@@ -1661,6 +1884,7 @@ async function runGameModeJob(job) {
   if (!designerValidation.ok) {
     summary.designerFallback = true;
     summary.designerFallbackReason = summary.designerFallbackReason || 'DESIGN_SCHEMA_INVALID';
+    summary.designerValidationFailuresTop = compactFailures(designerValidation.failures);
     pushGameModeEvent(job, 'log', { text: `Designer invalid: ${designerValidation.failures.map((f) => f.detail).join('; ')} fallback=deterministic` });
   } else {
     pushGameModeEvent(job, 'log', { text: `Designer ok: title="${effectiveDesignerSpec.title}" genre="${effectiveDesignerSpec.genre || 'unknown'}"` });
@@ -1677,14 +1901,21 @@ async function runGameModeJob(job) {
   summary.builderUsed = builder.usedLlm === true;
   summary.builderFallback = builder.fallback === true;
   summary.builderFallbackReason = builder.fallbackReason || null;
+  summary.builderValidationFailuresTop = compactFailures(builder.validationFailures || builder.failures || []);
+  summary.builderRawPreview = trimForSummary(builder.rawPreview || '');
 
   const builderValidation = validateBuilderOutput(builder.output, job.mode);
   if (!builderValidation.ok) {
     summary.builderFallback = true;
     summary.builderFallbackReason = summary.builderFallbackReason || 'BUILD_SCHEMA_INVALID';
+    summary.builderValidationFailuresTop = compactFailures(builderValidation.failures);
     pushGameModeEvent(job, 'log', { text: `Builder invalid: ${builderValidation.failures.map((f) => f.detail).join('; ')} fallback=deterministic` });
   } else {
     pushGameModeEvent(job, 'log', { text: `Builder ok: files=${builder.output.files.map((f) => f.path).join(', ')}` });
+  }
+
+  if (process.env.GAME_MODE_DEBUG_LLM === '1') {
+    console.log(`[STAGE3_PATH] designerUsed=${summary.designerUsed} builderUsed=${summary.builderUsed} fallbackDesigner=${summary.designerFallback} fallbackBuilder=${summary.builderFallback}`);
   }
 
   const effectiveBuilderOutput = builderValidation.ok
@@ -1887,6 +2118,12 @@ app.get('/api/dev/perf', (_req, res) => {
   });
 });
 
+function createAgentRouter() {
+  const router = express.Router();
+  router.use((_req, res) => res.status(501).json({ ok: false, error: 'Agent routes unavailable in local soak mode' }));
+  return router;
+}
+
 app.use('/agent', createAgentRouter({
   getSessionFromRequest,
   verifyStripeSignature
@@ -1925,7 +2162,7 @@ app.post('/api/auth/logout', async (req, res) => {
   if (session?.jti) {
     revokeSessionJti(session.jti);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   res.json({ ok: true });
 });
 
@@ -1937,7 +2174,7 @@ app.post('/api/auth/session/revoke', async (req, res) => {
   if (session.jti) {
     revokeSessionJti(session.jti);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   return res.json({ ok: true, revoked: Boolean(session.jti) });
 });
 
@@ -2014,7 +2251,7 @@ app.delete('/api/account', async (req, res) => {
       deleted_at: deletedAt
     });
 
-    clearSessionCookie(res);
+    clearSessionCookie(res, req);
     return res.json({ ok: true });
   } catch (error) {
     console.error('Failed to delete account.', error);
@@ -3881,7 +4118,13 @@ app.get('/api/session/state', async (req, res) => {
       : (typeof req.query?.sessionId === 'string' ? req.query.sessionId : '');
     const payload = await fetchSessionStateRecord({ userId: session.sub, sessionId });
     if (!payload) {
-      return res.status(404).json({ ok: false, error: 'Session state not found' });
+      return res.json({
+        ok: true,
+        session_id: sessionId || null,
+        session_state: null,
+        summary: null,
+        updated_at: null
+      });
     }
     return res.json({
       ok: true,
@@ -3890,8 +4133,9 @@ app.get('/api/session/state', async (req, res) => {
       summary: payload?.summary || null,
       updated_at: payload?.updated_at || payload?.last_active || null
     });
-  } catch {
-    return res.status(404).json({ ok: false, error: 'Session state not found' });
+  } catch (error) {
+    console.error('Failed to load session state.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load session state' });
   }
 });
 
@@ -4551,11 +4795,11 @@ async function issueSessionCookie(res, req, user, options = {}) {
     'Path=/',
     'HttpOnly',
     'Secure',
-    `SameSite=${resolveCookieSameSite()}`,
+    `SameSite=${resolveCookieSameSite(req)}`,
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`
   ];
 
-  if (process.env.COOKIE_DOMAIN) {
+  if (shouldApplyCookieDomain(req)) {
     cookieParts.push(`Domain=${process.env.COOKIE_DOMAIN}`);
   }
 
@@ -4576,17 +4820,17 @@ async function issueSessionCookie(res, req, user, options = {}) {
   });
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(res, req) {
   const cookieParts = [
     `${SESSION_COOKIE_NAME}=`,
     'Path=/',
     'HttpOnly',
     'Secure',
-    `SameSite=${resolveCookieSameSite()}`,
+    `SameSite=${resolveCookieSameSite(req)}`,
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT'
   ];
 
-  if (process.env.COOKIE_DOMAIN) {
+  if (shouldApplyCookieDomain(req)) {
     cookieParts.push(`Domain=${process.env.COOKIE_DOMAIN}`);
   }
 
