@@ -13,6 +13,7 @@ const defaultApiBase =
 
 const runtimeApiBase =
   getWindowString(import.meta.env.VITE_API_BASE) ||
+  getWindowString((window as Window & { __MAYA_API_BASE?: unknown }).__MAYA_API_BASE) ||
   getWindowString((window as Window & { API_BASE?: unknown }).API_BASE) ||
   defaultApiBase;
 

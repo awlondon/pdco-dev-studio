@@ -781,12 +781,16 @@ const allowedCorsOrigins = String(process.env.CORS_ORIGINS || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: resolveCorsOrigins(),
-  credentials: true
-}));
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
 
-app.options('*', cors());
+app.use(cors(corsOptions));
+
+app.options('*', cors(corsOptions));
 
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use((req, res, next) => {
@@ -834,13 +838,6 @@ app.get('/api/agent/runs', (_req, res) => {
 // --- Compatibility API stubs (frontend expects these) ---
 app.get('/api/plans', (_req, res) => {
   return res.json({ plans: [] });
-});
-
-app.get('/api/session/state', (_req, res) => {
-  return res.json({
-    authenticated: false,
-    user: null
-  });
 });
 
 app.get('/api/usage/overview', (_req, res) => {
@@ -3939,7 +3936,13 @@ app.get('/api/session/state', async (req, res) => {
       : (typeof req.query?.sessionId === 'string' ? req.query.sessionId : '');
     const payload = await fetchSessionStateRecord({ userId: session.sub, sessionId });
     if (!payload) {
-      return res.status(404).json({ ok: false, error: 'Session state not found' });
+      return res.json({
+        ok: true,
+        session_id: sessionId || null,
+        session_state: null,
+        summary: null,
+        updated_at: null
+      });
     }
     return res.json({
       ok: true,
@@ -3948,8 +3951,9 @@ app.get('/api/session/state', async (req, res) => {
       summary: payload?.summary || null,
       updated_at: payload?.updated_at || payload?.last_active || null
     });
-  } catch {
-    return res.status(404).json({ ok: false, error: 'Session state not found' });
+  } catch (error) {
+    console.error('Failed to load session state.', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load session state' });
   }
 });
 
