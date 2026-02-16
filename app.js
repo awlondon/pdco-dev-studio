@@ -9211,6 +9211,7 @@ const preview = {
   handshakeTimer: null,
   handshakeRetryTimer: null,
   pingTimer: null,
+  handshakeStartedAt: 0,
   shouldBypassHandshake(frame = this.activeFrame) {
     return typeof frame?.srcdoc === 'string' && frame.srcdoc.includes(SESSION_BRIDGE_MARKER);
   },
@@ -9220,6 +9221,7 @@ const preview = {
     this.listeners.clear();
     this.activeFrame = frame;
     this.loadEventSeen = false;
+    this.handshakeStartedAt = 0;
     this.clearHandshakeTimers();
     setPreviewErrorBanner('');
     previewHandshakeAttempt = 0;
@@ -9258,6 +9260,9 @@ const preview = {
     this.ready = false;
     this.readyMeta = null;
     this.clearHandshakeTimers();
+    if (!this.handshakeStartedAt) {
+      this.handshakeStartedAt = Date.now();
+    }
     const frame = this.activeFrame;
 
     const sendPing = () => {
@@ -9282,6 +9287,11 @@ const preview = {
     this.handshakeTimer = window.setTimeout(() => {
       this.clearHandshakeTimers();
       if (this.ready) {
+        return;
+      }
+      const handshakeElapsedMs = Date.now() - this.handshakeStartedAt;
+      if (!this.loadEventSeen && handshakeElapsedMs < PREVIEW_HANDSHAKE_TIMEOUT_MS * 2) {
+        this.handshakeRetryTimer = window.setTimeout(() => this.startHandshake('await-load'), 180);
         return;
       }
       if (previewHandshakeAttempt < PREVIEW_HANDSHAKE_MAX_RETRIES) {
@@ -9317,6 +9327,7 @@ const preview = {
     this.ready = true;
     this.readyMeta = meta;
     this.clearHandshakeTimers();
+    this.handshakeStartedAt = 0;
     setPreviewErrorBanner('');
     if (pendingPreviewPerf) {
       const duration = pendingPreviewPerf.end({ ready: true, ...meta });
