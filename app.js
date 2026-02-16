@@ -74,11 +74,7 @@ async function apiFetch(url, options = {}) {
 const appMachine = new AppStateMachine();
 
 function hasAuthHints() {
-  return Boolean(
-    safeStorageGet('maya_user')
-    || safeStorageGet('maya_token')
-    || document.cookie?.includes('maya_session=')
-  );
+  return hasPersistedSessionHint();
 }
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
@@ -4345,16 +4341,9 @@ async function bootApp() {
   updatePaywallPlanSelection(initialSelectedPlan);
   updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
 
-<<<<<<< HEAD
-  let session = null;
-  if (hasAuthHints()) {
-    session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
-  }
-=======
   const session = hasPersistedSessionHint()
     ? await safeFetchJSON('/api/session/state', { credentials: 'include' }, null)
     : null;
->>>>>>> 410ccedd14de6ef9d0c0c7d64e9781e474f9de9a
   appMachine.dispatch(EVENTS.SESSION_OK);
   if (session) {
     featureState.authenticated = !!session.authenticated;
@@ -4386,20 +4375,7 @@ async function bootApp() {
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
-<<<<<<< HEAD
-  if (hasAuthHints()) {
-    fetchOptionalApi('/api/session/state', { cacheTtlMs: 0 }).then((response) => {
-      backendHealthy = Boolean(response?.ok);
-    }).catch(() => {
-      backendHealthy = false;
-      console.warn('Backend unreachable');
-    });
-  } else {
-    backendHealthy = true;
-  }
-=======
   backendHealthy = true;
->>>>>>> 410ccedd14de6ef9d0c0c7d64e9781e474f9de9a
   await bootApp();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
