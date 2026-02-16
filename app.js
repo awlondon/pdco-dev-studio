@@ -55,6 +55,14 @@ const API_BASE = resolveApiBase();
 const WS_BASE = resolveWebSocketBase();
 const AGENT_STATUS_WS_ENABLED = window.ENABLE_AGENT_STATUS_WS === true;
 const appMachine = new AppStateMachine();
+
+function hasAuthHints() {
+  return Boolean(
+    safeStorageGet('maya_user')
+    || safeStorageGet('maya_token')
+    || document.cookie?.includes('maya_session=')
+  );
+}
 const MAX_RESUME_AGE = 1000 * 60 * 10;
 const resumeMessageIds = new Map();
 const activeAgentAbortControllers = new Map();
@@ -591,9 +599,9 @@ const rollbackButton = document.getElementById('rollbackButton');
 const promoteButton = document.getElementById('promoteButton');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
 const SANDBOX_TIMEOUT_MS = 4500;
-const PREVIEW_HANDSHAKE_TIMEOUT_MS = 1200;
-const PREVIEW_HANDSHAKE_MAX_RETRIES = 2;
-const PREVIEW_HANDSHAKE_PING_INTERVAL_MS = 220;
+const PREVIEW_HANDSHAKE_TIMEOUT_MS = 2200;
+const PREVIEW_HANDSHAKE_MAX_RETRIES = 3;
+const PREVIEW_HANDSHAKE_PING_INTERVAL_MS = 250;
 const FOLLOW_EDITOR_STORAGE_KEY = 'maya_follow_editor_preview';
 const UI_STATE = {
   AUTH: 'auth',
@@ -1923,7 +1931,9 @@ async function handleGoogleCredential(response) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    console.warn('Google auth failed.', data);
+    const reason = data?.error || `HTTP ${res.status}`;
+    console.warn('Google auth failed.', { status: res.status, reason });
+    showToast(`Google sign-in failed: ${reason}`, { variant: 'error', duration: 4500 });
     return;
   }
 
@@ -4300,7 +4310,10 @@ async function bootApp() {
   updatePaywallPlanSelection(initialSelectedPlan);
   updatePaywallCtas(paywallModal?.dataset.mode || 'firm', initialSelectedPlan);
 
-  const session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
+  let session = null;
+  if (hasAuthHints()) {
+    session = await safeFetchJSON('/api/session/state', { credentials: 'include' }, null);
+  }
   appMachine.dispatch(EVENTS.SESSION_OK);
   if (session) {
     featureState.authenticated = !!session.authenticated;
@@ -4332,12 +4345,16 @@ async function bootApp() {
 async function bootstrapApp() {
   await checkEmailVerification();
   hydrateCreditState();
-  fetchOptionalApi('/api/session/state', { cacheTtlMs: 0 }).then((response) => {
-    backendHealthy = Boolean(response?.ok);
-  }).catch(() => {
-    backendHealthy = false;
-    console.warn('Backend unreachable');
-  });
+  if (hasAuthHints()) {
+    fetchOptionalApi('/api/session/state', { cacheTtlMs: 0 }).then((response) => {
+      backendHealthy = Boolean(response?.ok);
+    }).catch(() => {
+      backendHealthy = false;
+      console.warn('Backend unreachable');
+    });
+  } else {
+    backendHealthy = true;
+  }
   await bootApp();
   applyAuthToRoot();
   const user = getAuthenticatedUser();
@@ -9208,7 +9225,7 @@ const preview = {
       }
       if (previewHandshakeAttempt < PREVIEW_HANDSHAKE_MAX_RETRIES) {
         previewHandshakeAttempt += 1;
-        console.warn(`Preview handshake timeout, retry ${previewHandshakeAttempt}/${PREVIEW_HANDSHAKE_MAX_RETRIES}`);
+        console.info(`Preview handshake timeout, retry ${previewHandshakeAttempt}/${PREVIEW_HANDSHAKE_MAX_RETRIES}`);
         this.handshakeRetryTimer = window.setTimeout(() => this.startHandshake('retry'), 80);
         return;
       }
