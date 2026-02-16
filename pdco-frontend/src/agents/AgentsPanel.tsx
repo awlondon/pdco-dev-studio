@@ -109,6 +109,7 @@ export default function AgentsPanel() {
 
   const runAgents = useCallback(async () => {
     const response = await fetch(`${requireApiBase()}/api/agent/runs`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
