@@ -108,6 +108,22 @@ function hasPersistedSessionHint() {
   );
 }
 
+function decodeJwtPayloadUnsafe(token = '') {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) {
+      return null;
+    }
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    const padded = normalized + '='.repeat(padLength);
+    const json = atob(padded);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 function safeStorageGet(key) {
   try {
     return window.localStorage.getItem(key);
@@ -1948,6 +1964,15 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
 async function handleGoogleCredential(response) {
   if (!response?.credential) {
     console.warn('Google auth failed.', { reason: 'Missing Google credential payload' });
+    return;
+  }
+
+  const tokenPayload = decodeJwtPayloadUnsafe(response.credential);
+  const tokenAud = tokenPayload?.aud;
+  if (tokenAud && window.GOOGLE_CLIENT_ID && tokenAud !== window.GOOGLE_CLIENT_ID) {
+    const hint = `Google client mismatch (token aud=${tokenAud}, frontend=${window.GOOGLE_CLIENT_ID}).`;
+    console.warn('Google auth failed.', { reason: 'CLIENT_ID_MISMATCH', hint });
+    showToast(`Google sign-in failed: ${hint}`, { variant: 'error', duration: 7000 });
     return;
   }
 
@@ -9267,14 +9292,11 @@ const preview = {
       }
       if (this.loadEventSeen) {
         console.warn('Preview handshake unavailable; continuing with load-event fallback.');
-        this.acknowledgeReady({ reason: 'load-fallback', degradedHandshake: true });
-        return;
+      } else {
+        console.warn('Preview handshake unavailable before load event; continuing with degraded fallback.');
       }
-      setPreviewErrorBanner('Preview is unresponsive. Try Soft Reload or Hard Reload.');
-      if (pendingPreviewPerf) {
-        pendingPreviewPerf.end({ ready: false, timeoutMs: PREVIEW_HANDSHAKE_TIMEOUT_MS });
-        pendingPreviewPerf = null;
-      }
+      this.acknowledgeReady({ reason: 'load-fallback', degradedHandshake: true, loadEventSeen: this.loadEventSeen });
+      return;
     }, PREVIEW_HANDSHAKE_TIMEOUT_MS);
   },
   clearHandshakeTimers() {
