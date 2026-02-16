@@ -1962,17 +1962,22 @@ function onAuthSuccess({ user, token, provider, credits, deferRender = false }) 
 }
 
 function getGoogleAuthFailureMessage({ status, reason, hint }) {
+  const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+
   if (reason === 'CLIENT_ID_MISMATCH') {
     return `Google sign-in failed: ${hint || 'Client ID mismatch. Check GOOGLE_CLIENT_ID settings.'}`;
+  }
+  if (normalizedReason === 'Missing GOOGLE_CLIENT_ID') {
+    return 'Google sign-in failed: Service configuration is incomplete (missing GOOGLE_CLIENT_ID). Contact support.';
   }
   if (status === 401) {
     return `Google sign-in failed: ${hint || 'Authentication could not be verified.'}`;
   }
-  if (status >= 500 || reason === 'Google auth failed') {
-    return 'Google sign-in failed: Authentication service is temporarily unavailable. Please try again.';
+  if (normalizedReason && normalizedReason !== 'Google auth failed') {
+    return `Google sign-in failed: ${normalizedReason}`;
   }
-  if (typeof reason === 'string' && reason.trim()) {
-    return `Google sign-in failed: ${reason}`;
+  if (status >= 500 || normalizedReason === 'Google auth failed') {
+    return 'Google sign-in failed: Authentication service is temporarily unavailable. Please try again.';
   }
   if (status) {
     return `Google sign-in failed: HTTP ${status}`;
