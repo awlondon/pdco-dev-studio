@@ -238,7 +238,7 @@ if (!Array.isArray(window.__versionStack)) {
 
 
 async function persistSessionStateToServer(payload) {
-  if (!payload || !payload.session_state?.session_id || !API_BASE) {
+  if (!payload || !payload.session_state?.session_id || !API_BASE || !getAuthenticatedUser()) {
     return false;
   }
   try {
@@ -1963,8 +1963,11 @@ async function handleGoogleCredential(response) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const reason = data?.error || `HTTP ${res.status}`;
-    console.warn('Google auth failed.', { status: res.status, reason });
-    showToast(`Google sign-in failed: ${reason}`, { variant: 'error', duration: 4500 });
+    const hint = res.status === 401
+      ? 'Check that frontend and backend GOOGLE_CLIENT_ID are identical.'
+      : null;
+    console.warn('Google auth failed.', { status: res.status, reason, hint });
+    showToast(`Google sign-in failed: ${reason}${hint ? ` — ${hint}` : ''}`, { variant: 'error', duration: 6000 });
     return;
   }
 
@@ -2762,7 +2765,7 @@ function scheduleSessionStatePersist() {
 }
 
 async function loadSessionStateFromServer(id = '') {
-  if (!API_BASE) {
+  if (!API_BASE || !hasPersistedSessionHint()) {
     return null;
   }
   const query = id ? `?session_id=${encodeURIComponent(id)}` : '';
@@ -4356,6 +4359,10 @@ async function bootApp() {
         deferRender: true
       });
     }
+  } else if (hasPersistedSessionHint()) {
+    safeStorageRemove('maya_token');
+    safeStorageRemove('maya_user');
+    featureState.authenticated = false;
   }
 
   const usage = await safeFetchJSON('/api/usage/overview', { credentials: 'include' }, null);
@@ -9214,7 +9221,7 @@ const preview = {
     }
     this.startHandshake('attach');
     window.setTimeout(() => {
-      if (!this.ready && this.activeFrame === frame) {
+      if (!this.ready && this.activeFrame === frame && previewHandshakeAttempt >= PREVIEW_HANDSHAKE_MAX_RETRIES) {
         console.warn('Preview fallback trigger');
       }
     }, 3000);
