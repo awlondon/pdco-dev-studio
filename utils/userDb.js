@@ -459,16 +459,27 @@ export async function findOrCreateUser({
   displayName,
   planTier = 'free',
   monthlyCredits = 0,
-  dailyCap = null
+  dailyCap = null,
+  pool
 }) {
-  const activePool = getUserDbPool();
+  const activePool = pool || getUserDbPool();
   const client = await activePool.connect();
   const normalizedEmail = email?.toLowerCase() || '';
   const now = new Date();
   const periodEnd = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
+  const identityLockKey = provider && providerUserId
+    ? `auth_identity:${String(provider)}:${String(providerUserId)}`
+    : '';
+  const emailLockKey = normalizedEmail ? `auth_email:${normalizedEmail}` : '';
 
   try {
     await client.query('BEGIN');
+    if (identityLockKey) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [identityLockKey]);
+    }
+    if (emailLockKey) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [emailLockKey]);
+    }
     let row = await fetchUserRowByProviderOrEmail(client, provider, providerUserId, normalizedEmail);
 
     if (!row) {
@@ -543,6 +554,31 @@ export async function findOrCreateUser({
     await client.query('COMMIT');
     return mapUserRow(row);
   } catch (error) {
+    if (error?.code === '23505') {
+      await client.query('ROLLBACK');
+      await client.query('BEGIN');
+      const racedRow = await fetchUserRowByProviderOrEmail(client, provider, providerUserId, normalizedEmail);
+      if (racedRow && !racedRow.deleted_at) {
+        await ensureBillingRow(client, {
+          userId: racedRow.id,
+          planTier,
+          status: racedRow.billing_status || 'active',
+          currentPeriodStart: racedRow.current_period_start || now,
+          currentPeriodEnd: racedRow.current_period_end || periodEnd
+        });
+        await ensureCreditsRow(client, {
+          userId: racedRow.id,
+          monthlyQuota: Number(racedRow.monthly_quota ?? monthlyCredits),
+          balance: Number(racedRow.balance ?? monthlyCredits),
+          dailyCap: racedRow.daily_cap ?? dailyCap,
+          lastDailyResetAt: racedRow.last_daily_reset_at || now,
+          lastMonthlyResetAt: racedRow.last_monthly_reset_at || now
+        });
+        const refreshedRow = await fetchUserRowById(client, racedRow.id);
+        await client.query('COMMIT');
+        return mapUserRow(refreshedRow);
+      }
+    }
     await client.query('ROLLBACK');
     throw error;
   } finally {
